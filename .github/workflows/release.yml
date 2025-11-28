@@ -18,18 +18,19 @@ jobs:
           - goos: linux
             goarch: amd64
             output: wt-linux-amd64
+            bottle: x86_64_linux
           - goos: linux
             goarch: arm64
             output: wt-linux-arm64
+            bottle: aarch64_linux
           - goos: darwin
             goarch: amd64
             output: wt-darwin-amd64
+            bottle: ventura
           - goos: darwin
             goarch: arm64
             output: wt-darwin-arm64
-          - goos: windows
-            goarch: amd64
-            output: wt-windows-amd64.exe
+            bottle: arm64_sonoma
 
     steps:
       - name: Generate GitHub App token
@@ -49,24 +50,84 @@ jobs:
         with:
           go-version: '1.23'
 
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
       - name: Build binary
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p dist
-          go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o dist/${{ matrix.output }} .
+          go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o dist/wt .
 
-      - name: Upload artifact
+      - name: Create Homebrew bottle
+        run: |
+          # Create bottle directory structure: wt/VERSION/bin/wt
+          mkdir -p wt/${{ steps.version.outputs.VERSION }}/bin
+          cp dist/wt wt/${{ steps.version.outputs.VERSION }}/bin/
+
+          # Create tarball with proper naming: wt--VERSION.PLATFORM.bottle.tar.gz
+          tar czf wt--${{ steps.version.outputs.VERSION }}.${{ matrix.bottle }}.bottle.tar.gz wt
+
+          # Also keep the raw binary for non-Homebrew users
+          mv dist/wt dist/${{ matrix.output }}
+
+      - name: Upload bottle artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.output }}
+          name: bottle-${{ matrix.bottle }}
+          path: wt--${{ steps.version.outputs.VERSION }}.${{ matrix.bottle }}.bottle.tar.gz
+          if-no-files-found: error
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.output }}
           path: dist/${{ matrix.output }}
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows Binary
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate GitHub App token
+        id: generate-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build Windows binary
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          mkdir -p dist
+          go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o dist/wt-windows-amd64.exe .
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-wt-windows-amd64.exe
+          path: dist/wt-windows-amd64.exe
           if-no-files-found: error
 
   release:
     name: Create Release
-    needs: build
+    needs: [build, build-windows]
     runs-on: ubuntu-latest
 
     steps:
@@ -85,12 +146,23 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: dist/
-          merge-multiple: true
+          path: artifacts/
+
+      - name: Organize release files
+        run: |
+          mkdir -p release
+
+          # Move bottles to release directory
+          find artifacts/bottle-* -name "*.bottle.tar.gz" -exec mv {} release/ \;
+
+          # Move binaries to release directory
+          find artifacts/binary-* -type f -exec mv {} release/ \;
+
+          ls -la release/
 
       - name: Generate checksums
         run: |
-          cd dist
+          cd release
           shasum -a 256 * > checksums.txt
           cat checksums.txt
 
@@ -101,4 +173,4 @@ jobs:
           gh release create ${{ github.ref_name }} \
             --title "Release ${{ github.ref_name }}" \
             --generate-notes \
-            dist/*
+            release/*
