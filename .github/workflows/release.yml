@@ -68,8 +68,8 @@ jobs:
           mkdir -p wt/${{ steps.version.outputs.VERSION }}/bin
           cp dist/wt wt/${{ steps.version.outputs.VERSION }}/bin/
 
-          # Create tarball with proper naming: wt--VERSION.PLATFORM.bottle.tar.gz
-          tar czf wt--${{ steps.version.outputs.VERSION }}.${{ matrix.bottle }}.bottle.tar.gz wt
+          # Create tarball with proper naming: wt-VERSION.PLATFORM.bottle.tar.gz
+          tar czf wt-${{ steps.version.outputs.VERSION }}.${{ matrix.bottle }}.bottle.tar.gz wt
 
           # Also keep the raw binary for non-Homebrew users
           mv dist/wt dist/${{ matrix.output }}
@@ -78,7 +78,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bottle-${{ matrix.bottle }}
-          path: wt--${{ steps.version.outputs.VERSION }}.${{ matrix.bottle }}.bottle.tar.gz
+          path: wt-${{ steps.version.outputs.VERSION }}.${{ matrix.bottle }}.bottle.tar.gz
           if-no-files-found: error
 
       - name: Upload binary artifact
