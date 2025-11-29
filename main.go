@@ -95,24 +95,6 @@ const (
 	RemoteUnknown
 )
 
-func getRemoteType() RemoteType {
-	cmd := exec.Command("git", "remote", "get-url", "origin")
-	output, err := cmd.Output()
-	if err != nil {
-		return RemoteUnknown
-	}
-
-	url := strings.TrimSpace(string(output))
-	if strings.Contains(url, "github.com") {
-		return RemoteGitHub
-	}
-	if strings.Contains(url, "gitlab.com") || strings.Contains(url, "gitlab") {
-		return RemoteGitLab
-	}
-
-	return RemoteUnknown
-}
-
 func getPRNumber(input string) (string, error) {
 	// Check if it's a GitHub PR URL
 	githubRegex := regexp.MustCompile(`^https://github\.com/.*/pull/([0-9]+)`)
