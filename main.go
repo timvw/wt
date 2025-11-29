@@ -86,10 +86,42 @@ func getDefaultBase() string {
 	return strings.TrimPrefix(ref, "refs/remotes/origin/")
 }
 
+type RemoteType int
+
+const (
+	RemoteGitHub RemoteType = iota
+	RemoteGitLab
+	RemoteUnknown
+)
+
+func getRemoteType() RemoteType {
+	cmd := exec.Command("git", "remote", "get-url", "origin")
+	output, err := cmd.Output()
+	if err != nil {
+		return RemoteUnknown
+	}
+
+	url := strings.TrimSpace(string(output))
+	if strings.Contains(url, "github.com") {
+		return RemoteGitHub
+	}
+	if strings.Contains(url, "gitlab.com") || strings.Contains(url, "gitlab") {
+		return RemoteGitLab
+	}
+
+	return RemoteUnknown
+}
+
 func getPRNumber(input string) (string, error) {
 	// Check if it's a GitHub PR URL
-	urlRegex := regexp.MustCompile(`^https://github\.com/.*/pull/([0-9]+)`)
-	if matches := urlRegex.FindStringSubmatch(input); matches != nil {
+	githubRegex := regexp.MustCompile(`^https://github\.com/.*/pull/([0-9]+)`)
+	if matches := githubRegex.FindStringSubmatch(input); matches != nil {
+		return matches[1], nil
+	}
+
+	// Check if it's a GitLab MR URL
+	gitlabRegex := regexp.MustCompile(`^https://gitlab\.com/.*/-/merge_requests/([0-9]+)`)
+	if matches := gitlabRegex.FindStringSubmatch(input); matches != nil {
 		return matches[1], nil
 	}
 
@@ -99,7 +131,7 @@ func getPRNumber(input string) (string, error) {
 		return input, nil
 	}
 
-	return "", fmt.Errorf("invalid PR number or URL: %s", input)
+	return "", fmt.Errorf("invalid PR/MR number or URL: %s", input)
 }
 
 func worktreeExists(branch string) (string, bool) {
@@ -221,9 +253,20 @@ var createCmd = &cobra.Command{
 }
 
 var prCmd = &cobra.Command{
-	Use:   "pr <number|url>",
-	Short: "Checkout GitHub PR in worktree (uses gh)",
-	Args:  cobra.ExactArgs(1),
+	Use:     "pr <number|url>",
+	Aliases: []string{"mr"},
+	Short:   "Checkout PR/MR in worktree (uses gh for GitHub, glab for GitLab)",
+	Long: `Checkout a Pull Request (GitHub) or Merge Request (GitLab) in a worktree.
+
+Automatically detects whether you're using GitHub or GitLab based on
+the git remote URL and uses the appropriate CLI tool (gh or glab).
+
+Examples:
+  wt pr 123                                    # PR/MR number
+  wt pr https://github.com/org/repo/pull/123   # GitHub PR URL
+  wt pr https://gitlab.com/org/repo/-/merge_requests/123  # GitLab MR URL
+  wt mr 123                                    # Same as 'wt pr 123'`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		input := args[0]
 		prNumber, err := getPRNumber(input)
@@ -231,9 +274,25 @@ var prCmd = &cobra.Command{
 			return err
 		}
 
-		// Check if gh is installed
-		if _, err := exec.LookPath("gh"); err != nil {
-			return fmt.Errorf("'gh' CLI not found. Install it from https://cli.github.com")
+		// Detect remote type
+		remoteType := getRemoteType()
+		var refSpec, prefix string
+
+		switch remoteType {
+		case RemoteGitHub:
+			refSpec = fmt.Sprintf("pull/%s/head", prNumber)
+			prefix = "pr"
+			if _, err := exec.LookPath("gh"); err != nil {
+				return fmt.Errorf("'gh' CLI not found. Install it from https://cli.github.com")
+			}
+		case RemoteGitLab:
+			refSpec = fmt.Sprintf("merge-requests/%s/head", prNumber)
+			prefix = "mr"
+			if _, err := exec.LookPath("glab"); err != nil {
+				return fmt.Errorf("'glab' CLI not found. Install it from https://gitlab.com/gitlab-org/cli")
+			}
+		default:
+			return fmt.Errorf("unable to detect remote type (GitHub or GitLab)")
 		}
 
 		repo, err := getRepoName()
@@ -241,7 +300,7 @@ var prCmd = &cobra.Command{
 			return err
 		}
 
-		branch := fmt.Sprintf("pr-%s", prNumber)
+		branch := fmt.Sprintf("%s-%s", prefix, prNumber)
 		path := filepath.Join(worktreeRoot, repo, branch)
 
 		// Check if worktree already exists
@@ -251,8 +310,8 @@ var prCmd = &cobra.Command{
 			return nil
 		}
 
-		// Fetch the PR
-		fetchCmd := exec.Command("git", "fetch", "origin", fmt.Sprintf("pull/%s/head:%s", prNumber, branch))
+		// Fetch the PR/MR
+		fetchCmd := exec.Command("git", "fetch", "origin", fmt.Sprintf("%s:%s", refSpec, branch))
 		fetchCmd.Stderr = os.Stderr
 		_ = fetchCmd.Run() // Ignore errors, branch might already exist
 
@@ -264,7 +323,7 @@ var prCmd = &cobra.Command{
 			return fmt.Errorf("failed to create worktree: %w", err)
 		}
 
-		fmt.Printf("✓ PR #%s checked out at: %s\n", prNumber, path)
+		fmt.Printf("✓ %s #%s checked out at: %s\n", strings.ToUpper(prefix), prNumber, path)
 		printCDMarker(path)
 		return nil
 	},
@@ -351,7 +410,7 @@ if [ -n "$BASH_VERSION" ]; then
         COMPREPLY=()
         cur="${COMP_WORDS[COMP_CWORD]}"
         prev="${COMP_WORDS[COMP_CWORD-1]}"
-        commands="checkout co create pr list ls remove rm prune help shellenv"
+        commands="checkout co create pr mr list ls remove rm prune help shellenv"
 
         # Complete commands if first argument
         if [ $COMP_CWORD -eq 1 ]; then
@@ -380,7 +439,8 @@ if [ -n "$ZSH_VERSION" ]; then
             'checkout:Checkout existing branch in new worktree'
             'co:Checkout existing branch in new worktree'
             'create:Create new branch in worktree'
-            'pr:Checkout GitHub PR in worktree'
+            'pr:Checkout PR/MR in worktree'
+            'mr:Checkout PR/MR in worktree'
             'list:List all worktrees'
             'ls:List all worktrees'
             'remove:Remove a worktree'

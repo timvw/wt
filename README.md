@@ -14,7 +14,8 @@ Inspired by [haacked/dotfiles/tree-me](https://github.com/haacked/dotfiles/blob/
 
 - Organized worktree structure: `~/dev/worktrees/<repo>/<branch>`
 - Simple commands for common worktree operations
-- GitHub PR checkout support (via `gh` CLI)
+- GitHub PR and GitLab MR checkout support (via `gh` or `glab` CLI)
+- Automatic platform detection based on git remote
 - Shell integration with auto-cd functionality
 - Tab completion for Bash and Zsh
 
@@ -75,9 +76,12 @@ wt co feature-branch              # short alias
 wt create my-feature
 wt create my-feature develop      # specify base branch
 
-# Checkout GitHub PR in worktree (requires gh CLI)
-wt pr 123
-wt pr https://github.com/org/repo/pull/123
+# Checkout GitHub PR or GitLab MR in worktree
+# Automatically detects platform from git remote
+wt pr 123                                          # GitHub PR or GitLab MR
+wt mr 123                                          # Same as above (alias)
+wt pr https://github.com/org/repo/pull/123         # GitHub PR URL
+wt pr https://gitlab.com/org/repo/-/merge_requests/123  # GitLab MR URL
 
 # List all worktrees
 wt list
@@ -110,8 +114,9 @@ wt create add-auth-feature
 # Checkout an existing branch
 wt checkout bugfix-login
 
-# Work on a PR
+# Work on a GitHub PR or GitLab MR
 wt pr 456
+wt mr 789  # Same as 'wt pr 789'
 
 # List all your worktrees
 wt list
@@ -150,7 +155,8 @@ just build-all # Cross-compile for multiple platforms
 ## Requirements
 
 - Git (obviously)
-- `gh` CLI (optional, only needed for `wt pr` command)
+- `gh` CLI (optional, only needed for GitHub PRs via `wt pr` command)
+- `glab` CLI (optional, only needed for GitLab MRs via `wt pr`/`wt mr` commands)
 
 ### For Building from Source
 
