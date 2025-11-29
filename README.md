@@ -20,6 +20,13 @@ Inspired by [haacked/dotfiles/tree-me](https://github.com/haacked/dotfiles/blob/
 
 ## Installation
 
+### Homebrew (macOS and Linux)
+
+```bash
+brew tap timvw/tap
+brew install wt
+```
+
 ### From Source
 
 ```bash
@@ -143,8 +150,11 @@ just build-all # Cross-compile for multiple platforms
 ## Requirements
 
 - Git (obviously)
-- Go 1.21+ (for building from source)
 - `gh` CLI (optional, only needed for `wt pr` command)
+
+### For Building from Source
+
+- Go 1.21+
 - `just` (optional, for using the justfile)
 
 ## How It Works
