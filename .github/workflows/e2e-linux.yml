@@ -132,9 +132,9 @@ jobs:
 
           # Run test in a subshell with shellenv sourced
           $SHELL_CMD -c "
-            export WORKTREE_ROOT='$WORKTREE_ROOT'
-            export PATH='$WT_BIN_DIR:\$PATH'
-            cd '$TEST_REPO'
+            export WORKTREE_ROOT=$WORKTREE_ROOT
+            export PATH=$WT_BIN_DIR:\$PATH
+            cd $TEST_REPO
             source /tmp/wt-shellenv-${{ matrix.shell }}.sh
 
             echo 'Testing: wt checkout test-branch'
@@ -142,7 +142,7 @@ jobs:
 
             # Verify we're in the worktree directory
             CURRENT_DIR=\$(pwd)
-            EXPECTED_DIR='$WORKTREE_ROOT/test-repo/test-branch'
+            EXPECTED_DIR=$WORKTREE_ROOT/test-repo/test-branch
             if [[ \"\$CURRENT_DIR\" != \"\$EXPECTED_DIR\" ]]; then
               echo \"ERROR: Auto-cd failed. Expected: \$EXPECTED_DIR, Got: \$CURRENT_DIR\"
               exit 1
@@ -154,13 +154,13 @@ jobs:
             echo '✓ Worktree created and listed'
 
             # Go back to original repo to test create
-            cd '$TEST_REPO'
+            cd $TEST_REPO
 
             # Test create command
             echo 'Testing: wt create feature-test'
             wt create feature-test
             CURRENT_DIR=\$(pwd)
-            EXPECTED_DIR='$WORKTREE_ROOT/test-repo/feature-test'
+            EXPECTED_DIR=$WORKTREE_ROOT/test-repo/feature-test
             if [[ \"\$CURRENT_DIR\" != \"\$EXPECTED_DIR\" ]]; then
               echo \"ERROR: Auto-cd failed for create. Expected: \$EXPECTED_DIR, Got: \$CURRENT_DIR\"
               exit 1
@@ -168,7 +168,7 @@ jobs:
             echo \"✓ Auto-cd to new worktree verified: \$CURRENT_DIR\"
 
             # Go back to original repo to test remove
-            cd '$TEST_REPO'
+            cd $TEST_REPO
 
             # Test remove command
             echo 'Testing: wt remove test-branch'
