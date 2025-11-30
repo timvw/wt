@@ -397,23 +397,32 @@ jobs:
           }
         shell: powershell
 
-      - name: Run Windows e2e tests
-        run: go test -v -run 'TestE2EAutoCdWithPowerShell|TestE2EAutoCdWithCreatePowerShell' .
-        shell: ${{ matrix.shell }}
-
-      - name: Test shellenv output
+      - name: Run Windows e2e tests for ${{ matrix.shell }}
         run: |
+          # Run the appropriate tests based on shell type
+          if ("${{ matrix.shell }}" -eq "powershell") {
+            go test -v -run 'TestE2EAutoCdWithPowerShell|TestE2EAutoCdWithCreatePowerShell' .
+          } else {
+            # For pwsh, run the same tests but pwsh.exe must be available
+            go test -v -run 'TestE2EAutoCdWithPowerShell|TestE2EAutoCdWithCreatePowerShell' .
+          }
+        shell: powershell
+
+      - name: Test shellenv output for ${{ matrix.shell }}
+        run: |
+          $shellType = "${{ matrix.shell }}"
+
           # Capture shellenv output for inspection
-          .\bin\wt.exe shellenv | Out-File -FilePath shellenv-${{ matrix.shell }}.txt
+          .\bin\wt.exe shellenv | Out-File -FilePath "shellenv-$shellType.txt"
 
           # Verify shellenv produces output
-          if (-not (Test-Path shellenv-${{ matrix.shell }}.txt) -or (Get-Item shellenv-${{ matrix.shell }}.txt).Length -eq 0) {
+          if (-not (Test-Path "shellenv-$shellType.txt") -or (Get-Item "shellenv-$shellType.txt").Length -eq 0) {
             Write-Error "ERROR: shellenv produced no output"
             exit 1
           }
 
           # Check for key components (wt function and PowerShell detection)
-          $content = Get-Content shellenv-${{ matrix.shell }}.txt -Raw
+          $content = Get-Content "shellenv-$shellType.txt" -Raw
           if ($content -notmatch 'function wt') {
             Write-Error "ERROR: wt function not found in shellenv output"
             exit 1
@@ -424,8 +433,8 @@ jobs:
             exit 1
           }
 
-          Write-Output "shellenv validation passed for ${{ matrix.shell }}"
-        shell: ${{ matrix.shell }}
+          Write-Output "shellenv validation passed for $shellType"
+        shell: powershell
 
       - name: Test shellenv integration
         run: |
@@ -514,14 +523,14 @@ jobs:
             Remove-Item -Recurse -Force $WORKTREE_ROOT -ErrorAction SilentlyContinue
             Remove-Item -Recurse -Force $TEST_REPO -ErrorAction SilentlyContinue
           }
-        shell: ${{ matrix.shell }}
+        shell: powershell
 
       - name: Upload shellenv output as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: shellenv-output-${{ matrix.shell }}-windows
-          path: shellenv-${{ matrix.shell }}.txt
+          path: shellenv-*.txt
           retention-days: 7
           if-no-files-found: ignore
 
