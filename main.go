@@ -631,7 +631,8 @@ This enables:
 		// On Windows, default to PowerShell. On Unix, output bash/zsh.
 		if runtime.GOOS == "windows" {
 			// PowerShell integration for Windows
-			fmt.Print(`# PowerShell integration
+			fmt.Print(`# PowerShell integration (Windows)
+# Detected via runtime.GOOS, compatible with $PSVersionTable
 function wt {
     $output = & (Get-Command -CommandType Application wt).Source @args
     $exitCode = $LASTEXITCODE
