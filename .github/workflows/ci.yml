@@ -475,8 +475,9 @@ jobs:
             Write-Output "Testing: wt checkout test-branch"
             wt checkout test-branch
 
-            $CURRENT_DIR = (Get-Location).Path
-            $EXPECTED_DIR = Join-Path $WORKTREE_ROOT "$TEST_REPO_NAME\test-branch"
+            # Normalize paths to handle Windows short/long path differences (RUNNER~1 vs runneradmin)
+            $CURRENT_DIR = [System.IO.Path]::GetFullPath((Get-Location).Path)
+            $EXPECTED_DIR = [System.IO.Path]::GetFullPath((Join-Path $WORKTREE_ROOT "$TEST_REPO_NAME\test-branch"))
             if ($CURRENT_DIR -ne $EXPECTED_DIR) {
               Write-Error "ERROR: Auto-cd failed. Expected: $EXPECTED_DIR, Got: $CURRENT_DIR"
               exit 1
@@ -497,8 +498,9 @@ jobs:
             # Test create command
             Write-Output "Testing: wt create feature-test"
             wt create feature-test
-            $CURRENT_DIR = (Get-Location).Path
-            $EXPECTED_DIR = Join-Path $WORKTREE_ROOT "$TEST_REPO_NAME\feature-test"
+            # Normalize paths to handle Windows short/long path differences
+            $CURRENT_DIR = [System.IO.Path]::GetFullPath((Get-Location).Path)
+            $EXPECTED_DIR = [System.IO.Path]::GetFullPath((Join-Path $WORKTREE_ROOT "$TEST_REPO_NAME\feature-test"))
             if ($CURRENT_DIR -ne $EXPECTED_DIR) {
               Write-Error "ERROR: Auto-cd failed for create. Expected: $EXPECTED_DIR, Got: $CURRENT_DIR"
               exit 1
