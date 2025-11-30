@@ -442,7 +442,8 @@ jobs:
 
           # Set up isolated test environment
           $WORK_DIR = (Get-Location).Path
-          $WT_BIN = Join-Path $WORK_DIR "bin\wt.exe"
+          $WT_BIN_DIR = Join-Path $WORK_DIR "bin"
+          $WT_BIN = Join-Path $WT_BIN_DIR "wt.exe"
           $ISOLATED_HOME = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("test-home-" + (Get-Random)))
           $WORKTREE_ROOT = Join-Path $env:TEMP ("worktrees-" + (Get-Random))
           $TEST_REPO = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("test-repo-" + (Get-Random)))
@@ -461,6 +462,9 @@ jobs:
             git checkout -b test-branch
             git commit --allow-empty -m "test commit"
             git checkout main
+
+            # Add bin to PATH (like a real user would)
+            $env:PATH = "$WT_BIN_DIR;$env:PATH"
 
             # Load shellenv
             $env:WORKTREE_ROOT = $WORKTREE_ROOT
