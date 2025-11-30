@@ -214,10 +214,10 @@ func TestGetAvailableBranches(t *testing.T) {
 
 func TestParsePROutput(t *testing.T) {
 	tests := []struct {
-		name         string
-		output       string
-		wantNumbers  []string
-		wantLabels   []string
+		name        string
+		output      string
+		wantNumbers []string
+		wantLabels  []string
 	}{
 		{
 			name:        "Empty output",
@@ -386,8 +386,8 @@ invalid line without proper format
 			wantLabels:  []string{"!123: Valid MR", "!456: Another valid MR"},
 		},
 		{
-			name: "MR with extra whitespace in title",
-			output: "!123  OPEN    Title with spaces    (branch) ← (main)",
+			name:        "MR with extra whitespace in title",
+			output:      "!123  OPEN    Title with spaces    (branch) ← (main)",
 			wantNumbers: []string{"123"},
 			wantLabels:  []string{"!123: Title with spaces"},
 		},
