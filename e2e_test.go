@@ -242,7 +242,13 @@ func setupTestRepo(t *testing.T, repoDir string) {
 func buildWtBinary(t *testing.T, tmpDir string) string {
 	t.Helper()
 
-	binaryPath := filepath.Join(tmpDir, "wt")
+	binaryName := "wt"
+	// On Windows, executables need .exe extension
+	if filepath.Separator == '\\' {
+		binaryName = "wt.exe"
+	}
+
+	binaryPath := filepath.Join(tmpDir, binaryName)
 	cmd := exec.Command("go", "build", "-o", binaryPath, ".")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("Failed to build wt binary: %v\nOutput: %s", err, output)
