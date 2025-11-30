@@ -20,7 +20,7 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: generate-token
-        if: ${{ secrets.BOT_APP_ID != '' }}
+        if: secrets.BOT_APP_ID != ''
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.BOT_APP_ID }}

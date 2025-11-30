@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/manifoldco/promptui"
@@ -617,12 +618,70 @@ var shellenvCmd = &cobra.Command{
 Add this to the END of your ~/.bashrc or ~/.zshrc:
   source <(wt shellenv)
 
+For PowerShell, add this to your $PROFILE:
+  Invoke-Expression (& wt shellenv)
+
 Note: For zsh, place this AFTER compinit to enable tab completion.
 
 This enables:
 - Automatic cd to worktree after checkout/create/pr/mr commands
 - Tab completion for commands and branch names`,
 	Run: func(cmd *cobra.Command, args []string) {
+		// Output OS-specific shell integration
+		// On Windows, default to PowerShell. On Unix, output bash/zsh.
+		if runtime.GOOS == "windows" {
+			// PowerShell integration for Windows
+			fmt.Print(`# PowerShell integration (Windows)
+# Detected via runtime.GOOS, compatible with $PSVersionTable
+# NOTE: Requires wt.exe to be in PATH or current directory
+
+function wt {
+    # Call wt.exe explicitly to avoid recursive function call
+    # PowerShell will find wt.exe in PATH or current directory
+    $output = & wt.exe @args
+    $exitCode = $LASTEXITCODE
+    Write-Output $output
+    if ($exitCode -eq 0) {
+        $cdPath = $output | Select-String -Pattern "^TREE_ME_CD:" | ForEach-Object { $_.Line.Substring(11) }
+        if ($cdPath) {
+            Set-Location $cdPath
+        }
+    }
+    $global:LASTEXITCODE = $exitCode
+}
+
+# PowerShell completion
+Register-ArgumentCompleter -CommandName wt -ScriptBlock {
+    param($commandName, $wordToComplete, $commandAst, $fakeBoundParameters)
+
+    $commands = @('checkout', 'co', 'create', 'pr', 'mr', 'list', 'ls', 'remove', 'rm', 'prune', 'help', 'shellenv')
+
+    # Get the position in the command line
+    $position = $commandAst.CommandElements.Count - 1
+
+    if ($position -eq 0) {
+        # Complete commands
+        $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+            [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+        }
+    } elseif ($position -eq 1) {
+        $subCommand = $commandAst.CommandElements[1].Value
+        if ($subCommand -in @('checkout', 'co', 'remove', 'rm')) {
+            # Complete branch names from worktree list
+            $branches = git worktree list 2>$null | Select-Object -Skip 1 | ForEach-Object {
+                if ($_ -match '\[([^\]]+)\]') { $matches[1] }
+            }
+            $branches | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+                [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+            }
+        }
+    }
+}
+`)
+			return
+		}
+
+		// Bash/Zsh integration for Unix systems
 		fmt.Print(`wt() {
     # All commands (including interactive) need output capture for auto-cd
     local output
