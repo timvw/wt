@@ -447,6 +447,7 @@ jobs:
           $ISOLATED_HOME = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("test-home-" + (Get-Random)))
           $WORKTREE_ROOT = Join-Path $env:TEMP ("worktrees-" + (Get-Random))
           $TEST_REPO = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("test-repo-" + (Get-Random)))
+          $TEST_REPO_NAME = Split-Path -Leaf $TEST_REPO
 
           try {
             # Create test git repo
@@ -475,7 +476,7 @@ jobs:
             wt checkout test-branch
 
             $CURRENT_DIR = (Get-Location).Path
-            $EXPECTED_DIR = Join-Path $WORKTREE_ROOT "test-repo\test-branch"
+            $EXPECTED_DIR = Join-Path $WORKTREE_ROOT "$TEST_REPO_NAME\test-branch"
             if ($CURRENT_DIR -ne $EXPECTED_DIR) {
               Write-Error "ERROR: Auto-cd failed. Expected: $EXPECTED_DIR, Got: $CURRENT_DIR"
               exit 1
@@ -497,7 +498,7 @@ jobs:
             Write-Output "Testing: wt create feature-test"
             wt create feature-test
             $CURRENT_DIR = (Get-Location).Path
-            $EXPECTED_DIR = Join-Path $WORKTREE_ROOT "test-repo\feature-test"
+            $EXPECTED_DIR = Join-Path $WORKTREE_ROOT "$TEST_REPO_NAME\feature-test"
             if ($CURRENT_DIR -ne $EXPECTED_DIR) {
               Write-Error "ERROR: Auto-cd failed for create. Expected: $EXPECTED_DIR, Got: $CURRENT_DIR"
               exit 1
