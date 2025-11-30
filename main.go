@@ -633,8 +633,16 @@ This enables:
 			// PowerShell integration for Windows
 			fmt.Print(`# PowerShell integration (Windows)
 # Detected via runtime.GOOS, compatible with $PSVersionTable
+
+# Get wt.exe path once when shellenv is loaded
+$script:WtExePath = (Get-Command -Name wt -CommandType Application -ErrorAction SilentlyContinue).Source
+if (-not $script:WtExePath) {
+    # Fallback: try to find wt.exe in current directory or PATH
+    $script:WtExePath = "wt.exe"
+}
+
 function wt {
-    $output = & (Get-Command -CommandType Application wt).Source @args
+    $output = & $script:WtExePath @args
     $exitCode = $LASTEXITCODE
     Write-Output $output
     if ($exitCode -eq 0) {
