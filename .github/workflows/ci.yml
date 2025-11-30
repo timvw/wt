@@ -347,3 +347,190 @@ jobs:
             /var/tmp/*.log
           retention-days: 7
           if-no-files-found: ignore
+
+  e2e-windows:
+    name: E2E Tests (Windows)
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        shell: ['powershell', 'pwsh']
+
+    steps:
+      - name: Generate GitHub App token
+        id: generate-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build wt binary
+        run: |
+          mkdir -p bin
+          go build -o bin/wt.exe .
+
+      - name: Verify binary
+        run: |
+          .\bin\wt.exe --help
+
+      - name: Install PowerShell Core
+        if: matrix.shell == 'pwsh'
+        run: |
+          # Check if pwsh is already available
+          if (Get-Command pwsh -ErrorAction SilentlyContinue) {
+            Write-Output "PowerShell Core already installed"
+          } else {
+            Write-Output "Installing PowerShell Core..."
+            winget install --id Microsoft.PowerShell --source winget --silent --accept-source-agreements --accept-package-agreements
+          }
+        shell: powershell
+
+      - name: Run Windows e2e tests
+        run: go test -v -run 'TestE2EAutoCdWithPowerShell|TestE2EAutoCdWithCreatePowerShell' .
+        shell: ${{ matrix.shell }}
+
+      - name: Test shellenv output
+        run: |
+          # Capture shellenv output for inspection
+          .\bin\wt.exe shellenv | Out-File -FilePath shellenv-${{ matrix.shell }}.txt
+
+          # Verify shellenv produces output
+          if (-not (Test-Path shellenv-${{ matrix.shell }}.txt) -or (Get-Item shellenv-${{ matrix.shell }}.txt).Length -eq 0) {
+            Write-Error "ERROR: shellenv produced no output"
+            exit 1
+          }
+
+          # Check for key components (wt function and PowerShell detection)
+          $content = Get-Content shellenv-${{ matrix.shell }}.txt -Raw
+          if ($content -notmatch 'function wt') {
+            Write-Error "ERROR: wt function not found in shellenv output"
+            exit 1
+          }
+
+          if ($content -notmatch '\$PSVersionTable') {
+            Write-Error "ERROR: PowerShell detection not found in shellenv output"
+            exit 1
+          }
+
+          Write-Output "shellenv validation passed for ${{ matrix.shell }}"
+        shell: ${{ matrix.shell }}
+
+      - name: Test shellenv integration
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Set up isolated test environment
+          $WORK_DIR = (Get-Location).Path
+          $WT_BIN = Join-Path $WORK_DIR "bin\wt.exe"
+          $ISOLATED_HOME = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("test-home-" + (Get-Random)))
+          $WORKTREE_ROOT = Join-Path $env:TEMP ("worktrees-" + (Get-Random))
+          $TEST_REPO = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("test-repo-" + (Get-Random)))
+
+          try {
+            # Create test git repo
+            Set-Location $TEST_REPO
+            $env:HOME = $ISOLATED_HOME.FullName
+            git init
+            git config user.email "test@example.com"
+            git config user.name "Test User"
+            git commit --allow-empty -m "initial commit"
+            git branch -M main
+
+            # Create a test branch
+            git checkout -b test-branch
+            git commit --allow-empty -m "test commit"
+            git checkout main
+
+            # Load shellenv
+            $env:WORKTREE_ROOT = $WORKTREE_ROOT
+            Invoke-Expression (& $WT_BIN shellenv)
+
+            # Test checkout
+            Write-Output "Testing: wt checkout test-branch"
+            wt checkout test-branch
+
+            $CURRENT_DIR = (Get-Location).Path
+            $EXPECTED_DIR = Join-Path $WORKTREE_ROOT "test-repo\test-branch"
+            if ($CURRENT_DIR -ne $EXPECTED_DIR) {
+              Write-Error "ERROR: Auto-cd failed. Expected: $EXPECTED_DIR, Got: $CURRENT_DIR"
+              exit 1
+            }
+            Write-Output "✓ Auto-cd to worktree verified: $CURRENT_DIR"
+
+            # Verify worktree was created
+            $listOutput = wt list
+            if ($listOutput -notmatch 'test-branch') {
+              Write-Error "ERROR: worktree not in list"
+              exit 1
+            }
+            Write-Output "✓ Worktree created and listed"
+
+            # Go back to original repo to test create
+            Set-Location $TEST_REPO
+
+            # Test create command
+            Write-Output "Testing: wt create feature-test"
+            wt create feature-test
+            $CURRENT_DIR = (Get-Location).Path
+            $EXPECTED_DIR = Join-Path $WORKTREE_ROOT "test-repo\feature-test"
+            if ($CURRENT_DIR -ne $EXPECTED_DIR) {
+              Write-Error "ERROR: Auto-cd failed for create. Expected: $EXPECTED_DIR, Got: $CURRENT_DIR"
+              exit 1
+            }
+            Write-Output "✓ Auto-cd to new worktree verified: $CURRENT_DIR"
+
+            # Go back to original repo to test remove
+            Set-Location $TEST_REPO
+
+            # Test remove command
+            Write-Output "Testing: wt remove test-branch"
+            wt remove test-branch
+
+            # Verify worktree was removed
+            $listOutput = wt list
+            if ($listOutput -match 'test-branch') {
+              Write-Error "ERROR: worktree not removed"
+              exit 1
+            }
+            Write-Output "✓ Worktree removed successfully"
+
+            Write-Output "CRUD operations with auto-cd test passed!"
+          } finally {
+            # Cleanup
+            Set-Location $WORK_DIR
+            Remove-Item -Recurse -Force $ISOLATED_HOME -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force $WORKTREE_ROOT -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force $TEST_REPO -ErrorAction SilentlyContinue
+          }
+        shell: ${{ matrix.shell }}
+
+      - name: Upload shellenv output as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shellenv-output-${{ matrix.shell }}-windows
+          path: shellenv-${{ matrix.shell }}.txt
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-${{ matrix.shell }}-windows
+          path: |
+            ${{ runner.temp }}/*.log
+          retention-days: 7
+          if-no-files-found: ignore

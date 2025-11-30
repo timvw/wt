@@ -617,13 +617,61 @@ var shellenvCmd = &cobra.Command{
 Add this to the END of your ~/.bashrc or ~/.zshrc:
   source <(wt shellenv)
 
+For PowerShell, add this to your $PROFILE:
+  Invoke-Expression (& wt shellenv)
+
 Note: For zsh, place this AFTER compinit to enable tab completion.
 
 This enables:
 - Automatic cd to worktree after checkout/create/pr/mr commands
 - Tab completion for commands and branch names`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Print(`wt() {
+		fmt.Print(`# PowerShell integration
+if ($PSVersionTable) {
+    function wt {
+        $output = & (Get-Command -CommandType Application wt).Source @args
+        $exitCode = $LASTEXITCODE
+        Write-Output $output
+        if ($exitCode -eq 0) {
+            $cdPath = $output | Select-String -Pattern "^TREE_ME_CD:" | ForEach-Object { $_.Line.Substring(11) }
+            if ($cdPath) {
+                Set-Location $cdPath
+            }
+        }
+        $global:LASTEXITCODE = $exitCode
+    }
+
+    # PowerShell completion
+    Register-ArgumentCompleter -CommandName wt -ScriptBlock {
+        param($commandName, $wordToComplete, $commandAst, $fakeBoundParameters)
+
+        $commands = @('checkout', 'co', 'create', 'pr', 'mr', 'list', 'ls', 'remove', 'rm', 'prune', 'help', 'shellenv')
+
+        # Get the position in the command line
+        $position = $commandAst.CommandElements.Count - 1
+
+        if ($position -eq 0) {
+            # Complete commands
+            $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+                [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+            }
+        } elseif ($position -eq 1) {
+            $subCommand = $commandAst.CommandElements[1].Value
+            if ($subCommand -in @('checkout', 'co', 'remove', 'rm')) {
+                # Complete branch names from worktree list
+                $branches = git worktree list 2>$null | Select-Object -Skip 1 | ForEach-Object {
+                    if ($_ -match '\[([^\]]+)\]') { $matches[1] }
+                }
+                $branches | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+                    [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+                }
+            }
+        }
+    }
+    return
+}
+
+wt() {
     # All commands (including interactive) need output capture for auto-cd
     local output
     output=$(command wt "$@")
