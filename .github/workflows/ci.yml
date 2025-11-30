@@ -189,8 +189,8 @@ jobs:
       - name: Run e2e tests for ${{ matrix.shell }}
         run: |
           # Set up isolated test environment
-          export TMPDIR=$(mktemp -d)
-          export HOME=$TMPDIR
+          export ISOLATED_TMPDIR=$(mktemp -d)
+          export HOME=$ISOLATED_TMPDIR
 
           # Run specific e2e tests (not ./... to avoid redundancy)
           if [ "${{ matrix.shell }}" = "bash" ]; then
@@ -199,8 +199,8 @@ jobs:
             go test -v -run TestE2EAutoCdInZsh .
           fi
 
-          # Cleanup isolated environment
-          rm -rf "$TMPDIR"
+          # Cleanup (best effort - ignore errors from Go cache files)
+          rm -rf "$ISOLATED_TMPDIR" 2>/dev/null || true
 
       - name: Test shellenv output
         run: |
@@ -320,9 +320,9 @@ jobs:
             echo 'CRUD operations with auto-cd test passed!'
           "
 
-          # Cleanup all temporary directories
+          # Cleanup all temporary directories (best effort)
           cd "$WORK_DIR"
-          rm -rf "$ISOLATED_HOME" "$WORKTREE_ROOT" "$TEST_REPO" /tmp/wt-shellenv-${{ matrix.shell }}.sh
+          rm -rf "$ISOLATED_HOME" "$WORKTREE_ROOT" "$TEST_REPO" /tmp/wt-shellenv-${{ matrix.shell }}.sh 2>/dev/null || true
 
       - name: Upload shellenv output as artifact
         if: always()
