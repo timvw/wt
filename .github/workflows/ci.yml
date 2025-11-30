@@ -220,7 +220,7 @@ jobs:
 
           echo "shellenv validation passed for ${{ matrix.shell }}"
 
-      - name: Test worktree CRUD operations
+      - name: Test worktree CRUD operations with auto-cd
         run: |
           # Create isolated test environment
           export WORKTREE_ROOT=$(mktemp -d)/worktrees
@@ -241,25 +241,66 @@ jobs:
           git commit --allow-empty -m "test commit"
           git checkout main
 
-          # Test checkout command
-          echo "Testing: wt checkout test-branch"
-          OUTPUT=$(wt checkout test-branch 2>&1)
-          echo "$OUTPUT"
-
-          # Verify worktree was created
-          wt list | grep test-branch || (echo "ERROR: worktree not created" && exit 1)
-
-          # Test remove command
-          echo "Testing: wt remove test-branch"
-          wt remove test-branch
-
-          # Verify worktree was removed
-          if wt list | grep test-branch; then
-            echo "ERROR: worktree not removed"
-            exit 1
+          # Test with shell integration (the key difference)
+          if [ "${{ matrix.shell }}" = "bash" ]; then
+            SHELL_CMD="bash"
+          else
+            SHELL_CMD="zsh"
           fi
 
-          echo "CRUD operations test passed"
+          # Run test in a subshell with shellenv sourced
+          $SHELL_CMD -c "
+            export WORKTREE_ROOT='$WORKTREE_ROOT'
+            export PATH='$(pwd)/bin:\$PATH'
+            cd '$TEST_REPO'
+            source <(wt shellenv)
+
+            echo 'Testing: wt checkout test-branch'
+            wt checkout test-branch
+
+            # Verify we're in the worktree directory
+            CURRENT_DIR=\$(pwd)
+            EXPECTED_DIR='$WORKTREE_ROOT/test-repo/test-branch'
+            if [[ \"\$CURRENT_DIR\" != \"\$EXPECTED_DIR\" ]]; then
+              echo \"ERROR: Auto-cd failed. Expected: \$EXPECTED_DIR, Got: \$CURRENT_DIR\"
+              exit 1
+            fi
+            echo \"✓ Auto-cd to worktree verified: \$CURRENT_DIR\"
+
+            # Verify worktree was created
+            wt list | grep test-branch || (echo 'ERROR: worktree not in list' && exit 1)
+            echo '✓ Worktree created and listed'
+
+            # Go back to original repo to test create
+            cd '$TEST_REPO'
+
+            # Test create command (from main repo)
+            echo 'Testing: wt create feature-test'
+            wt create feature-test
+            CURRENT_DIR=\$(pwd)
+            EXPECTED_DIR='$WORKTREE_ROOT/test-repo/feature-test'
+            if [[ \"\$CURRENT_DIR\" != \"\$EXPECTED_DIR\" ]]; then
+              echo \"ERROR: Auto-cd failed for create. Expected: \$EXPECTED_DIR, Got: \$CURRENT_DIR\"
+              exit 1
+            fi
+            echo \"✓ Auto-cd to new worktree verified: \$CURRENT_DIR\"
+
+            # Go back to original repo to test remove
+            cd '$TEST_REPO'
+
+            # Test remove command
+            echo 'Testing: wt remove test-branch'
+            wt remove test-branch
+
+            # Verify worktree was removed
+            if wt list | grep test-branch; then
+              echo 'ERROR: worktree not removed'
+              exit 1
+            fi
+            echo '✓ Worktree removed successfully'
+
+            echo 'CRUD operations with auto-cd test passed!'
+          "
 
       - name: Upload shellenv output as artifact
         if: always()
