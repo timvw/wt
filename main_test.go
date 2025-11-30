@@ -24,6 +24,12 @@ func TestGetPRNumber(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "Valid GitLab MR URL",
+			input:   "https://gitlab.com/owner/repo/-/merge_requests/789",
+			want:    "789",
+			wantErr: false,
+		},
+		{
 			name:    "Invalid input",
 			input:   "not-a-number",
 			want:    "",
