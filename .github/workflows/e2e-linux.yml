@@ -96,9 +96,14 @@ jobs:
 
       - name: Test worktree CRUD operations with auto-cd
         run: |
+          # Save workspace directory before creating test repo
+          WORKSPACE_DIR=$(pwd)
+          WT_BIN="$WORKSPACE_DIR/bin/wt"
+          WT_BIN_DIR="$WORKSPACE_DIR/bin"
+
           # Create isolated test environment
           export WORKTREE_ROOT=$(mktemp -d)/worktrees
-          export PATH=$(pwd)/bin:$PATH
+          export PATH=$WT_BIN_DIR:$PATH
 
           # Create a test git repo
           TEST_REPO=$(mktemp -d)/test-repo
@@ -121,10 +126,6 @@ jobs:
           else
             SHELL_CMD="zsh"
           fi
-
-          # Save absolute path to wt binary and its directory
-          WT_BIN="$(pwd)/bin/wt"
-          WT_BIN_DIR="$(pwd)/bin"
 
           # Generate shellenv script for the shell
           $WT_BIN shellenv > /tmp/wt-shellenv-${{ matrix.shell }}.sh
