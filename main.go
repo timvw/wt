@@ -624,18 +624,7 @@ This enables:
 - Tab completion for commands and branch names`,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Print(`wt() {
-    # Check if command needs interactive mode (no args for co/checkout/rm/remove/pr/mr)
-    if [ "$#" -eq 1 ]; then
-        case "$1" in
-            co|checkout|rm|remove|pr|mr)
-                # Run interactively without capturing output
-                command wt "$@"
-                return $?
-                ;;
-        esac
-    fi
-
-    # Normal mode with output capture for auto-cd
+    # All commands (including interactive) need output capture for auto-cd
     local output
     output=$(command wt "$@")
     local exit_code=$?
@@ -705,7 +694,10 @@ if [ -n "$ZSH_VERSION" ]; then
             esac
         fi
     }
-    compdef _wt_complete_zsh wt
+    # Only register completion if compdef is available
+    if (( $+functions[compdef] )); then
+        compdef _wt_complete_zsh wt
+    fi
 fi
 `)
 	},
