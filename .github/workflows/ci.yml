@@ -272,14 +272,20 @@ jobs:
             export PATH='$WT_BIN_DIR:\$PATH'
             cd '$TEST_REPO'
 
-            # Verify we're in a git repo
-            if [ ! -d .git ]; then
-              echo \"ERROR: .git directory not found in \$(pwd)\"
-              ls -la
-              exit 1
-            fi
+            # Debug: Check environment and git status
+            echo \"DEBUG: Current directory: \$(pwd)\"
+            echo \"DEBUG: HOME=\$HOME\"
+            echo \"DEBUG: .git exists: \$([ -d .git ] && echo yes || echo no)\"
+            echo \"DEBUG: git rev-parse result:\"
+            git rev-parse --git-dir 2>&1 || echo \"git rev-parse failed\"
+            echo \"DEBUG: git status:\"
+            git status 2>&1 || echo \"git status failed\"
 
             source /tmp/wt-shellenv-${{ matrix.shell }}.sh
+
+            echo \"DEBUG: After sourcing shellenv, still in: \$(pwd)\"
+            echo \"DEBUG: Can git still work?\"
+            git rev-parse --git-dir 2>&1 || echo \"git rev-parse failed after shellenv\"
 
             echo 'Testing: wt checkout test-branch'
             wt checkout test-branch
