@@ -209,7 +209,7 @@ just build-all # Cross-compile for multiple platforms
 
 ### For Building from Source
 
-- Go 1.21+
+- Go 1.24+ (we support and test the latest two Go releases: 1.24 and 1.25)
 - `just` (optional, for using the justfile)
 
 ## How It Works
