@@ -352,9 +352,9 @@ func TestGetRepoName(t *testing.T) {
 
 func TestExtractRepoNameFromURL(t *testing.T) {
 	tests := []struct {
-		name    string
-		url     string
-		want    string
+		name string
+		url  string
+		want string
 	}{
 		// GitHub HTTPS URLs
 		{
