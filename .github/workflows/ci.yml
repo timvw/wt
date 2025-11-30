@@ -147,3 +147,135 @@ jobs:
         run: |
           ls -lh bin/
           file bin/*
+
+  e2e-macos:
+    name: E2E Tests (macOS)
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        shell: ['bash', 'zsh']
+
+    steps:
+      - name: Generate GitHub App token
+        id: generate-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build wt binary
+        run: |
+          mkdir -p bin
+          go build -o bin/wt .
+
+      - name: Verify binary
+        run: |
+          ./bin/wt --help
+          file bin/wt
+
+      - name: Run e2e tests for ${{ matrix.shell }}
+        run: |
+          # Set up isolated test environment
+          export TMPDIR=$(mktemp -d)
+          export HOME=$TMPDIR
+
+          # Run e2e tests with verbose output
+          if [ "${{ matrix.shell }}" = "bash" ]; then
+            go test -v -run TestE2EAutoCdWithNonInteractiveCommand ./...
+            go test -v -run TestE2EAutoCdWithCreate ./...
+          elif [ "${{ matrix.shell }}" = "zsh" ]; then
+            go test -v -run TestE2EAutoCdInZsh ./...
+          fi
+
+      - name: Test shellenv output
+        run: |
+          # Capture shellenv output for inspection
+          ./bin/wt shellenv > shellenv-${{ matrix.shell }}.txt
+
+          # Verify shellenv produces output
+          if [ ! -s shellenv-${{ matrix.shell }}.txt ]; then
+            echo "ERROR: shellenv produced no output"
+            exit 1
+          fi
+
+          # Check for key components
+          if [ "${{ matrix.shell }}" = "bash" ]; then
+            grep -q "function wt()" shellenv-${{ matrix.shell }}.txt || (echo "ERROR: bash function not found" && exit 1)
+          elif [ "${{ matrix.shell }}" = "zsh" ]; then
+            grep -q "function wt()" shellenv-${{ matrix.shell }}.txt || (echo "ERROR: zsh function not found" && exit 1)
+          fi
+
+          echo "shellenv validation passed for ${{ matrix.shell }}"
+
+      - name: Test worktree CRUD operations
+        run: |
+          # Create isolated test environment
+          export WORKTREE_ROOT=$(mktemp -d)/worktrees
+          export PATH=$(pwd)/bin:$PATH
+
+          # Create a test git repo
+          TEST_REPO=$(mktemp -d)/test-repo
+          mkdir -p $TEST_REPO
+          cd $TEST_REPO
+          git init
+          git config user.email "test@example.com"
+          git config user.name "Test User"
+          git commit --allow-empty -m "initial commit"
+          git branch -M main
+
+          # Create a test branch
+          git checkout -b test-branch
+          git commit --allow-empty -m "test commit"
+          git checkout main
+
+          # Test checkout command
+          echo "Testing: wt checkout test-branch"
+          OUTPUT=$(wt checkout test-branch 2>&1)
+          echo "$OUTPUT"
+
+          # Verify worktree was created
+          wt list | grep test-branch || (echo "ERROR: worktree not created" && exit 1)
+
+          # Test remove command
+          echo "Testing: wt remove test-branch"
+          wt remove test-branch
+
+          # Verify worktree was removed
+          if wt list | grep test-branch; then
+            echo "ERROR: worktree not removed"
+            exit 1
+          fi
+
+          echo "CRUD operations test passed"
+
+      - name: Upload shellenv output as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shellenv-output-${{ matrix.shell }}
+          path: shellenv-${{ matrix.shell }}.txt
+          retention-days: 7
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-${{ matrix.shell }}
+          path: |
+            /tmp/*.log
+            /var/tmp/*.log
+          retention-days: 7
+          if-no-files-found: ignore
