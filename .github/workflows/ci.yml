@@ -254,12 +254,19 @@ jobs:
             SHELL_CMD="zsh"
           fi
 
+          # Save absolute path to wt binary and its directory
+          WT_BIN="$(pwd)/bin/wt"
+          WT_BIN_DIR="$(pwd)/bin"
+
+          # Generate shellenv script for the shell
+          $WT_BIN shellenv > /tmp/wt-shellenv-${{ matrix.shell }}.sh
+
           # Run test in a subshell with shellenv sourced
           $SHELL_CMD -c "
             export WORKTREE_ROOT='$WORKTREE_ROOT'
-            export PATH='$(pwd)/bin:\$PATH'
+            export PATH='$WT_BIN_DIR:\$PATH'
             cd '$TEST_REPO'
-            source <(wt shellenv)
+            source /tmp/wt-shellenv-${{ matrix.shell }}.sh
 
             echo 'Testing: wt checkout test-branch'
             wt checkout test-branch
