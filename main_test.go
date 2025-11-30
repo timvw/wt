@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -618,5 +619,57 @@ invalid line without proper format
 				}
 			}
 		})
+	}
+}
+
+func TestEnsureWorktreePathCreatesMissingRoot(t *testing.T) {
+	originalRoot := worktreeRoot
+	t.Cleanup(func() {
+		worktreeRoot = originalRoot
+	})
+
+	tmpDir := t.TempDir()
+	worktreeRoot = filepath.Join(tmpDir, "missing-root")
+
+	repo := "example-repo"
+	branch := "feature/foo"
+
+	path, err := ensureWorktreePath(repo, branch)
+	if err != nil {
+		t.Fatalf("ensureWorktreePath() unexpected error: %v", err)
+	}
+
+	expectedPath := filepath.Join(worktreeRoot, repo, branch)
+	if path != expectedPath {
+		t.Fatalf("ensureWorktreePath() = %s, want %s", path, expectedPath)
+	}
+
+	repoDir := filepath.Join(worktreeRoot, repo)
+	info, statErr := os.Stat(repoDir)
+	if statErr != nil {
+		t.Fatalf("expected repo directory to be created at %s: %v", repoDir, statErr)
+	}
+	if !info.IsDir() {
+		t.Fatalf("expected %s to be a directory", repoDir)
+	}
+}
+
+func TestEnsureWorktreePathFailsWhenRootIsFile(t *testing.T) {
+	originalRoot := worktreeRoot
+	t.Cleanup(func() {
+		worktreeRoot = originalRoot
+	})
+
+	tmpDir := t.TempDir()
+	fileRoot := filepath.Join(tmpDir, "file-root")
+
+	if err := os.WriteFile(fileRoot, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("failed to create file root: %v", err)
+	}
+
+	worktreeRoot = fileRoot
+
+	if _, err := ensureWorktreePath("repo", "branch"); err == nil {
+		t.Fatal("expected ensureWorktreePath() to fail when WORKTREE_ROOT is a file")
 	}
 }

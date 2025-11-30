@@ -152,6 +152,26 @@ func branchExists(branch string) bool {
 	return cmd.Run() == nil
 }
 
+func ensureWorktreePath(repo, branch string) (string, error) {
+	targetRoot := filepath.Join(worktreeRoot, repo)
+
+	info, err := os.Stat(targetRoot)
+	switch {
+	case err == nil:
+		if !info.IsDir() {
+			return "", fmt.Errorf("WORKTREE_ROOT path %s is not a directory", targetRoot)
+		}
+	case os.IsNotExist(err):
+		if err := os.MkdirAll(targetRoot, 0o755); err != nil {
+			return "", fmt.Errorf("failed to create WORKTREE_ROOT directory %s: %w", targetRoot, err)
+		}
+	default:
+		return "", fmt.Errorf("failed to access WORKTREE_ROOT directory %s: %w", targetRoot, err)
+	}
+
+	return filepath.Join(targetRoot, branch), nil
+}
+
 func printCDMarker(path string) {
 	fmt.Printf("TREE_ME_CD:%s\n", path)
 }
@@ -309,8 +329,6 @@ var checkoutCmd = &cobra.Command{
 			return err
 		}
 
-		path := filepath.Join(worktreeRoot, repo, branch)
-
 		// Check if worktree already exists
 		if existingPath, exists := worktreeExists(branch); exists {
 			fmt.Printf("✓ Worktree already exists: %s\n", existingPath)
@@ -321,6 +339,11 @@ var checkoutCmd = &cobra.Command{
 		// Check if branch exists
 		if !branchExists(branch) {
 			return fmt.Errorf("branch '%s' does not exist\nUse 'wt create %s' to create a new branch", branch, branch)
+		}
+
+		path, err := ensureWorktreePath(repo, branch)
+		if err != nil {
+			return err
 		}
 
 		// Create worktree
@@ -353,13 +376,16 @@ var createCmd = &cobra.Command{
 			return err
 		}
 
-		path := filepath.Join(worktreeRoot, repo, branch)
-
 		// Check if worktree already exists
 		if existingPath, exists := worktreeExists(branch); exists {
 			fmt.Printf("✓ Worktree already exists: %s\n", existingPath)
 			printCDMarker(existingPath)
 			return nil
+		}
+
+		path, err := ensureWorktreePath(repo, branch)
+		if err != nil {
+			return err
 		}
 
 		// Create new branch and worktree
@@ -493,13 +519,17 @@ func checkoutPROrMR(input string, remoteType RemoteType) error {
 	}
 
 	branch := fmt.Sprintf("%s-%s", prefix, prNumber)
-	path := filepath.Join(worktreeRoot, repo, branch)
 
 	// Check if worktree already exists
 	if existingPath, exists := worktreeExists(branch); exists {
 		fmt.Printf("✓ Worktree already exists: %s\n", existingPath)
 		printCDMarker(existingPath)
 		return nil
+	}
+
+	path, err := ensureWorktreePath(repo, branch)
+	if err != nil {
+		return err
 	}
 
 	// Fetch the PR/MR
