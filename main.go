@@ -173,8 +173,8 @@ func getAvailableBranches() ([]string, error) {
 			continue
 		}
 
-		// Skip remote HEAD pointers
-		if strings.HasPrefix(branch, "origin/HEAD") || strings.Contains(branch, "->") {
+		// Skip remote HEAD pointers and detached HEAD states
+		if strings.HasPrefix(branch, "origin/HEAD") || strings.Contains(branch, "->") || strings.Contains(branch, "HEAD") {
 			continue
 		}
 
