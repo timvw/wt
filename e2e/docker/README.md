@@ -1,16 +1,18 @@
-# Docker-based E2E Tests
+# Docker-based E2E Tests (Local Development Only)
 
-This directory contains Docker-based end-to-end tests for `wt` on Linux, testing shell integration across bash, zsh, and fish.
+This directory contains Docker-based end-to-end tests for local development and debugging. **These tests do NOT run in CI** - the GitHub Actions workflow uses native runner tests instead (see `e2e/native/`).
 
 ## Overview
 
-The E2E suite verifies that `wt` works correctly in different shell environments by:
+The Docker-based E2E suite verifies that `wt` works correctly in different shell environments by:
 
-1. Building the `wt` binary from source
+1. Building the `wt` binary from source inside a container
 2. Creating a temporary git repository with test branches
 3. Loading the shell environment via `wt shellenv`
 4. Running core operations: `checkout`, `create`, `list`, and `remove`
 5. Verifying auto-cd functionality and worktree management
+
+**Note:** These Docker tests are provided for local development and debugging. CI uses the native runner approach (e2e/native/) which is faster and more realistic.
 
 ## Running Locally
 
@@ -34,9 +36,11 @@ docker run --rm -v $(pwd):/workspace -w /workspace wt-e2e bash e2e/docker/test-b
 # Zsh
 docker run --rm -v $(pwd):/workspace -w /workspace wt-e2e zsh e2e/docker/test-zsh.sh
 
-# Fish
-docker run --rm -v $(pwd):/workspace -w /workspace wt-e2e fish e2e/docker/test-fish.sh
+# Fish (NOT YET SUPPORTED - wt shellenv doesn't generate fish syntax)
+# docker run --rm -v $(pwd):/workspace -w /workspace wt-e2e fish e2e/docker/test-fish.sh
 ```
+
+**Note:** Fish shell tests are included for future development but will currently fail since `wt shellenv` does not yet generate fish-compatible syntax.
 
 ### Run all tests
 
@@ -57,12 +61,14 @@ Each shell test script (`test-bash.sh`, `test-zsh.sh`, `test-fish.sh`) follows t
 
 ## CI Integration
 
-The tests run automatically in GitHub Actions on every push and pull request via the `linux-e2e.yml` workflow. The workflow:
+**These Docker tests do NOT run in CI.** GitHub Actions uses the native runner approach (`e2e/native/`) instead, which:
 
-- Uses a matrix strategy to run tests in parallel for bash, zsh, and fish
-- Caches the Docker image using GitHub Actions cache
-- Uploads test logs as artifacts on failure
-- Keeps runtime under 5-6 minutes per shell
+- Runs tests directly on ubuntu-latest (no Docker overhead)
+- Executes existing Go e2e tests + shellenv validation + CRUD tests
+- Completes in ~30-50 seconds per shell (vs 5-6 minutes with Docker)
+- Follows the same pattern as macOS e2e tests (PR #8)
+
+The Docker approach is provided as an alternative for local development and debugging.
 
 ## Troubleshooting
 

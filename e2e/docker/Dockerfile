@@ -1,5 +1,5 @@
 # Docker image for wt e2e tests with multiple shells
-FROM golang:1.24-bookworm
+FROM golang:1.23-bookworm
 
 # Install git and shells (bash is already present)
 RUN apt-get update && apt-get install -y \

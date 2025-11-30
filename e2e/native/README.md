@@ -16,7 +16,7 @@ The E2E suite verifies that `wt` works correctly in different shell environments
 
 ### Prerequisites
 
-- Go 1.24+ installed
+- Go 1.23+ installed
 - Git installed
 - Shells to test (bash, zsh)
 - From the repository root

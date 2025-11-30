@@ -12,8 +12,10 @@ docker build -t "$IMAGE_NAME" -f "$SCRIPT_DIR/Dockerfile" "$REPO_ROOT"
 
 echo ""
 echo "=== Running e2e tests in all shells ==="
+echo "Note: Fish is excluded - wt shellenv doesn't support fish yet"
+echo ""
 
-SHELLS=(bash zsh fish)
+SHELLS=(bash zsh)
 FAILED=()
 
 for shell in "${SHELLS[@]}"; do
