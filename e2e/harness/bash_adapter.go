@@ -65,7 +65,9 @@ func (a *BashAdapter) Setup(wtBinary, worktreeRoot, repoDir string) error {
 	}
 
 	// Set up environment and source shellenv
+	// Disable prompt for cleaner output
 	setupScript := fmt.Sprintf(`
+PS1=""
 export WORKTREE_ROOT=%s
 export PATH=%s:$PATH
 cd %s

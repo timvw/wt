@@ -1,3 +1,5 @@
+//go:build windows
+
 package harness
 
 import (
@@ -9,8 +11,8 @@ import (
 	"sync"
 )
 
-// ZshAdapter implements ShellAdapter for zsh shell
-type ZshAdapter struct {
+// PwshAdapter implements ShellAdapter for PowerShell
+type PwshAdapter struct {
 	cmd          *exec.Cmd
 	stdin        io.WriteCloser
 	stdout       io.ReadCloser
@@ -20,24 +22,23 @@ type ZshAdapter struct {
 	mu           sync.Mutex
 }
 
-// NewZshAdapter creates a new zsh adapter
-func NewZshAdapter() *ZshAdapter {
-	return &ZshAdapter{}
+// NewPwshAdapter creates a new PowerShell adapter
+func NewPwshAdapter() *PwshAdapter {
+	return &PwshAdapter{}
 }
 
 // Name returns the shell name
-func (a *ZshAdapter) Name() string {
-	return "zsh"
+func (a *PwshAdapter) Name() string {
+	return "pwsh"
 }
 
-// Setup initializes the zsh shell with wt shellenv
-func (a *ZshAdapter) Setup(wtBinary, worktreeRoot, repoDir string) error {
+// Setup initializes the PowerShell shell with wt shellenv
+func (a *PwshAdapter) Setup(wtBinary, worktreeRoot, repoDir string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// Start zsh without interactive features that might interfere
-	// Use --no-rcs to skip config files, but we still need -i for shell functions
-	a.cmd = exec.Command("zsh", "-i", "--no-rcs")
+	// Start PowerShell with no profile to avoid interference
+	a.cmd = exec.Command("pwsh", "-NoProfile", "-NoLogo")
 
 	// Setup pipes
 	stdin, err := a.cmd.StdinPipe()
@@ -62,22 +63,18 @@ func (a *ZshAdapter) Setup(wtBinary, worktreeRoot, repoDir string) error {
 
 	// Start the shell
 	if err := a.cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start zsh: %w", err)
+		return fmt.Errorf("failed to start pwsh: %w", err)
 	}
 
 	// Set up environment and source shellenv
-	// Disable prompt and other interactive features
+	// PowerShell uses different syntax
 	setupScript := fmt.Sprintf(`
-unsetopt PROMPT_CR
-unsetopt PROMPT_SP
-PS1=""
-PROMPT=""
-export WORKTREE_ROOT=%s
-export PATH=%s:$PATH
-cd %s
-eval "$(wt shellenv)"
-echo "___SETUP_COMPLETE___"
-`, worktreeRoot, dirFromBinary(wtBinary), repoDir)
+$env:WORKTREE_ROOT = '%s'
+$env:PATH = '%s;' + $env:PATH
+Set-Location '%s'
+Invoke-Expression (& '%s' shellenv)
+Write-Output "___SETUP_COMPLETE___"
+`, worktreeRoot, dirFromBinary(wtBinary), repoDir, wtBinary)
 
 	if _, err := a.stdin.Write([]byte(setupScript)); err != nil {
 		return fmt.Errorf("failed to write setup script: %w", err)
@@ -91,25 +88,30 @@ echo "___SETUP_COMPLETE___"
 	return nil
 }
 
-// Execute runs a command in the zsh shell
-func (a *ZshAdapter) Execute(cmd string, args []string) (*Result, error) {
+// Execute runs a command in the PowerShell shell
+func (a *PwshAdapter) Execute(cmd string, args []string) (*Result, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	// Build command with markers
 	fullCmd := cmd
 	if len(args) > 0 {
-		fullCmd = fmt.Sprintf("%s %s", cmd, strings.Join(args, " "))
+		// Quote arguments for PowerShell
+		quotedArgs := make([]string, len(args))
+		for i, arg := range args {
+			quotedArgs[i] = fmt.Sprintf("'%s'", arg)
+		}
+		fullCmd = fmt.Sprintf("%s %s", cmd, strings.Join(quotedArgs, " "))
 	}
 
 	script := fmt.Sprintf(`
-echo "___CMD_START___"
+Write-Output "___CMD_START___"
 %s
-__exit_code=$?
-echo "___EXIT_CODE___:$__exit_code"
-pwd
-echo "___PWD_COMPLETE___"
-echo "___CMD_END___"
+$__exit_code = $LASTEXITCODE
+Write-Output "___EXIT_CODE___:$__exit_code"
+Get-Location | Select-Object -ExpandProperty Path
+Write-Output "___PWD_COMPLETE___"
+Write-Output "___CMD_END___"
 `, fullCmd)
 
 	if _, err := a.stdin.Write([]byte(script)); err != nil {
@@ -126,14 +128,14 @@ echo "___CMD_END___"
 }
 
 // GetPwd returns the current working directory
-func (a *ZshAdapter) GetPwd() (string, error) {
+func (a *PwshAdapter) GetPwd() (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	script := `
-echo "___PWD_START___"
-pwd
-echo "___PWD_END___"
+Write-Output "___PWD_START___"
+Get-Location | Select-Object -ExpandProperty Path
+Write-Output "___PWD_END___"
 `
 
 	if _, err := a.stdin.Write([]byte(script)); err != nil {
@@ -160,8 +162,8 @@ echo "___PWD_END___"
 	return pwd, nil
 }
 
-// Cleanup terminates the zsh shell
-func (a *ZshAdapter) Cleanup() error {
+// Cleanup terminates the PowerShell shell
+func (a *PwshAdapter) Cleanup() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -179,7 +181,7 @@ func (a *ZshAdapter) Cleanup() error {
 
 // Helper functions
 
-func (a *ZshAdapter) waitForMarker(marker string) error {
+func (a *PwshAdapter) waitForMarker(marker string) error {
 	for {
 		line, err := a.stdoutReader.ReadString('\n')
 		if err != nil {
@@ -191,7 +193,7 @@ func (a *ZshAdapter) waitForMarker(marker string) error {
 	}
 }
 
-func (a *ZshAdapter) parseCommandOutput() (*Result, error) {
+func (a *PwshAdapter) parseCommandOutput() (*Result, error) {
 	result := &Result{}
 	var stdout, stderr strings.Builder
 	exitCode := 0
