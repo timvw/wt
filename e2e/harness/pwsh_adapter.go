@@ -37,8 +37,8 @@ func (a *PwshAdapter) Setup(wtBinary, worktreeRoot, repoDir string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// Start PowerShell with no profile to avoid interference
-	a.cmd = exec.Command("pwsh", "-NoProfile", "-NoLogo")
+	// Start PowerShell with no profile and non-interactive mode
+	a.cmd = exec.Command("pwsh", "-NoProfile", "-NoLogo", "-NonInteractive")
 
 	// Setup pipes
 	stdin, err := a.cmd.StdinPipe()
