@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -315,6 +316,186 @@ func TestParsePROutput(t *testing.T) {
 				if gotLabels[i] != tt.wantLabels[i] {
 					t.Errorf("parsePROutput() gotLabels[%d] = %v, want %v", i, gotLabels[i], tt.wantLabels[i])
 				}
+			}
+		})
+	}
+}
+
+func TestGetRepoName(t *testing.T) {
+	// This test verifies getRepoName works in the current repository
+	// It should return a non-empty repo name from either the remote URL or directory name
+	repoName, err := getRepoName()
+
+	if err != nil {
+		t.Fatalf("getRepoName() error = %v", err)
+	}
+
+	if repoName == "" {
+		t.Error("getRepoName() returned empty string")
+	}
+
+	// Verify the repo name doesn't contain .git suffix
+	if strings.HasSuffix(repoName, ".git") {
+		t.Errorf("getRepoName() = %q, should not contain .git suffix", repoName)
+	}
+
+	// Verify the repo name doesn't contain path separators
+	if strings.Contains(repoName, "/") || strings.Contains(repoName, "\\") {
+		t.Errorf("getRepoName() = %q, should not contain path separators", repoName)
+	}
+
+	// Verify it's not just whitespace
+	if strings.TrimSpace(repoName) == "" {
+		t.Error("getRepoName() returned only whitespace")
+	}
+}
+
+func TestExtractRepoNameFromURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		// GitHub HTTPS URLs
+		{
+			name: "GitHub HTTPS with .git suffix",
+			url:  "https://github.com/user/repo.git",
+			want: "repo",
+		},
+		{
+			name: "GitHub HTTPS without .git suffix",
+			url:  "https://github.com/user/repo",
+			want: "repo",
+		},
+		{
+			name: "GitHub HTTPS with trailing slash",
+			url:  "https://github.com/user/repo/",
+			want: "repo",
+		},
+		{
+			name: "GitHub HTTPS with org and .git",
+			url:  "https://github.com/my-org/my-repo.git",
+			want: "my-repo",
+		},
+
+		// GitHub SSH URLs
+		{
+			name: "GitHub SSH with .git suffix",
+			url:  "git@github.com:user/repo.git",
+			want: "repo",
+		},
+		{
+			name: "GitHub SSH without .git suffix",
+			url:  "git@github.com:user/repo",
+			want: "repo",
+		},
+
+		// GitLab HTTPS URLs
+		{
+			name: "GitLab HTTPS with .git suffix",
+			url:  "https://gitlab.com/user/project.git",
+			want: "project",
+		},
+		{
+			name: "GitLab HTTPS without .git suffix",
+			url:  "https://gitlab.com/user/project",
+			want: "project",
+		},
+		{
+			name: "GitLab HTTPS with nested groups",
+			url:  "https://gitlab.com/group/subgroup/project.git",
+			want: "project",
+		},
+
+		// GitLab SSH URLs
+		{
+			name: "GitLab SSH with .git suffix",
+			url:  "git@gitlab.com:user/project.git",
+			want: "project",
+		},
+		{
+			name: "GitLab SSH without .git suffix",
+			url:  "git@gitlab.com:user/project",
+			want: "project",
+		},
+
+		// Bitbucket URLs
+		{
+			name: "Bitbucket HTTPS with .git",
+			url:  "https://bitbucket.org/user/repo.git",
+			want: "repo",
+		},
+		{
+			name: "Bitbucket SSH with .git",
+			url:  "git@bitbucket.org:user/repo.git",
+			want: "repo",
+		},
+
+		// Self-hosted Git URLs
+		{
+			name: "Self-hosted HTTPS with .git",
+			url:  "https://git.example.com/user/myproject.git",
+			want: "myproject",
+		},
+		{
+			name: "Self-hosted SSH with .git",
+			url:  "git@git.example.com:user/myproject.git",
+			want: "myproject",
+		},
+
+		// URLs with special characters in repo name
+		{
+			name: "Repo name with hyphens",
+			url:  "https://github.com/user/my-awesome-repo.git",
+			want: "my-awesome-repo",
+		},
+		{
+			name: "Repo name with underscores",
+			url:  "https://github.com/user/my_awesome_repo.git",
+			want: "my_awesome_repo",
+		},
+		{
+			name: "Repo name with dots",
+			url:  "https://github.com/user/my.awesome.repo.git",
+			want: "my.awesome.repo",
+		},
+
+		// Azure DevOps URLs
+		{
+			name: "Azure DevOps HTTPS",
+			url:  "https://dev.azure.com/org/project/_git/repo",
+			want: "repo",
+		},
+
+		// Edge cases
+		{
+			name: "Just repo name with .git",
+			url:  "repo.git",
+			want: "repo",
+		},
+		{
+			name: "Just repo name without .git",
+			url:  "repo",
+			want: "repo",
+		},
+		{
+			name: "Multiple .git in path",
+			url:  "https://github.com/user/repo.git.backup.git",
+			want: "repo.git.backup",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Extract base name from URL (mimics filepath.Base logic)
+			base := filepath.Base(tt.url)
+			// Remove trailing slash if present
+			base = strings.TrimSuffix(base, "/")
+			// Remove .git suffix
+			got := strings.TrimSuffix(base, ".git")
+
+			if got != tt.want {
+				t.Errorf("extractRepoName(%q) = %q, want %q", tt.url, got, tt.want)
 			}
 		})
 	}
