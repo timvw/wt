@@ -1,7 +1,6 @@
 package scenarios
 
 import (
-	"os/exec"
 	"testing"
 
 	"github.com/timvw/wt/e2e/harness"
@@ -30,15 +29,8 @@ func TestCreateNewBranch(t *testing.T) {
 		},
 	}
 
-	// Run through available adapters
-	adapters := []harness.ShellAdapter{
-		harness.NewBashAdapter(),
-	}
-
-	// Add zsh adapter only if zsh is available
-	if _, err := exec.LookPath("zsh"); err == nil {
-		adapters = append(adapters, harness.NewZshAdapter())
-	}
+	// Get shell adapters from E2E_SHELLS environment variable
+	adapters := getShellAdapters(t)
 
 	for _, adapter := range adapters {
 		t.Run(adapter.Name(), func(t *testing.T) {

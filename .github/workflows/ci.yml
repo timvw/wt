@@ -39,8 +39,13 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
+      - name: Install zsh for e2e tests
+        run: sudo apt-get update && sudo apt-get install -y zsh
+
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out ./...
+        env:
+          E2E_SHELLS: bash,zsh
 
       - name: Upload coverage to Codecov
         if: matrix.go-version == '1.25'
@@ -201,6 +206,11 @@ jobs:
 
           # Cleanup (best effort - ignore errors from Go cache files)
           rm -rf "$ISOLATED_TMPDIR" 2>/dev/null || true
+
+      - name: Run scenario tests for ${{ matrix.shell }}
+        run: go test -v ./e2e/scenarios/
+        env:
+          E2E_SHELLS: ${{ matrix.shell }}
 
       - name: Test shellenv output
         run: |
