@@ -168,7 +168,7 @@ func (a *PwshAdapter) Cleanup() error {
 	defer a.mu.Unlock()
 
 	if a.stdin != nil {
-		a.stdin.Write([]byte("exit\n"))
+		_, _ = a.stdin.Write([]byte("exit\n"))
 		a.stdin.Close()
 	}
 
@@ -214,7 +214,7 @@ func (a *PwshAdapter) parseCommandOutput() (*Result, error) {
 			// Parse exit code
 			parts := strings.SplitN(line, ":", 2)
 			if len(parts) == 2 {
-				fmt.Sscanf(strings.TrimSpace(parts[1]), "%d", &exitCode)
+				_, _ = fmt.Sscanf(strings.TrimSpace(parts[1]), "%d", &exitCode)
 			}
 			break
 		}
