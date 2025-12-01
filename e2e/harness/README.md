@@ -78,10 +78,10 @@ type ShellAdapter interface {
 }
 ```
 
-Implementations needed:
-- `bash_adapter.go` - Bash shell (Linux/macOS)
-- `zsh_adapter.go` - Zsh shell (Linux/macOS)
-- `pwsh_adapter.go` - PowerShell (Windows)
+Implementations:
+- `bash_adapter.go` - Bash shell (Linux/macOS) ✅
+- `zsh_adapter.go` - Zsh shell (Linux/macOS) ✅
+- `pwsh_adapter.go` - PowerShell (Windows) ✅
 
 ### Runner (`runner.go`)
 
@@ -164,14 +164,14 @@ WT_BINARY=./wt go test ./e2e/harness/
 
 ## Status
 
-**Current State:** Core framework complete
+**Current State:** Core framework and adapters complete
 - ✅ Fixture builder
 - ✅ Scenario definitions
 - ✅ Adapter interface
 - ✅ Test runner
-- ⏳ Shell adapters (next task: beads-oss-tasks-phf)
-- ⏳ Scenario migrations (task: beads-oss-tasks-pnm)
-- ⏳ CI integration (task: beads-oss-tasks-67x)
+- ✅ Shell adapters (bash ✅, zsh ✅, pwsh ✅)
+- ⏳ Scenario migrations (next task: bez-8)
+- ⏳ CI integration (task: bez-35)
 
 ## Design Goals
 
