@@ -185,10 +185,40 @@ func splitPath(path, sep string) []string {
 
 // buildWt builds the wt binary from source
 func buildWt(outputPath string) error {
+	// Find project root by walking up directories to find go.mod
+	projectRoot, err := findProjectRoot()
+	if err != nil {
+		return fmt.Errorf("failed to find project root: %w", err)
+	}
+
+	// Build from project root
 	cmd := exec.Command("go", "build", "-o", outputPath, ".")
+	cmd.Dir = projectRoot
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("go build failed: %w\nOutput: %s", err, output)
 	}
 	return nil
+}
+
+// findProjectRoot finds the project root by looking for go.mod
+func findProjectRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+
+	// Walk up directories to find go.mod
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, nil
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			// Reached filesystem root
+			return "", fmt.Errorf("go.mod not found in any parent directory")
+		}
+		dir = parent
+	}
 }
