@@ -3,6 +3,7 @@ package harness
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -184,7 +185,10 @@ func splitPath(path, sep string) []string {
 
 // buildWt builds the wt binary from source
 func buildWt(outputPath string) error {
-	// This would use os/exec to run: go build -o outputPath .
-	// For now, we'll return an error as this requires more complex setup
-	return fmt.Errorf("building from source not yet implemented - please set WT_BINARY")
+	cmd := exec.Command("go", "build", "-o", outputPath, ".")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("go build failed: %w\nOutput: %s", err, output)
+	}
+	return nil
 }
