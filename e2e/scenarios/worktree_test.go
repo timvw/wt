@@ -1,6 +1,7 @@
 package scenarios
 
 import (
+	"os/exec"
 	"testing"
 
 	"github.com/timvw/wt/e2e/harness"
@@ -42,7 +43,11 @@ func TestWorktreeCRUD(t *testing.T) {
 	// Run through available adapters
 	adapters := []harness.ShellAdapter{
 		harness.NewBashAdapter(),
-		harness.NewZshAdapter(),
+	}
+
+	// Add zsh adapter only if zsh is available
+	if _, err := exec.LookPath("zsh"); err == nil {
+		adapters = append(adapters, harness.NewZshAdapter())
 	}
 
 	for _, adapter := range adapters {
