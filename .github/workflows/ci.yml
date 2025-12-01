@@ -418,6 +418,12 @@ jobs:
           }
         shell: powershell
 
+      - name: Run scenario tests for ${{ matrix.shell }}
+        run: go test -v ./e2e/scenarios/
+        shell: powershell
+        env:
+          E2E_SHELLS: pwsh
+
       - name: Test shellenv output for ${{ matrix.shell }}
         run: |
           $shellType = "${{ matrix.shell }}"

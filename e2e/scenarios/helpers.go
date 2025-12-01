@@ -36,27 +36,10 @@ func getShellAdapters(t *testing.T) []harness.ShellAdapter {
 			continue
 		}
 
-		// Create appropriate adapter
-		var adapter harness.ShellAdapter
-		switch name {
-		case "bash":
-			adapter = harness.NewBashAdapter()
-		case "zsh":
-			adapter = harness.NewZshAdapter()
-		case "pwsh", "powershell":
-			// Note: PowerShell adapters are platform-specific (Windows only)
-			// We'll handle this gracefully by checking availability
-			if name == "pwsh" {
-				// For now, we only have pwsh adapter on Windows
-				t.Skipf("pwsh adapter not yet implemented for scenarios")
-				continue
-			}
-			if name == "powershell" {
-				t.Skipf("powershell adapter not yet implemented for scenarios")
-				continue
-			}
-		default:
-			t.Fatalf("Unknown shell in E2E_SHELLS: %s (supported: bash, zsh, pwsh, powershell)", name)
+		// Create platform-specific adapter
+		adapter := createShellAdapter(name)
+		if adapter == nil {
+			t.Fatalf("Unknown or unsupported shell in E2E_SHELLS: %s (Windows: bash,zsh,pwsh; Unix: bash,zsh)", name)
 		}
 
 		// Verify shell is available on this system
