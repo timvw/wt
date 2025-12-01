@@ -105,14 +105,7 @@ func (a *PwshAdapter) Execute(cmd string, args []string) (*Result, error) {
 	}
 
 	script := fmt.Sprintf(`
-Write-Output "___CMD_START___"
-%s
-$__exit_code = $LASTEXITCODE
-Write-Output "___EXIT_CODE___:$__exit_code"
-$__pwd = (Get-Location).Path
-Write-Output $__pwd
-Write-Output "___PWD_COMPLETE___"
-Write-Output "___CMD_END___"
+Write-Output "___CMD_START___"; %s; $__exit_code = $LASTEXITCODE; Write-Output "___EXIT_CODE___:$__exit_code"; Write-Output (Get-Location).Path; Write-Output "___PWD_COMPLETE___"; Write-Output "___CMD_END___"
 `, fullCmd)
 
 	if _, err := a.stdin.Write([]byte(script)); err != nil {
@@ -134,10 +127,7 @@ func (a *PwshAdapter) GetPwd() (string, error) {
 	defer a.mu.Unlock()
 
 	script := `
-Write-Output "___PWD_START___"
-$__pwd = (Get-Location).Path
-Write-Output $__pwd
-Write-Output "___PWD_END___"
+Write-Output "___PWD_START___"; Write-Output (Get-Location).Path; Write-Output "___PWD_END___"
 `
 
 	if _, err := a.stdin.Write([]byte(script)); err != nil {
