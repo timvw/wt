@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 
 	"github.com/manifoldco/promptui"
@@ -667,13 +666,15 @@ This enables:
 - Automatic cd to worktree after checkout/create/pr/mr commands
 - Tab completion for commands and branch names`,
 	Run: func(cmd *cobra.Command, args []string) {
-		// Output OS-specific shell integration
-		// On Windows, default to PowerShell. On Unix, output bash/zsh.
-		if runtime.GOOS == "windows" {
-			// PowerShell integration for Windows
-			fmt.Print(`# PowerShell integration (Windows)
-# Detected via runtime.GOOS, compatible with $PSVersionTable
-# NOTE: Requires wt.exe to be in PATH or current directory
+		// Detect shell at runtime by checking environment variables
+		// PowerShell sets PSModulePath on all platforms (Windows, macOS, Linux)
+		_, isPowerShell := os.LookupEnv("PSModulePath")
+
+		if isPowerShell {
+			// PowerShell integration (works on Windows, macOS, Linux)
+			fmt.Print(`# PowerShell integration
+# Detected via PSModulePath environment variable
+# Compatible with PowerShell Core (pwsh) and Windows PowerShell
 
 function wt {
     # Use a temp file to capture output while still showing it to the user

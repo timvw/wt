@@ -123,12 +123,8 @@ func newPtyBash(t *testing.T, rcContent string) (*ptyShell, error) {
 func newPtyPowerShell(t *testing.T, profileContent string) (*ptyShell, error) {
 	t.Helper()
 
-	// Create a temporary directory for PowerShell profile
+	// Create a temporary directory for PowerShell home
 	tmpDir := t.TempDir()
-	profileFile := filepath.Join(tmpDir, "profile.ps1")
-	if err := os.WriteFile(profileFile, []byte(profileContent), 0644); err != nil {
-		return nil, fmt.Errorf("failed to write profile.ps1: %w", err)
-	}
 
 	// Try pwsh first (PowerShell Core), fallback to powershell (Windows PowerShell)
 	shellCmd := "pwsh"
@@ -136,8 +132,17 @@ func newPtyPowerShell(t *testing.T, profileContent string) (*ptyShell, error) {
 		shellCmd = "powershell"
 	}
 
-	// Spawn PowerShell with custom profile
-	cmd := exec.Command(shellCmd, "-NoLogo", "-NoExit", "-File", profileFile)
+	// Create a profile script file that PowerShell will execute
+	profileFile := filepath.Join(tmpDir, "init.ps1")
+	if err := os.WriteFile(profileFile, []byte(profileContent), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write init script: %w", err)
+	}
+
+	// Spawn PowerShell in interactive mode, executing the init script first
+	// Use -NoProfile to avoid system profiles, -NoLogo to reduce clutter
+	// Use -NoExit -Command to execute init script then stay open for interactive commands
+	initCmd := fmt.Sprintf(". '%s'", profileFile)
+	cmd := exec.Command(shellCmd, "-NoProfile", "-NoLogo", "-NoExit", "-Command", initCmd)
 	cmd.Env = append(os.Environ(),
 		"HOME="+tmpDir,
 		"USERPROFILE="+tmpDir,
@@ -630,11 +635,6 @@ func TestInteractiveCheckoutWithoutArgsPowerShell(t *testing.T) {
 		t.Skip("Skipping interactive e2e test in short mode")
 	}
 
-	// PowerShell tests only work on Windows (shellenv outputs PowerShell syntax only on Windows)
-	if os.Getenv("GOOS") != "windows" && filepath.Separator != '\\' {
-		t.Skip("PowerShell tests only run on Windows (shellenv outputs bash/zsh on Unix)")
-	}
-
 	// Check if pwsh or powershell is available
 	if _, err := exec.LookPath("pwsh"); err != nil {
 		if _, err := exec.LookPath("powershell"); err != nil {
@@ -669,7 +669,7 @@ func TestInteractiveCheckoutWithoutArgsPowerShell(t *testing.T) {
 $env:WORKTREE_ROOT = '%s'
 $env:PATH = '%s;' + $env:PATH
 Set-Location '%s'
-& '%s' shellenv | Invoke-Expression
+& '%s' shellenv | Out-String | Invoke-Expression
 Write-Output "=== WT SHELLENV LOADED ==="
 Get-Command wt | Select-Object -ExpandProperty CommandType
 Write-Output "Built wt binary: %s"
@@ -731,11 +731,6 @@ func TestNonInteractiveCheckoutWithArgsPowerShell(t *testing.T) {
 		t.Skip("Skipping interactive e2e test in short mode")
 	}
 
-	// PowerShell tests only work on Windows (shellenv outputs PowerShell syntax only on Windows)
-	if os.Getenv("GOOS") != "windows" && filepath.Separator != '\\' {
-		t.Skip("PowerShell tests only run on Windows (shellenv outputs bash/zsh on Unix)")
-	}
-
 	// Check if pwsh or powershell is available
 	if _, err := exec.LookPath("pwsh"); err != nil {
 		if _, err := exec.LookPath("powershell"); err != nil {
@@ -766,7 +761,7 @@ func TestNonInteractiveCheckoutWithArgsPowerShell(t *testing.T) {
 $env:WORKTREE_ROOT = '%s'
 $env:PATH = '%s;' + $env:PATH
 Set-Location '%s'
-& '%s' shellenv | Invoke-Expression
+& '%s' shellenv | Out-String | Invoke-Expression
 Write-Output "=== WT SHELLENV LOADED ==="
 `, worktreeRootWin, binDir, repoDirWin, wtBinaryWin)
 
