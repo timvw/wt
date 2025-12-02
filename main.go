@@ -733,8 +733,8 @@ Register-ArgumentCompleter -CommandName wt -ScriptBlock {
         # macOS: script -q file command args
         script -q "$log_file" /bin/sh -c 'command wt "$@"' wt "$@"
     else
-        # Linux: script -q -c "command" file
-        script -q -c "command wt $*" "$log_file" >/dev/null
+        # Linux: script -q -c "command wt $*" "$log_file"
+        script -q -c "command wt $*" "$log_file"
     fi
     exit_code=$?
 

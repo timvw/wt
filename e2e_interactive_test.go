@@ -413,12 +413,6 @@ func TestInteractiveCheckoutWithoutArgsBash(t *testing.T) {
 		t.Skip("Skipping interactive e2e test in short mode")
 	}
 
-	// Skip on Linux - interactive PTY tests don't work reliably in Ubuntu CI
-	// We have macOS e2e tests that cover interactive bash functionality
-	if os.Getenv("CI") != "" && os.Getenv("RUNNER_OS") == "Linux" {
-		t.Skip("Skipping bash interactive test on Linux CI - covered by macOS e2e tests")
-	}
-
 	// Check if bash is available
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available, skipping bash interactive test")
@@ -506,12 +500,6 @@ echo "Built wt binary: %s"
 func TestNonInteractiveCheckoutWithArgsBash(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping interactive e2e test in short mode")
-	}
-
-	// Skip on Linux - interactive PTY tests don't work reliably in Ubuntu CI
-	// We have macOS e2e tests that cover interactive bash functionality
-	if os.Getenv("CI") != "" && os.Getenv("RUNNER_OS") == "Linux" {
-		t.Skip("Skipping bash PTY test on Linux CI - covered by macOS e2e tests")
 	}
 
 	// Check if bash is available

@@ -39,6 +39,14 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
+      - name: Install shells for PTY tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bash zsh
+          # Fix zsh permissions to avoid compinit security warnings
+          sudo chmod -R 755 /usr/share/zsh
+          sudo chown -R root:root /usr/share/zsh
+
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out ./...
 
