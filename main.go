@@ -676,17 +676,39 @@ This enables:
 # NOTE: Requires wt.exe to be in PATH or current directory
 
 function wt {
-    # Call wt.exe explicitly to avoid recursive function call
-    # PowerShell will find wt.exe in PATH or current directory
-    $output = & wt.exe @args
-    $exitCode = $LASTEXITCODE
-    Write-Output $output
+    # Use a temp file to capture output while still showing it to the user
+    # This allows interactive prompts to work (PTY passthrough) while still
+    # capturing TREE_ME_CD markers for auto-cd functionality
+    $tempFile = [System.IO.Path]::GetTempFileName()
+
+    # Check if we're in an interactive terminal (not redirected)
+    $isInteractive = -not [Console]::IsOutputRedirected
+
+    if ($isInteractive) {
+        # Interactive mode: Run wt.exe directly and tee output to file
+        # This preserves TTY/PTY for interactive prompts (e.g., promptui menus)
+        & wt.exe @args 2>&1 | Tee-Object -FilePath $tempFile | Write-Output
+        $exitCode = $LASTEXITCODE
+    } else {
+        # Non-interactive mode: Capture output normally
+        $output = & wt.exe @args 2>&1
+        $exitCode = $LASTEXITCODE
+        $output | Set-Content -Path $tempFile
+        Write-Output $output
+    }
+
+    # Extract TREE_ME_CD marker from temp file for auto-cd
     if ($exitCode -eq 0) {
-        $cdPath = $output | Select-String -Pattern "^TREE_ME_CD:" | ForEach-Object { $_.Line.Substring(11) }
+        $cdPath = Get-Content $tempFile | Select-String -Pattern "^TREE_ME_CD:" |
+                  Select-Object -Last 1 | ForEach-Object { $_.Line.Substring(11).Trim() }
         if ($cdPath) {
             Set-Location $cdPath
         }
     }
+
+    # Cleanup temp file
+    Remove-Item $tempFile -ErrorAction SilentlyContinue
+
     $global:LASTEXITCODE = $exitCode
 }
 
