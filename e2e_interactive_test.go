@@ -630,6 +630,11 @@ func TestInteractiveCheckoutWithoutArgsPowerShell(t *testing.T) {
 		t.Skip("Skipping interactive e2e test in short mode")
 	}
 
+	// PowerShell tests only work on Windows (shellenv outputs PowerShell syntax only on Windows)
+	if os.Getenv("GOOS") != "windows" && filepath.Separator != '\\' {
+		t.Skip("PowerShell tests only run on Windows (shellenv outputs bash/zsh on Unix)")
+	}
+
 	// Check if pwsh or powershell is available
 	if _, err := exec.LookPath("pwsh"); err != nil {
 		if _, err := exec.LookPath("powershell"); err != nil {
@@ -724,6 +729,11 @@ Write-Output "Built wt binary: %s"
 func TestNonInteractiveCheckoutWithArgsPowerShell(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping interactive e2e test in short mode")
+	}
+
+	// PowerShell tests only work on Windows (shellenv outputs PowerShell syntax only on Windows)
+	if os.Getenv("GOOS") != "windows" && filepath.Separator != '\\' {
+		t.Skip("PowerShell tests only run on Windows (shellenv outputs bash/zsh on Unix)")
 	}
 
 	// Check if pwsh or powershell is available
