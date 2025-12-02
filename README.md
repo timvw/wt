@@ -54,6 +54,8 @@ sudo cp bin/wt /usr/local/bin/
 
 ### Shell Integration (Optional but Recommended)
 
+#### Bash/Zsh (Linux, macOS)
+
 Add this to the **END** of your `~/.bashrc` or `~/.zshrc`:
 
 ```bash
@@ -62,9 +64,42 @@ source <(wt shellenv)
 
 **Note for zsh users:** Place this after `compinit` in your config file.
 
-This enables:
+#### PowerShell (Windows, macOS, Linux)
+
+Add this to your PowerShell `$PROFILE`:
+
+```powershell
+& wt shellenv | Out-String | Invoke-Expression
+```
+
+To find your profile location, run:
+```powershell
+$PROFILE
+```
+
+To edit it:
+```powershell
+notepad $PROFILE          # Windows
+code $PROFILE             # VS Code
+nano $PROFILE             # Unix/macOS
+```
+
+After editing, reload your profile:
+```powershell
+. $PROFILE
+```
+
+To verify the integration is working:
+```powershell
+# Should show CommandType: Function
+Get-Command wt | Select-Object CommandType, Source
+```
+
+#### What Shell Integration Enables
+
 - Automatic `cd` to worktree after `checkout`/`create`/`pr`/`mr` commands
-- Tab completion for commands and branch names
+- Tab completion for commands and branch names (Bash/Zsh/PowerShell)
+- Interactive prompts work correctly in all shells
 
 ## Usage
 
