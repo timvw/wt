@@ -185,14 +185,16 @@ func TestInteractiveCheckoutWithoutArgs(t *testing.T) {
 	runGitCommand(t, repoDir, "checkout", "main")
 
 	// Create zsh rc that sources wt shellenv and cd's to repo
+	// Use explicit path to the built binary to avoid using system wt
 	rcContent := fmt.Sprintf(`
 export WORKTREE_ROOT=%s
 export PATH=%s:$PATH
 cd %s
-source <(wt shellenv)
+source <(%s shellenv)
 echo "=== WT SHELLENV LOADED ==="
 type wt | head -n 1
-`, worktreeRoot, filepath.Dir(wtBinary), repoDir)
+echo "Built wt binary: %s"
+`, worktreeRoot, filepath.Dir(wtBinary), repoDir, wtBinary, wtBinary)
 
 	// Launch zsh with our config
 	ps, err := newPtyZsh(t, rcContent)
@@ -266,14 +268,16 @@ func TestNonInteractiveCheckoutWithArgs(t *testing.T) {
 	runGitCommand(t, repoDir, "checkout", "main")
 
 	// Create zsh rc that sources wt shellenv and cd's to repo
+	// Use explicit path to the built binary to avoid using system wt
 	rcContent := fmt.Sprintf(`
 export WORKTREE_ROOT=%s
 export PATH=%s:$PATH
 cd %s
-source <(wt shellenv)
+source <(%s shellenv)
 echo "=== WT SHELLENV LOADED ==="
 type wt | head -n 1
-`, worktreeRoot, filepath.Dir(wtBinary), repoDir)
+echo "Built wt binary: %s"
+`, worktreeRoot, filepath.Dir(wtBinary), repoDir, wtBinary, wtBinary)
 
 	// Launch zsh with our config
 	ps, err := newPtyZsh(t, rcContent)
