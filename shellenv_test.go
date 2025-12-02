@@ -40,14 +40,19 @@ func TestShellenvInteractiveModeOutputCapture(t *testing.T) {
 			"EXPECTED: Remove the special case and let all commands use the same output capture logic.")
 	}
 
-	// Verify the fix: should have output capture
-	if !strings.Contains(shellenv, "output=$(command wt \"$@\")") {
-		t.Error("Shell function must capture command output to support auto-cd")
+	// Verify the fix: should use script(1) to provide PTY for interactive commands
+	if !strings.Contains(shellenv, "log_file=$(mktemp") {
+		t.Error("Shell function must use a log file to capture output")
 	}
 
-	// Verify the fix: should extract cd_path from output
-	if !strings.Contains(shellenv, "cd_path=$(echo \"$output\" | grep \"^TREE_ME_CD:\"") {
-		t.Error("Shell function must extract cd_path from TREE_ME_CD marker")
+	// Verify the fix: should extract cd_path from log file
+	if !strings.Contains(shellenv, "cd_path=$(grep '^TREE_ME_CD:' \"$log_file\"") {
+		t.Error("Shell function must extract cd_path from TREE_ME_CD marker in log file")
+	}
+
+	// Verify the fix: should use script command for PTY allocation
+	if !strings.Contains(shellenv, "script -q") {
+		t.Error("Shell function must use script command to allocate PTY for interactive prompts")
 	}
 }
 

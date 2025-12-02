@@ -3,6 +3,7 @@ module github.com/timvw/wt
 go 1.24.0
 
 require (
+	github.com/creack/pty v1.1.24
 	github.com/manifoldco/promptui v0.9.0
 	github.com/spf13/cobra v1.8.0
 )
