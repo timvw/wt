@@ -42,10 +42,17 @@ jobs:
       - name: Install shells for PTY tests
         run: |
           sudo apt-get update
-          sudo apt-get install -y bash zsh
+          sudo apt-get install -y bash zsh wget
           # Fix zsh permissions to avoid compinit security warnings
           sudo chmod -R 755 /usr/share/zsh
           sudo chown -R root:root /usr/share/zsh
+
+          # Install PowerShell on Linux
+          # Download and install PowerShell package
+          wget -q https://github.com/PowerShell/PowerShell/releases/download/v7.4.6/powershell_7.4.6-1.deb_amd64.deb
+          sudo dpkg -i powershell_7.4.6-1.deb_amd64.deb
+          sudo apt-get install -f -y
+          pwsh --version
 
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out ./...
@@ -161,7 +168,7 @@ jobs:
     runs-on: macos-latest
     strategy:
       matrix:
-        shell: ['bash', 'zsh']
+        shell: ['bash', 'zsh', 'pwsh']
 
     steps:
       - name: Generate GitHub App token
@@ -194,6 +201,10 @@ jobs:
           ./bin/wt --help
           file bin/wt
 
+      - name: Install PowerShell (if needed)
+        if: matrix.shell == 'pwsh'
+        run: brew install --cask powershell
+
       - name: Run e2e tests for ${{ matrix.shell }}
         run: |
           # Set up isolated test environment
@@ -207,6 +218,9 @@ jobs:
           elif [ "${{ matrix.shell }}" = "zsh" ]; then
             # Run both old e2e test and new PTY interactive tests for zsh
             go test -v -run 'TestE2EAutoCdInZsh|TestInteractiveCheckoutWithoutArgs|TestNonInteractiveCheckoutWithArgs' .
+          elif [ "${{ matrix.shell }}" = "pwsh" ]; then
+            # Run PowerShell PTY interactive tests
+            go test -v -run 'TestInteractiveCheckoutWithoutArgsPowerShell|TestNonInteractiveCheckoutWithArgsPowerShell' .
           fi
 
           # Cleanup (best effort - ignore errors from Go cache files)
@@ -224,9 +238,18 @@ jobs:
           fi
 
           # Check for key components (wt function)
-          if ! grep -q "wt()" shellenv-${{ matrix.shell }}.txt; then
-            echo "ERROR: wt function not found in shellenv output"
-            exit 1
+          if [ "${{ matrix.shell }}" = "pwsh" ]; then
+            # PowerShell uses "function wt"
+            if ! grep -q "function wt" shellenv-${{ matrix.shell }}.txt; then
+              echo "ERROR: wt function not found in shellenv output"
+              exit 1
+            fi
+          else
+            # Bash/Zsh use "wt()"
+            if ! grep -q "wt()" shellenv-${{ matrix.shell }}.txt; then
+              echo "ERROR: wt function not found in shellenv output"
+              exit 1
+            fi
           fi
 
           # Verify shell-specific features
@@ -234,6 +257,9 @@ jobs:
             grep -q "BASH_VERSION" shellenv-${{ matrix.shell }}.txt || (echo "ERROR: bash-specific code not found" && exit 1)
           elif [ "${{ matrix.shell }}" = "zsh" ]; then
             grep -q "ZSH_VERSION" shellenv-${{ matrix.shell }}.txt || (echo "ERROR: zsh-specific code not found" && exit 1)
+          elif [ "${{ matrix.shell }}" = "pwsh" ]; then
+            grep -q "PowerShell" shellenv-${{ matrix.shell }}.txt || (echo "ERROR: PowerShell-specific code not found" && exit 1)
+            grep -q "Get-Command" shellenv-${{ matrix.shell }}.txt || (echo "ERROR: PowerShell Get-Command not found" && exit 1)
           fi
 
           echo "shellenv validation passed for ${{ matrix.shell }}"
