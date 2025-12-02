@@ -194,9 +194,11 @@ jobs:
 
           # Run specific e2e tests (not ./... to avoid redundancy)
           if [ "${{ matrix.shell }}" = "bash" ]; then
-            go test -v -run 'TestE2EAutoCdWithNonInteractiveCommand|TestE2EAutoCdWithCreate' .
+            # Run both old e2e tests and new PTY interactive tests for bash
+            go test -v -run 'TestE2EAutoCdWithNonInteractiveCommand|TestE2EAutoCdWithCreate|TestInteractiveCheckoutWithoutArgsBash|TestNonInteractiveCheckoutWithArgsBash' .
           elif [ "${{ matrix.shell }}" = "zsh" ]; then
-            go test -v -run TestE2EAutoCdInZsh .
+            # Run both old e2e test and new PTY interactive tests for zsh
+            go test -v -run 'TestE2EAutoCdInZsh|TestInteractiveCheckoutWithoutArgs|TestNonInteractiveCheckoutWithArgs' .
           fi
 
           # Cleanup (best effort - ignore errors from Go cache files)
