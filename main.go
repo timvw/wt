@@ -682,17 +682,21 @@ function wt {
     # capturing TREE_ME_CD markers for auto-cd functionality
     $tempFile = [System.IO.Path]::GetTempFileName()
 
+    # Get the actual wt executable (not this function)
+    # This avoids infinite recursion when calling wt from within the wt function
+    $wtCommand = Get-Command wt -CommandType Application | Select-Object -First 1
+
     # Check if we're in an interactive terminal (not redirected)
     $isInteractive = -not [Console]::IsOutputRedirected
 
     if ($isInteractive) {
-        # Interactive mode: Run wt.exe directly and tee output to file
+        # Interactive mode: Run wt directly and tee output to file
         # This preserves TTY/PTY for interactive prompts (e.g., promptui menus)
-        & wt.exe @args 2>&1 | Tee-Object -FilePath $tempFile | Write-Output
+        & $wtCommand @args 2>&1 | Tee-Object -FilePath $tempFile | Write-Output
         $exitCode = $LASTEXITCODE
     } else {
         # Non-interactive mode: Capture output normally
-        $output = & wt.exe @args 2>&1
+        $output = & $wtCommand @args 2>&1
         $exitCode = $LASTEXITCODE
         $output | Set-Content -Path $tempFile
         Write-Output $output
