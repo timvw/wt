@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -653,6 +654,12 @@ func TestInteractiveCheckoutWithoutArgsPowerShell(t *testing.T) {
 		t.Skip("Skipping interactive e2e test in short mode")
 	}
 
+	// PowerShell PTY tests only work on Windows due to upstream PowerShell bug #14932
+	// https://github.com/PowerShell/PowerShell/issues/14932
+	if runtime.GOOS != "windows" {
+		t.Skip("Skipping PowerShell PTY test on non-Windows (upstream bug #14932)")
+	}
+
 	// Check if pwsh or powershell is available
 	if _, err := exec.LookPath("pwsh"); err != nil {
 		if _, err := exec.LookPath("powershell"); err != nil {
@@ -747,6 +754,12 @@ Write-Output "Built wt binary: %s"
 func TestNonInteractiveCheckoutWithArgsPowerShell(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping interactive e2e test in short mode")
+	}
+
+	// PowerShell PTY tests only work on Windows due to upstream PowerShell bug #14932
+	// https://github.com/PowerShell/PowerShell/issues/14932
+	if runtime.GOOS != "windows" {
+		t.Skip("Skipping PowerShell PTY test on non-Windows (upstream bug #14932)")
 	}
 
 	// Check if pwsh or powershell is available
