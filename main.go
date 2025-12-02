@@ -723,17 +723,26 @@ Register-ArgumentCompleter -CommandName wt -ScriptBlock {
 
 		// Bash/Zsh integration for Unix systems
 		fmt.Print(`wt() {
-    # All commands (including interactive) need output capture for auto-cd
-    local output
-    output=$(command wt "$@")
-    local exit_code=$?
-    echo "$output"
-    if [ $exit_code -eq 0 ]; then
-        local cd_path=$(echo "$output" | grep "^TREE_ME_CD:" | cut -d: -f2-)
-        [ -n "$cd_path" ] && cd "$cd_path"
-    fi
-    return $exit_code
-}
+	    if ! command -v script >/dev/null 2>&1; then
+	        command wt "$@"
+	        return $?
+	    fi
+	
+	    local wt_log exit_code cd_path
+	    wt_log=$(mktemp -t wt.XXXXXX)
+	
+	    script -q "$wt_log" /bin/sh -c 'command wt "$@"' wt "$@"
+	    exit_code=$?
+	
+	    cd_path=$(grep '^TREE_ME_CD:' "$wt_log" | tail -1 | cut -d: -f2-)
+	    rm -f "$wt_log"
+	    cd_path=${cd_path%$'\r'}
+	
+	    if [ $exit_code -eq 0 ] && [ -n "$cd_path" ]; then
+	        cd "$cd_path"
+	    fi
+	    return $exit_code
+	}
 
 # Bash completion
 if [ -n "$BASH_VERSION" ]; then

@@ -54,7 +54,7 @@ sudo cp bin/wt /usr/local/bin/
 
 ### Shell Integration (Optional but Recommended)
 
-Add this to the **END** of your `~/.bashrc` or `~/.zshrc`:
+Add this to the **END** of your `~/.bashrc` or `~/.zshrc` (auto-cd requires the `script` command, available by default on macOS and most Linux distros):
 
 ```bash
 source <(wt shellenv)
