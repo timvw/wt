@@ -361,4 +361,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Skip Windows tests
-        run: echo "Windows e2e tests are temporarily disabled. TODO: add Windows PTY support"
+        run: echo "Windows e2e tests are temporarily disabled. TODO add Windows PTY support"
