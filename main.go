@@ -728,8 +728,14 @@ Register-ArgumentCompleter -CommandName wt -ScriptBlock {
     local log_file exit_code cd_path
     log_file=$(mktemp -t wt.XXXXXX)
 
-    # script -q runs the command in a PTY and logs output
-    script -q "$log_file" /bin/sh -c 'command wt "$@"' wt "$@"
+    # Detect OS to use correct script syntax (macOS vs Linux)
+    if [ "$(uname)" = "Darwin" ]; then
+        # macOS: script -q file command args
+        script -q "$log_file" /bin/sh -c 'command wt "$@"' wt "$@"
+    else
+        # Linux: script -q -c "command" file
+        script -q -c "command wt $*" "$log_file" >/dev/null
+    fi
     exit_code=$?
 
     # Extract the TREE_ME_CD marker for auto-cd
