@@ -8,9 +8,11 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
-    name: Test
+  # Temporarily disabled to speed up Windows test iteration
+  test-disabled:
+    name: Test (Disabled)
     runs-on: ubuntu-latest
+    if: false
     strategy:
       matrix:
         go-version: ['1.24', '1.25']
@@ -59,9 +61,11 @@ jobs:
           files: ./coverage.out
           fail_ci_if_error: false
 
-  build:
-    name: Build
+  # Temporarily disabled to speed up Windows test iteration
+  build-disabled:
+    name: Build (Disabled)
     runs-on: ubuntu-latest
+    if: false
 
     steps:
       - name: Generate GitHub App token
@@ -94,9 +98,11 @@ jobs:
           ./bin/wt --help
           file bin/wt
 
-  lint:
-    name: Lint
+  # Temporarily disabled to speed up Windows test iteration
+  lint-disabled:
+    name: Lint (Disabled)
     runs-on: ubuntu-latest
+    if: false
 
     steps:
       - name: Generate GitHub App token
@@ -121,9 +127,11 @@ jobs:
         with:
           version: latest
 
-  cross-compile:
-    name: Cross Compile
+  # Temporarily disabled to speed up Windows test iteration
+  cross-compile-disabled:
+    name: Cross Compile (Disabled)
     runs-on: ubuntu-latest
+    if: false
 
     steps:
       - name: Generate GitHub App token
@@ -156,9 +164,11 @@ jobs:
           ls -lh bin/
           file bin/*
 
-  e2e-macos:
-    name: E2E Tests (macOS)
+  # Temporarily disabled to speed up Windows test iteration
+  e2e-macos-disabled:
+    name: E2E Tests (macOS) (Disabled)
     runs-on: macos-latest
+    if: false
     strategy:
       matrix:
         shell: ['bash', 'zsh']

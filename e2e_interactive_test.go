@@ -261,7 +261,7 @@ func (ps *ptyShell) send(s string) error {
 
 // close terminates the shell and cleans up resources
 func (ps *ptyShell) close() {
-	ps.send("exit\n")
+	ps.send("exit\r\n")
 
 	// Wait for process with timeout to avoid hanging forever
 	done := make(chan struct{})
@@ -273,7 +273,7 @@ func (ps *ptyShell) close() {
 	select {
 	case <-done:
 		// Process exited normally
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		// Timeout - force kill
 		ps.t.Logf("Shell process didn't exit within timeout, force killing")
 		ps.cmd.Process.Kill()
@@ -835,7 +835,7 @@ Write-Output "=== WT SHELLENV LOADED ==="
 
 	// Also verify the TREE_ME_CD marker is present
 	output := ps.getOutput()
-	expectedPath := filepath.ToSlash(filepath.Join(worktreeRoot, "test-repo", "feature-explicit"))
+	expectedPath := filepath.Join(worktreeRoot, "test-repo", "feature-explicit")
 	if !strings.Contains(output, "TREE_ME_CD:"+expectedPath) {
 		t.Errorf("TREE_ME_CD marker not found in output.\nExpected path: %s\nOutput:\n%s",
 			expectedPath, output)
