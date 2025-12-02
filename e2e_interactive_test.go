@@ -664,7 +664,7 @@ func TestInteractiveCheckoutWithoutArgsPowerShell(t *testing.T) {
 $env:WORKTREE_ROOT = '%s'
 $env:PATH = '%s;' + $env:PATH
 Set-Location '%s'
-Invoke-Expression (& '%s' shellenv)
+& '%s' shellenv | Invoke-Expression
 Write-Output "=== WT SHELLENV LOADED ==="
 Get-Command wt | Select-Object -ExpandProperty CommandType
 Write-Output "Built wt binary: %s"
@@ -756,7 +756,7 @@ func TestNonInteractiveCheckoutWithArgsPowerShell(t *testing.T) {
 $env:WORKTREE_ROOT = '%s'
 $env:PATH = '%s;' + $env:PATH
 Set-Location '%s'
-Invoke-Expression (& '%s' shellenv)
+& '%s' shellenv | Invoke-Expression
 Write-Output "=== WT SHELLENV LOADED ==="
 `, worktreeRootWin, binDir, repoDirWin, wtBinaryWin)
 
