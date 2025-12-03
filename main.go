@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/manifoldco/promptui"
+	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
 )
 
@@ -312,15 +312,22 @@ var checkoutCmd = &cobra.Command{
 				return fmt.Errorf("no available branches to checkout")
 			}
 
-			prompt := promptui.Select{
-				Label: "Select branch to checkout",
-				Items: branches,
+			options := make([]huh.Option[string], len(branches))
+			for i, b := range branches {
+				options[i] = huh.NewOption(b, b)
 			}
-			_, result, err := prompt.Run()
+
+			err = huh.NewForm(
+				huh.NewGroup(
+					huh.NewSelect[string]().
+						Title("Select branch to checkout").
+						Options(options...).
+						Value(&branch),
+				),
+			).Run()
 			if err != nil {
 				return fmt.Errorf("selection cancelled")
 			}
-			branch = result
 		} else {
 			branch = args[0]
 		}
@@ -428,15 +435,22 @@ Examples:
 				return fmt.Errorf("no open PRs found")
 			}
 
-			prompt := promptui.Select{
-				Label: "Select Pull Request",
-				Items: labels,
+			options := make([]huh.Option[string], len(labels))
+			for i, label := range labels {
+				options[i] = huh.NewOption(label, numbers[i])
 			}
-			idx, _, err := prompt.Run()
+
+			err = huh.NewForm(
+				huh.NewGroup(
+					huh.NewSelect[string]().
+						Title("Select Pull Request").
+						Options(options...).
+						Value(&input),
+				),
+			).Run()
 			if err != nil {
 				return fmt.Errorf("selection cancelled")
 			}
-			input = numbers[idx]
 		} else {
 			input = args[0]
 		}
@@ -471,15 +485,22 @@ Examples:
 				return fmt.Errorf("no open MRs found")
 			}
 
-			prompt := promptui.Select{
-				Label: "Select Merge Request",
-				Items: labels,
+			options := make([]huh.Option[string], len(labels))
+			for i, label := range labels {
+				options[i] = huh.NewOption(label, numbers[i])
 			}
-			idx, _, err := prompt.Run()
+
+			err = huh.NewForm(
+				huh.NewGroup(
+					huh.NewSelect[string]().
+						Title("Select Merge Request").
+						Options(options...).
+						Value(&input),
+				),
+			).Run()
 			if err != nil {
 				return fmt.Errorf("selection cancelled")
 			}
-			input = numbers[idx]
 		} else {
 			input = args[0]
 		}
@@ -580,15 +601,22 @@ var removeCmd = &cobra.Command{
 				return fmt.Errorf("no worktrees to remove")
 			}
 
-			prompt := promptui.Select{
-				Label: "Select worktree to remove",
-				Items: branches,
+			options := make([]huh.Option[string], len(branches))
+			for i, b := range branches {
+				options[i] = huh.NewOption(b, b)
 			}
-			_, result, err := prompt.Run()
+
+			err = huh.NewForm(
+				huh.NewGroup(
+					huh.NewSelect[string]().
+						Title("Select worktree to remove").
+						Options(options...).
+						Value(&branch),
+				),
+			).Run()
 			if err != nil {
 				return fmt.Errorf("selection cancelled")
 			}
-			branch = result
 		} else {
 			branch = args[0]
 		}
