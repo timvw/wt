@@ -37,12 +37,24 @@ jobs:
             bottle: null
 
     steps:
-      - name: Setup Go and checkout
-        id: setup
-        uses: ./.github/actions/setup-go-wt
+      - name: Generate GitHub App token
+        id: generate-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
         with:
-          bot-app-id: ${{ secrets.BOT_APP_ID }}
-          bot-private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.generate-token.outputs.token || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
 
       - name: Extract version from tag
         id: version
@@ -96,12 +108,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Setup Go and checkout
-        id: setup
-        uses: ./.github/actions/setup-go-wt
+      - name: Generate GitHub App token
+        id: generate-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
         with:
-          bot-app-id: ${{ secrets.BOT_APP_ID }}
-          bot-private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.generate-token.outputs.token || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -135,7 +159,7 @@ jobs:
 
       - name: Create GitHub Release
         env:
-          GH_TOKEN: ${{ steps.setup.outputs.token }}
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
         run: |
           gh release create ${{ github.ref_name }} \
             --title "Release ${{ github.ref_name }}" \
@@ -150,6 +174,7 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: generate-token
+        continue-on-error: true
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.BOT_APP_ID }}
@@ -157,6 +182,17 @@ jobs:
           repositories: |
             wt
             homebrew-tap
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.generate-token.outputs.token || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
 
       - name: Download checksums artifact
         uses: actions/download-artifact@v4

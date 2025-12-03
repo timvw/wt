@@ -13,11 +13,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Setup Go and checkout
-        uses: ./.github/actions/setup-go-wt
+      - name: Generate GitHub App token
+        id: generate-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
         with:
-          bot-app-id: ${{ secrets.BOT_APP_ID }}
-          bot-private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.generate-token.outputs.token || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
 
       - name: Verify dependencies
         run: go mod verify
@@ -32,11 +45,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Setup Go and checkout
-        uses: ./.github/actions/setup-go-wt
+      - name: Generate GitHub App token
+        id: generate-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
         with:
-          bot-app-id: ${{ secrets.BOT_APP_ID }}
-          bot-private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.generate-token.outputs.token || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
 
       - name: Run unit tests
         run: go test -short -v -race -coverprofile=coverage.out ./...
@@ -55,11 +81,24 @@ jobs:
     needs: [lint, test]
 
     steps:
-      - name: Setup Go and checkout
-        uses: ./.github/actions/setup-go-wt
+      - name: Generate GitHub App token
+        id: generate-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
         with:
-          bot-app-id: ${{ secrets.BOT_APP_ID }}
-          bot-private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.generate-token.outputs.token || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
 
       - name: Build for all platforms
         run: |
@@ -109,11 +148,24 @@ jobs:
         shell: ['bash', 'zsh']
 
     steps:
-      - name: Setup Go and checkout
-        uses: ./.github/actions/setup-go-wt
+      - name: Generate GitHub App token
+        id: generate-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
         with:
-          bot-app-id: ${{ secrets.BOT_APP_ID }}
-          bot-private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.generate-token.outputs.token || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
 
       - name: Download macOS binary
         uses: actions/download-artifact@v4
@@ -303,11 +355,24 @@ jobs:
         # Note: fish is excluded for now as wt shellenv doesn't support fish yet
 
     steps:
-      - name: Setup Go and checkout
-        uses: ./.github/actions/setup-go-wt
+      - name: Generate GitHub App token
+        id: generate-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
         with:
-          bot-app-id: ${{ secrets.BOT_APP_ID }}
-          bot-private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.generate-token.outputs.token || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
 
       - name: Install zsh
         if: matrix.shell == 'zsh'
@@ -486,11 +551,24 @@ jobs:
         shell: ['powershell', 'pwsh']
 
     steps:
-      - name: Setup Go and checkout
-        uses: ./.github/actions/setup-go-wt
+      - name: Generate GitHub App token
+        id: generate-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
         with:
-          bot-app-id: ${{ secrets.BOT_APP_ID }}
-          bot-private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.generate-token.outputs.token || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
 
       - name: Download Windows binary
         uses: actions/download-artifact@v4
