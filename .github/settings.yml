@@ -39,11 +39,9 @@ branches:
       required_status_checks:
         strict: true
         contexts:
-          - "Test (1.24)"
-          - "Test (1.25)"
-          - "Build"
           - "Lint"
-          - "Cross Compile"
+          - "Unit Tests"
+          - "Build and Cross-Compile"
 
       enforce_admins: false
 
