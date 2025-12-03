@@ -8,94 +8,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: ['1.24', '1.25']
-
-    steps:
-      - name: Generate GitHub App token
-        id: generate-token
-        continue-on-error: true
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          token: ${{ steps.generate-token.outputs.token || github.token }}
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ matrix.go-version }}
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Verify dependencies
-        run: go mod verify
-
-      - name: Install shells for PTY tests
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bash zsh
-          # Fix zsh permissions to avoid compinit security warnings
-          sudo chmod -R 755 /usr/share/zsh
-          sudo chown -R root:root /usr/share/zsh
-
-      - name: Run tests
-        run: go test -v -race -coverprofile=coverage.out ./...
-
-      - name: Upload coverage to Codecov
-        if: matrix.go-version == '1.25'
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          slug: timvw/wt
-          files: ./coverage.out
-          fail_ci_if_error: false
-
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Generate GitHub App token
-        id: generate-token
-        continue-on-error: true
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          token: ${{ steps.generate-token.outputs.token || github.token }}
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-
-      - name: Build
-        run: go build -v ./...
-
-      - name: Build binary
-        run: |
-          mkdir -p bin
-          go build -o bin/wt .
-
-      - name: Verify binary
-        run: |
-          ./bin/wt --help
-          file bin/wt
-
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -118,14 +30,18 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.25'
+          cache: true
+
+      - name: Verify dependencies
+        run: go mod verify
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v4
         with:
           version: latest
 
-  cross-compile:
-    name: Cross Compile
+  test:
+    name: Unit Tests
     runs-on: ubuntu-latest
 
     steps:
@@ -146,23 +62,87 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.25'
+          cache: true
 
-      - name: Cross compile
+      - name: Run unit tests
+        run: go test -short -v -race -coverprofile=coverage.out ./...
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: timvw/wt
+          files: ./coverage.out
+          fail_ci_if_error: false
+
+  build:
+    name: Build and Cross-Compile
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+
+    steps:
+      - name: Generate GitHub App token
+        id: generate-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.generate-token.outputs.token || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Build for all platforms
         run: |
           mkdir -p bin
+          # Native build
+          go build -o bin/wt .
+          # Cross-compile for all supported platforms
           GOOS=linux GOARCH=amd64 go build -o bin/wt-linux-amd64 .
+          GOOS=linux GOARCH=arm64 go build -o bin/wt-linux-arm64 .
           GOOS=darwin GOARCH=amd64 go build -o bin/wt-darwin-amd64 .
           GOOS=darwin GOARCH=arm64 go build -o bin/wt-darwin-arm64 .
           GOOS=windows GOARCH=amd64 go build -o bin/wt-windows-amd64.exe .
 
       - name: Verify binaries
         run: |
+          ./bin/wt --help
           ls -lh bin/
           file bin/*
+
+      - name: Upload Linux binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: wt-linux-amd64
+          path: bin/wt-linux-amd64
+          retention-days: 1
+
+      - name: Upload macOS ARM64 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: wt-darwin-arm64
+          path: bin/wt-darwin-arm64
+          retention-days: 1
+
+      - name: Upload Windows binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: wt-windows-amd64
+          path: bin/wt-windows-amd64.exe
+          retention-days: 1
 
   e2e-macos:
     name: E2E Tests (macOS)
     runs-on: macos-latest
+    needs: build
     strategy:
       matrix:
         shell: ['bash', 'zsh']
@@ -185,17 +165,18 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.25'
+          cache: true
 
-      - name: Download dependencies
-        run: go mod download
+      - name: Download macOS binary
+        uses: actions/download-artifact@v4
+        with:
+          name: wt-darwin-arm64
+          path: bin
 
-      - name: Build wt binary
+      - name: Prepare binary
         run: |
-          mkdir -p bin
-          go build -o bin/wt .
-
-      - name: Verify binary
-        run: |
+          mv bin/wt-darwin-arm64 bin/wt
+          chmod +x bin/wt
           ./bin/wt --help
           file bin/wt
 
@@ -366,6 +347,7 @@ jobs:
   e2e-linux:
     name: E2E Tests (Linux)
     runs-on: ubuntu-latest
+    needs: build
     strategy:
       fail-fast: false
       matrix:
@@ -390,6 +372,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.25'
+          cache: true
 
       - name: Install zsh
         if: matrix.shell == 'zsh'
@@ -397,16 +380,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zsh
 
-      - name: Download dependencies
-        run: go mod download
+      - name: Download Linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: wt-linux-amd64
+          path: bin
 
-      - name: Build wt binary
+      - name: Prepare binary
         run: |
-          mkdir -p bin
-          go build -o bin/wt .
-
-      - name: Verify binary
-        run: |
+          mv bin/wt-linux-amd64 bin/wt
+          chmod +x bin/wt
           ./bin/wt --help
           file bin/wt
 
@@ -562,6 +545,7 @@ jobs:
   e2e-windows:
     name: E2E Tests (Windows)
     runs-on: windows-latest
+    needs: build
     strategy:
       matrix:
         shell: ['powershell', 'pwsh']
@@ -584,17 +568,17 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.25'
+          cache: true
 
-      - name: Download dependencies
-        run: go mod download
+      - name: Download Windows binary
+        uses: actions/download-artifact@v4
+        with:
+          name: wt-windows-amd64
+          path: bin
 
-      - name: Build wt binary
+      - name: Prepare binary
         run: |
-          mkdir -p bin
-          go build -o bin/wt.exe .
-
-      - name: Verify binary
-        run: |
+          mv bin/wt-windows-amd64.exe bin/wt.exe
           ./bin/wt.exe --help
           file bin/wt.exe
 

@@ -31,10 +31,15 @@ jobs:
             goarch: arm64
             output: wt-darwin-arm64
             bottle: arm64_sonoma
+          - goos: windows
+            goarch: amd64
+            output: wt-windows-amd64.exe
+            bottle: null
 
     steps:
       - name: Generate GitHub App token
         id: generate-token
+        continue-on-error: true
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.BOT_APP_ID }}
@@ -43,12 +48,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          token: ${{ steps.generate-token.outputs.token }}
+          token: ${{ steps.generate-token.outputs.token || github.token }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.25'
+          cache: true
 
       - name: Extract version from tag
         id: version
@@ -63,6 +69,7 @@ jobs:
           go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o dist/wt .
 
       - name: Create Homebrew bottle
+        if: matrix.bottle != 'null'
         run: |
           # Create bottle directory structure: wt/VERSION/bin/wt
           mkdir -p wt/${{ steps.version.outputs.VERSION }}/bin
@@ -74,7 +81,14 @@ jobs:
           # Also keep the raw binary for non-Homebrew users
           mv dist/wt dist/${{ matrix.output }}
 
+      - name: Skip bottle creation for Windows
+        if: matrix.bottle == 'null'
+        run: |
+          # Just rename the binary for Windows (no bottle needed)
+          mv dist/wt dist/${{ matrix.output }}
+
       - name: Upload bottle artifact
+        if: matrix.bottle != 'null'
         uses: actions/upload-artifact@v4
         with:
           name: bottle-${{ matrix.bottle }}
@@ -88,13 +102,15 @@ jobs:
           path: dist/${{ matrix.output }}
           if-no-files-found: error
 
-  build-windows:
-    name: Build Windows Binary
+  release:
+    name: Create Release
+    needs: build
     runs-on: ubuntu-latest
 
     steps:
       - name: Generate GitHub App token
         id: generate-token
+        continue-on-error: true
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.BOT_APP_ID }}
@@ -103,45 +119,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          token: ${{ steps.generate-token.outputs.token }}
+          token: ${{ steps.generate-token.outputs.token || github.token }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.25'
-
-      - name: Build Windows binary
-        env:
-          GOOS: windows
-          GOARCH: amd64
-        run: |
-          mkdir -p dist
-          go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o dist/wt-windows-amd64.exe .
-
-      - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: binary-wt-windows-amd64.exe
-          path: dist/wt-windows-amd64.exe
-          if-no-files-found: error
-
-  release:
-    name: Create Release
-    needs: [build, build-windows]
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Generate GitHub App token
-        id: generate-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          token: ${{ steps.generate-token.outputs.token }}
+          cache: true
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -190,6 +174,7 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: generate-token
+        continue-on-error: true
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.BOT_APP_ID }}
@@ -197,6 +182,17 @@ jobs:
           repositories: |
             wt
             homebrew-tap
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.generate-token.outputs.token || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
 
       - name: Download checksums artifact
         uses: actions/download-artifact@v4
