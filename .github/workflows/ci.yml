@@ -86,9 +86,31 @@ jobs:
           ls -lh bin/
           file bin/*
 
+      - name: Upload Linux binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: wt-linux-amd64
+          path: bin/wt-linux-amd64
+          retention-days: 1
+
+      - name: Upload macOS ARM64 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: wt-darwin-arm64
+          path: bin/wt-darwin-arm64
+          retention-days: 1
+
+      - name: Upload Windows binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: wt-windows-amd64
+          path: bin/wt-windows-amd64.exe
+          retention-days: 1
+
   e2e-macos:
     name: E2E Tests (macOS)
     runs-on: macos-latest
+    needs: build
     strategy:
       matrix:
         shell: ['bash', 'zsh']
@@ -100,13 +122,16 @@ jobs:
           bot-app-id: ${{ secrets.BOT_APP_ID }}
           bot-private-key: ${{ secrets.BOT_PRIVATE_KEY }}
 
-      - name: Build wt binary
-        run: |
-          mkdir -p bin
-          go build -o bin/wt .
+      - name: Download macOS binary
+        uses: actions/download-artifact@v4
+        with:
+          name: wt-darwin-arm64
+          path: bin
 
-      - name: Verify binary
+      - name: Prepare binary
         run: |
+          mv bin/wt-darwin-arm64 bin/wt
+          chmod +x bin/wt
           ./bin/wt --help
           file bin/wt
 
@@ -277,6 +302,7 @@ jobs:
   e2e-linux:
     name: E2E Tests (Linux)
     runs-on: ubuntu-latest
+    needs: build
     strategy:
       fail-fast: false
       matrix:
@@ -296,13 +322,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zsh
 
-      - name: Build wt binary
-        run: |
-          mkdir -p bin
-          go build -o bin/wt .
+      - name: Download Linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: wt-linux-amd64
+          path: bin
 
-      - name: Verify binary
+      - name: Prepare binary
         run: |
+          mv bin/wt-linux-amd64 bin/wt
+          chmod +x bin/wt
           ./bin/wt --help
           file bin/wt
 
@@ -458,6 +487,7 @@ jobs:
   e2e-windows:
     name: E2E Tests (Windows)
     runs-on: windows-latest
+    needs: build
     strategy:
       matrix:
         shell: ['powershell', 'pwsh']
@@ -469,13 +499,15 @@ jobs:
           bot-app-id: ${{ secrets.BOT_APP_ID }}
           bot-private-key: ${{ secrets.BOT_PRIVATE_KEY }}
 
-      - name: Build wt binary
-        run: |
-          mkdir -p bin
-          go build -o bin/wt.exe .
+      - name: Download Windows binary
+        uses: actions/download-artifact@v4
+        with:
+          name: wt-windows-amd64
+          path: bin
 
-      - name: Verify binary
+      - name: Prepare binary
         run: |
+          mv bin/wt-windows-amd64.exe bin/wt.exe
           ./bin/wt.exe --help
           file bin/wt.exe
 
