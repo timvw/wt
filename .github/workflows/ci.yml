@@ -358,17 +358,67 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-  # e2e-windows:
-  #   name: E2E Tests (Windows)
-  #   runs-on: windows-latest
-  #   strategy:
-  #     matrix:
-  #       shell: ['powershell', 'pwsh']
+  e2e-windows:
+    name: E2E Tests (Windows)
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        shell: ['powershell', 'pwsh']
 
-  # Disabled for now - TODO: re-enable once Windows PTY support is added
-  e2e-windows-disabled:
-    name: E2E Tests (Windows) - Disabled
-    runs-on: ubuntu-latest
     steps:
-      - name: Skip Windows tests
-        run: echo "Windows e2e tests are temporarily disabled. TODO add Windows PTY support"
+      - name: Generate GitHub App token
+        id: generate-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build wt binary
+        run: |
+          mkdir -p bin
+          go build -o bin/wt.exe .
+
+      - name: Verify binary
+        run: |
+          ./bin/wt.exe --help
+          file bin/wt.exe
+
+      - name: Run e2e tests for ${{ matrix.shell }}
+        shell: pwsh
+        run: |
+          # Set up isolated test environment
+          $env:ISOLATED_TMPDIR = New-TemporaryFile | ForEach-Object { Remove-Item $_; New-Item -ItemType Directory -Path $_ }
+          $env:HOME = $env:ISOLATED_TMPDIR
+
+          # Run specific e2e tests based on shell
+          # Note: Interactive tests are skipped because promptui doesn't support Windows
+          if ('${{ matrix.shell }}' -eq 'powershell') {
+            # Run non-interactive tests for PowerShell 5.1
+            go test -v -run 'TestNonInteractiveCheckoutWithArgsPowerShell' .
+          } elseif ('${{ matrix.shell }}' -eq 'pwsh') {
+            # Run non-interactive tests for PowerShell 7 (promptui doesn't support Windows interactive prompts)
+            go test -v -run 'TestNonInteractiveCheckoutWithArgsPowerShell' .
+          }
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-windows-${{ matrix.shell }}
+          path: |
+            ${{ env.TEMP }}/*.log
+          retention-days: 7
+          if-no-files-found: ignore
