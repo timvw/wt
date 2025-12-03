@@ -8,11 +8,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Temporarily disabled to speed up Windows test iteration
-  test-disabled:
-    name: Test (Disabled)
+  test:
+    name: Test
     runs-on: ubuntu-latest
-    if: false
     strategy:
       matrix:
         go-version: ['1.24', '1.25']
@@ -61,11 +59,9 @@ jobs:
           files: ./coverage.out
           fail_ci_if_error: false
 
-  # Temporarily disabled to speed up Windows test iteration
-  build-disabled:
-    name: Build (Disabled)
+  build:
+    name: Build
     runs-on: ubuntu-latest
-    if: false
 
     steps:
       - name: Generate GitHub App token
@@ -98,11 +94,9 @@ jobs:
           ./bin/wt --help
           file bin/wt
 
-  # Temporarily disabled to speed up Windows test iteration
-  lint-disabled:
-    name: Lint (Disabled)
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
-    if: false
 
     steps:
       - name: Generate GitHub App token
@@ -127,11 +121,9 @@ jobs:
         with:
           version: latest
 
-  # Temporarily disabled to speed up Windows test iteration
-  cross-compile-disabled:
-    name: Cross Compile (Disabled)
+  cross-compile:
+    name: Cross Compile
     runs-on: ubuntu-latest
-    if: false
 
     steps:
       - name: Generate GitHub App token
@@ -164,11 +156,9 @@ jobs:
           ls -lh bin/
           file bin/*
 
-  # Temporarily disabled to speed up Windows test iteration
-  e2e-macos-disabled:
-    name: E2E Tests (macOS) (Disabled)
+  e2e-macos:
+    name: E2E Tests (macOS)
     runs-on: macos-latest
-    if: false
     strategy:
       matrix:
         shell: ['bash', 'zsh']
@@ -414,12 +404,13 @@ jobs:
           $env:HOME = $env:ISOLATED_TMPDIR
 
           # Run specific e2e tests based on shell
+          # Note: Interactive tests are skipped because promptui doesn't support Windows
           if ('${{ matrix.shell }}' -eq 'powershell') {
-            # Skip pwsh-specific tests for older PowerShell
+            # Run non-interactive tests for PowerShell 5.1
             go test -v -run 'TestNonInteractiveCheckoutWithArgsPowerShell' .
           } elseif ('${{ matrix.shell }}' -eq 'pwsh') {
-            # Run both interactive and non-interactive tests for pwsh
-            go test -v -run 'TestInteractiveCheckoutWithoutArgsPowerShell|TestNonInteractiveCheckoutWithArgsPowerShell' .
+            # Run non-interactive tests for PowerShell 7 (promptui doesn't support Windows interactive prompts)
+            go test -v -run 'TestNonInteractiveCheckoutWithArgsPowerShell' .
           }
 
       - name: Upload test logs
