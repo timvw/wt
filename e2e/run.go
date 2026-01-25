@@ -371,15 +371,27 @@ func generatePosixScript(wtBinary, shell string, scenario Scenario) string {
 		if step.Run != "" {
 			runCmd := step.Run
 			needsOutput := step.Expect != nil && (step.Expect.OutputContains != "" || step.Expect.OutputNotContains != "")
+			expectsNonZero := step.Expect != nil && step.Expect.ExitCode != nil && *step.Expect.ExitCode != 0
 
-			if needsOutput {
-				// Capture output for assertions (runs in subshell)
-				sb.WriteString(fmt.Sprintf("__output=$(%s 2>&1) || __exit_code=$?\n", runCmd))
-				sb.WriteString("__exit_code=${__exit_code:-0}\n")
+			if expectsNonZero {
+				// Disable set -e for commands that expect non-zero exit
+				sb.WriteString("set +e\n")
+				if needsOutput {
+					sb.WriteString(fmt.Sprintf("__output=$(%s 2>&1)\n", runCmd))
+				} else {
+					sb.WriteString(fmt.Sprintf("%s\n", runCmd))
+				}
+				sb.WriteString("__exit_code=$?\n")
+				sb.WriteString("set -e\n")
 			} else {
-				// Run directly to allow auto-cd to work
-				sb.WriteString(fmt.Sprintf("%s || __exit_code=$?\n", runCmd))
-				sb.WriteString("__exit_code=${__exit_code:-0}\n")
+				// Normal execution with set -e active
+				if needsOutput {
+					sb.WriteString(fmt.Sprintf("__output=$(%s 2>&1) || __exit_code=$?\n", runCmd))
+					sb.WriteString("__exit_code=${__exit_code:-0}\n")
+				} else {
+					sb.WriteString(fmt.Sprintf("%s || __exit_code=$?\n", runCmd))
+					sb.WriteString("__exit_code=${__exit_code:-0}\n")
+				}
 			}
 
 			if step.Expect != nil {
