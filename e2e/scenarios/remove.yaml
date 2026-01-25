@@ -21,6 +21,7 @@ scenarios:
 
   - name: remove_cleans_directory
     description: Remove deletes the worktree directory
+    skip_os: [windows]  # Uses Unix test -d command
     setup:
       - create_branch: dir-branch
     steps:

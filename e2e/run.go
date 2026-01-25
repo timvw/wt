@@ -480,8 +480,35 @@ func generatePowerShellScript(wtBinary string, scenario Scenario) string {
 		}
 		if step.Run != "" {
 			runCmd := step.Run
-			sb.WriteString(fmt.Sprintf("$__output = %s 2>&1 | Out-String\n", runCmd))
-			sb.WriteString("$__exit_code = $LASTEXITCODE\n")
+			// Translate bash variables to PowerShell syntax
+			runCmd = strings.ReplaceAll(runCmd, "$WT_BIN", "$env:WT_BIN")
+			runCmd = strings.ReplaceAll(runCmd, "$WORKTREE_ROOT", "$env:WORKTREE_ROOT")
+			runCmd = strings.ReplaceAll(runCmd, "$REPO_NAME", "'test-repo'")
+			needsOutput := step.Expect != nil && (step.Expect.OutputContains != "" || step.Expect.OutputNotContains != "")
+			expectsNonZero := step.Expect != nil && step.Expect.ExitCode != nil && *step.Expect.ExitCode != 0
+
+			if expectsNonZero {
+				// Handle expected non-zero exit codes
+				sb.WriteString("$__exit_code = 0\n")
+				sb.WriteString("try {\n")
+				if needsOutput {
+					sb.WriteString(fmt.Sprintf("  $__output = %s 2>&1 | Out-String\n", runCmd))
+				} else {
+					sb.WriteString(fmt.Sprintf("  %s\n", runCmd))
+				}
+				sb.WriteString("  $__exit_code = $LASTEXITCODE\n")
+				sb.WriteString("} catch {\n")
+				sb.WriteString("  $__exit_code = 1\n")
+				sb.WriteString("}\n")
+			} else if needsOutput {
+				// Capture output (runs in pipeline context)
+				sb.WriteString(fmt.Sprintf("$__output = %s 2>&1 | Out-String\n", runCmd))
+				sb.WriteString("$__exit_code = $LASTEXITCODE\n")
+			} else {
+				// Run directly to allow auto-cd to work
+				sb.WriteString(fmt.Sprintf("%s\n", runCmd))
+				sb.WriteString("$__exit_code = $LASTEXITCODE\n")
+			}
 
 			if step.Expect != nil {
 				if step.Expect.ExitCode != nil {
@@ -489,11 +516,15 @@ func generatePowerShellScript(wtBinary string, scenario Scenario) string {
 						*step.Expect.ExitCode, *step.Expect.ExitCode))
 				}
 				if step.Expect.CwdEndsWith != "" {
-					sb.WriteString(fmt.Sprintf("if (-not (Get-Location).Path.EndsWith('%s')) { throw \"CWD doesn't end with %s\" }\n",
-						step.Expect.CwdEndsWith, step.Expect.CwdEndsWith))
+					// Handle both forward and back slashes for cross-platform compatibility
+					suffix := step.Expect.CwdEndsWith
+					sb.WriteString(fmt.Sprintf("$__cwd = (Get-Location).Path.Replace('\\', '/')\n"))
+					sb.WriteString(fmt.Sprintf("if (-not $__cwd.EndsWith('%s')) { throw \"CWD $__cwd doesn't end with %s\" }\n",
+						suffix, suffix))
 				}
 				if step.Expect.Branch != "" {
-					sb.WriteString(fmt.Sprintf("if ((git branch --show-current) -ne '%s') { throw \"Expected branch %s\" }\n",
+					sb.WriteString(fmt.Sprintf("$__branch = git branch --show-current\n"))
+					sb.WriteString(fmt.Sprintf("if ($__branch -ne '%s') { throw \"Expected branch %s, got $__branch\" }\n",
 						step.Expect.Branch, step.Expect.Branch))
 				}
 				if step.Expect.OutputContains != "" {
