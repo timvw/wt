@@ -54,7 +54,8 @@ scenarios:
 
   - name: remove_nonexistent_fails
     description: Removing non-existent worktree fails gracefully
+    skip_shellenv: true  # Don't need shellenv wrapper for this test
     steps:
-      - run: wt remove nonexistent-branch
+      - run: $WT_BIN remove nonexistent-branch
         expect:
           exit_code: 1
