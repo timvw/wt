@@ -139,220 +139,42 @@ jobs:
           path: bin/wt-windows-amd64.exe
           retention-days: 1
 
-  e2e-macos:
-    name: E2E Tests (macOS)
-    runs-on: macos-latest
-    needs: build
-    strategy:
-      matrix:
-        shell: ['bash', 'zsh']
-
-    steps:
-      - name: Generate GitHub App token
-        id: generate-token
-        continue-on-error: true
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          token: ${{ steps.generate-token.outputs.token || github.token }}
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-          cache: true
-
-      - name: Download macOS binary
-        uses: actions/download-artifact@v4
-        with:
-          name: wt-darwin-arm64
-          path: bin
-
-      - name: Prepare binary
-        run: |
-          mv bin/wt-darwin-arm64 bin/wt
-          chmod +x bin/wt
-          ./bin/wt --help
-          file bin/wt
-
-      - name: Run e2e tests for ${{ matrix.shell }}
-        run: |
-          # Set up isolated test environment
-          export ISOLATED_TMPDIR=$(mktemp -d)
-          export HOME=$ISOLATED_TMPDIR
-
-          # Run specific e2e tests (not ./... to avoid redundancy)
-          if [ "${{ matrix.shell }}" = "bash" ]; then
-            # Run both old e2e tests and new PTY interactive tests for bash
-            go test -v -run 'TestE2EAutoCdWithNonInteractiveCommand|TestE2EAutoCdWithCreate|TestInteractiveCheckoutWithoutArgsBash|TestNonInteractiveCheckoutWithArgsBash' .
-          elif [ "${{ matrix.shell }}" = "zsh" ]; then
-            # Run both old e2e test and new PTY interactive tests for zsh
-            go test -v -run 'TestE2EAutoCdInZsh|TestInteractiveCheckoutWithoutArgs|TestNonInteractiveCheckoutWithArgs' .
-          fi
-
-          # Cleanup (best effort - ignore errors from Go cache files)
-          rm -rf "$ISOLATED_TMPDIR" 2>/dev/null || true
-
-      - name: Test shellenv output
-        run: |
-          # Capture shellenv output for inspection
-          ./bin/wt shellenv > shellenv-${{ matrix.shell }}.txt
-
-          # Verify shellenv produces output
-          if [ ! -s shellenv-${{ matrix.shell }}.txt ]; then
-            echo "ERROR: shellenv produced no output"
-            exit 1
-          fi
-
-          # Check for key components (wt function)
-          if ! grep -q "wt()" shellenv-${{ matrix.shell }}.txt; then
-            echo "ERROR: wt function not found in shellenv output"
-            exit 1
-          fi
-
-          # Verify shell-specific features
-          if [ "${{ matrix.shell }}" = "bash" ]; then
-            grep -q "BASH_VERSION" shellenv-${{ matrix.shell }}.txt || (echo "ERROR: bash-specific code not found" && exit 1)
-          elif [ "${{ matrix.shell }}" = "zsh" ]; then
-            grep -q "ZSH_VERSION" shellenv-${{ matrix.shell }}.txt || (echo "ERROR: zsh-specific code not found" && exit 1)
-          fi
-
-          echo "shellenv validation passed for ${{ matrix.shell }}"
-
-      - name: Test worktree CRUD operations with auto-cd
-        run: |
-          # Save absolute paths BEFORE changing directories
-          WORK_DIR=$(pwd)
-          WT_BIN="$WORK_DIR/bin/wt"
-          WT_BIN_DIR="$WORK_DIR/bin"
-
-          # Create isolated test environment with separate HOME
-          ISOLATED_HOME=$(mktemp -d)
-          WORKTREE_ROOT=$(mktemp -d)/worktrees
-          TEST_REPO=$(mktemp -d)/test-repo
-
-          # Generate shellenv script
-          $WT_BIN shellenv > /tmp/wt-shellenv-${{ matrix.shell }}.sh
-
-          # Create test git repo
-          mkdir -p $TEST_REPO
-          cd $TEST_REPO
-          export HOME=$ISOLATED_HOME
-          git init
-          git config user.email "test@example.com"
-          git config user.name "Test User"
-          git commit --allow-empty -m "initial commit"
-          git branch -M main
-
-          # Create a test branch
-          git checkout -b test-branch
-          git commit --allow-empty -m "test commit"
-          git checkout main
-
-          # Determine shell command
-          if [ "${{ matrix.shell }}" = "bash" ]; then
-            SHELL_CMD="bash"
-          else
-            SHELL_CMD="zsh"
-          fi
-
-          # Save the current PATH so git is available in the subshell
-          CURRENT_PATH="$PATH"
-
-          # Run test in a subshell with shellenv sourced
-          $SHELL_CMD -c "
-            export HOME='$ISOLATED_HOME'
-            export WORKTREE_ROOT='$WORKTREE_ROOT'
-            export PATH='$WT_BIN_DIR:$CURRENT_PATH'
-            cd '$TEST_REPO'
-
-            source /tmp/wt-shellenv-${{ matrix.shell }}.sh
-
-            echo 'Testing: wt checkout test-branch'
-            wt checkout test-branch
-
-            # Verify we're in the worktree directory
-            CURRENT_DIR=\$(pwd)
-            EXPECTED_DIR='$WORKTREE_ROOT/test-repo/test-branch'
-            if [[ \"\$CURRENT_DIR\" != \"\$EXPECTED_DIR\" ]]; then
-              echo \"ERROR: Auto-cd failed. Expected: \$EXPECTED_DIR, Got: \$CURRENT_DIR\"
-              exit 1
-            fi
-            echo \"✓ Auto-cd to worktree verified: \$CURRENT_DIR\"
-
-            # Verify worktree was created
-            wt list | grep test-branch || (echo 'ERROR: worktree not in list' && exit 1)
-            echo '✓ Worktree created and listed'
-
-            # Go back to original repo to test create
-            cd '$TEST_REPO'
-
-            # Test create command (from main repo)
-            echo 'Testing: wt create feature-test'
-            wt create feature-test
-            CURRENT_DIR=\$(pwd)
-            EXPECTED_DIR='$WORKTREE_ROOT/test-repo/feature-test'
-            if [[ \"\$CURRENT_DIR\" != \"\$EXPECTED_DIR\" ]]; then
-              echo \"ERROR: Auto-cd failed for create. Expected: \$EXPECTED_DIR, Got: \$CURRENT_DIR\"
-              exit 1
-            fi
-            echo \"✓ Auto-cd to new worktree verified: \$CURRENT_DIR\"
-
-            # Go back to original repo to test remove
-            cd '$TEST_REPO'
-
-            # Test remove command
-            echo 'Testing: wt remove test-branch'
-            wt remove test-branch
-
-            # Verify worktree was removed
-            if wt list | grep test-branch; then
-              echo 'ERROR: worktree not removed'
-              exit 1
-            fi
-            echo '✓ Worktree removed successfully'
-
-            echo 'CRUD operations with auto-cd test passed!'
-          "
-
-          # Cleanup all temporary directories (best effort)
-          cd "$WORK_DIR"
-          rm -rf "$ISOLATED_HOME" "$WORKTREE_ROOT" "$TEST_REPO" /tmp/wt-shellenv-${{ matrix.shell }}.sh 2>/dev/null || true
-
-      - name: Upload shellenv output as artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: shellenv-output-linux-${{ matrix.shell }}
-          path: shellenv-${{ matrix.shell }}.txt
-          retention-days: 7
-          if-no-files-found: ignore
-
-      - name: Upload test logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-logs-linux-${{ matrix.shell }}
-          path: |
-            /tmp/*.log
-            /var/tmp/*.log
-          retention-days: 7
-          if-no-files-found: ignore
-
-  e2e-linux:
-    name: E2E Tests (Linux)
-    runs-on: ubuntu-latest
+  # Unified E2E tests using YAML scenarios
+  e2e:
+    name: E2E (${{ matrix.os }}, ${{ matrix.shell }})
+    runs-on: ${{ matrix.runner }}
     needs: build
     strategy:
       fail-fast: false
       matrix:
-        shell: [bash, zsh]
-        # Note: fish is excluded for now as wt shellenv doesn't support fish yet
+        include:
+          # Linux
+          - os: linux
+            runner: ubuntu-latest
+            shell: bash
+            binary: wt-linux-amd64
+          - os: linux
+            runner: ubuntu-latest
+            shell: zsh
+            binary: wt-linux-amd64
+          # macOS
+          - os: macos
+            runner: macos-latest
+            shell: bash
+            binary: wt-darwin-arm64
+          - os: macos
+            runner: macos-latest
+            shell: zsh
+            binary: wt-darwin-arm64
+          # Windows
+          - os: windows
+            runner: windows-latest
+            shell: powershell
+            binary: wt-windows-amd64
+          - os: windows
+            runner: windows-latest
+            shell: pwsh
+            binary: wt-windows-amd64
 
     steps:
       - name: Generate GitHub App token
@@ -374,237 +196,38 @@ jobs:
           go-version: '1.25'
           cache: true
 
-      - name: Install zsh
-        if: matrix.shell == 'zsh'
+      - name: Install zsh (Linux)
+        if: matrix.os == 'linux' && matrix.shell == 'zsh'
         run: |
           sudo apt-get update
           sudo apt-get install -y zsh
 
-      - name: Download Linux binary
+      - name: Download binary
         uses: actions/download-artifact@v4
         with:
-          name: wt-linux-amd64
+          name: ${{ matrix.binary }}
           path: bin
 
-      - name: Prepare binary
+      - name: Prepare binary (Unix)
+        if: matrix.os != 'windows'
         run: |
-          mv bin/wt-linux-amd64 bin/wt
+          mv bin/${{ matrix.binary }} bin/wt
           chmod +x bin/wt
           ./bin/wt --help
-          file bin/wt
 
-      - name: Run e2e tests for ${{ matrix.shell }}
+      - name: Prepare binary (Windows)
+        if: matrix.os == 'windows'
         run: |
-          # Set up isolated test environment
-          export TMPDIR=$(mktemp -d)
-          export HOME=$TMPDIR
-
-          # Run e2e tests with verbose output
-          if [ "${{ matrix.shell }}" = "bash" ]; then
-            go test -v -run TestE2EAutoCdWithNonInteractiveCommand ./...
-            go test -v -run TestE2EAutoCdWithCreate ./...
-          elif [ "${{ matrix.shell }}" = "zsh" ]; then
-            go test -v -run TestE2EAutoCdInZsh ./...
-          fi
-
-      - name: Test shellenv output
-        run: |
-          # Capture shellenv output for inspection
-          ./bin/wt shellenv > shellenv-${{ matrix.shell }}.txt
-
-          # Verify shellenv produces output
-          if [ ! -s shellenv-${{ matrix.shell }}.txt ]; then
-            echo "ERROR: shellenv produced no output"
-            exit 1
-          fi
-
-          # Check for key components (wt function)
-          if ! grep -q "wt()" shellenv-${{ matrix.shell }}.txt; then
-            echo "ERROR: wt function not found in shellenv output"
-            exit 1
-          fi
-
-          # Verify shell-specific features
-          if [ "${{ matrix.shell }}" = "bash" ]; then
-            grep -q "BASH_VERSION" shellenv-${{ matrix.shell }}.txt || (echo "ERROR: bash-specific code not found" && exit 1)
-          elif [ "${{ matrix.shell }}" = "zsh" ]; then
-            grep -q "ZSH_VERSION" shellenv-${{ matrix.shell }}.txt || (echo "ERROR: zsh-specific code not found" && exit 1)
-          fi
-
-          echo "shellenv validation passed for ${{ matrix.shell }}"
-
-      - name: Test worktree CRUD operations with auto-cd
-        run: |
-          # Save workspace directory before creating test repo
-          WORKSPACE_DIR=$(pwd)
-          WT_BIN="$WORKSPACE_DIR/bin/wt"
-          WT_BIN_DIR="$WORKSPACE_DIR/bin"
-
-          # Create isolated test environment
-          export WORKTREE_ROOT=$(mktemp -d)/worktrees
-          export PATH=$WT_BIN_DIR:$PATH
-
-          # Create a test git repo
-          TEST_REPO=$(mktemp -d)/test-repo
-          mkdir -p $TEST_REPO
-          cd $TEST_REPO
-          git init
-          git config user.email "test@example.com"
-          git config user.name "Test User"
-          git commit --allow-empty -m "initial commit"
-          git branch -M main
-
-          # Create a test branch
-          git checkout -b test-branch
-          git commit --allow-empty -m "test commit"
-          git checkout main
-
-          # Test with shell integration
-          if [ "${{ matrix.shell }}" = "bash" ]; then
-            SHELL_CMD="bash"
-          else
-            SHELL_CMD="zsh"
-          fi
-
-          # Generate shellenv script for the shell
-          $WT_BIN shellenv > /tmp/wt-shellenv-${{ matrix.shell }}.sh
-
-          # Run test in a subshell with shellenv sourced
-          $SHELL_CMD -c "
-            export WORKTREE_ROOT=$WORKTREE_ROOT
-            export PATH=$WT_BIN_DIR:\$PATH
-            cd $TEST_REPO
-            source /tmp/wt-shellenv-${{ matrix.shell }}.sh
-
-            echo 'Testing: wt checkout test-branch'
-            wt checkout test-branch
-
-            # Verify we're in the worktree directory
-            CURRENT_DIR=\$(pwd)
-            EXPECTED_DIR=$WORKTREE_ROOT/test-repo/test-branch
-            if [[ \"\$CURRENT_DIR\" != \"\$EXPECTED_DIR\" ]]; then
-              echo \"ERROR: Auto-cd failed. Expected: \$EXPECTED_DIR, Got: \$CURRENT_DIR\"
-              exit 1
-            fi
-            echo \"✓ Auto-cd to worktree verified: \$CURRENT_DIR\"
-
-            # Verify worktree was created
-            wt list | grep test-branch || (echo 'ERROR: worktree not in list' && exit 1)
-            echo '✓ Worktree created and listed'
-
-            # Go back to original repo to test create
-            cd $TEST_REPO
-
-            # Test create command
-            echo 'Testing: wt create feature-test'
-            wt create feature-test
-            CURRENT_DIR=\$(pwd)
-            EXPECTED_DIR=$WORKTREE_ROOT/test-repo/feature-test
-            if [[ \"\$CURRENT_DIR\" != \"\$EXPECTED_DIR\" ]]; then
-              echo \"ERROR: Auto-cd failed for create. Expected: \$EXPECTED_DIR, Got: \$CURRENT_DIR\"
-              exit 1
-            fi
-            echo \"✓ Auto-cd to new worktree verified: \$CURRENT_DIR\"
-
-            # Go back to original repo to test remove
-            cd $TEST_REPO
-
-            # Test remove command
-            echo 'Testing: wt remove test-branch'
-            wt remove test-branch
-
-            # Verify worktree was removed
-            if wt list | grep test-branch; then
-              echo 'ERROR: worktree not removed'
-              exit 1
-            fi
-            echo '✓ Worktree removed successfully'
-
-            echo 'CRUD operations with auto-cd test passed!'
-          "
-
-      - name: Upload shellenv output as artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: shellenv-output-${{ matrix.shell }}
-          path: shellenv-${{ matrix.shell }}.txt
-          retention-days: 7
-
-      - name: Upload test logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-logs-${{ matrix.shell }}
-          path: |
-            /tmp/*.log
-            /var/tmp/*.log
-          retention-days: 7
-          if-no-files-found: ignore
-
-  e2e-windows:
-    name: E2E Tests (Windows)
-    runs-on: windows-latest
-    needs: build
-    strategy:
-      matrix:
-        shell: ['powershell', 'pwsh']
-
-    steps:
-      - name: Generate GitHub App token
-        id: generate-token
-        continue-on-error: true
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          token: ${{ steps.generate-token.outputs.token || github.token }}
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-          cache: true
-
-      - name: Download Windows binary
-        uses: actions/download-artifact@v4
-        with:
-          name: wt-windows-amd64
-          path: bin
-
-      - name: Prepare binary
-        run: |
-          mv bin/wt-windows-amd64.exe bin/wt.exe
+          mv bin/${{ matrix.binary }}.exe bin/wt.exe
           ./bin/wt.exe --help
-          file bin/wt.exe
 
-      - name: Run e2e tests for ${{ matrix.shell }}
+      - name: Run E2E tests
+        if: matrix.os != 'windows'
+        run: |
+          go run e2e/run.go --wt=bin/wt --shells=${{ matrix.shell }}
+
+      - name: Run E2E tests (Windows)
+        if: matrix.os == 'windows'
         shell: pwsh
         run: |
-          # Set up isolated test environment
-          $env:ISOLATED_TMPDIR = New-TemporaryFile | ForEach-Object { Remove-Item $_; New-Item -ItemType Directory -Path $_ }
-          $env:HOME = $env:ISOLATED_TMPDIR
-
-          # Run specific e2e tests based on shell
-          # Note: Interactive tests are skipped because promptui doesn't support Windows
-          if ('${{ matrix.shell }}' -eq 'powershell') {
-            # Run non-interactive tests for PowerShell 5.1
-            go test -v -run 'TestNonInteractiveCheckoutWithArgsPowerShell' .
-          } elseif ('${{ matrix.shell }}' -eq 'pwsh') {
-            # Run non-interactive tests for PowerShell 7 (promptui doesn't support Windows interactive prompts)
-            go test -v -run 'TestNonInteractiveCheckoutWithArgsPowerShell' .
-          }
-
-      - name: Upload test logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-logs-windows-${{ matrix.shell }}
-          path: |
-            ${{ env.TEMP }}/*.log
-          retention-days: 7
-          if-no-files-found: ignore
+          go run e2e/run.go --wt=bin/wt.exe --shells=${{ matrix.shell }}

@@ -26,9 +26,28 @@ clean:
     go clean
     rm -rf {{build_dir}}
 
-# Run tests
+# Run unit tests
 test:
-    go test -v ./...
+    go test -v -short ./...
+
+# Run e2e tests with all available shells
+e2e: build
+    go run e2e/run.go --wt={{build_dir}}/{{binary_name}} --verbose
+
+# Run e2e tests with specific shells (comma-separated)
+e2e-shells shells: build
+    go run e2e/run.go --wt={{build_dir}}/{{binary_name}} --shells={{shells}} --verbose
+
+# Run e2e tests with bash only
+e2e-bash: build
+    go run e2e/run.go --wt={{build_dir}}/{{binary_name}} --shells=bash --verbose
+
+# Run e2e tests with zsh only
+e2e-zsh: build
+    go run e2e/run.go --wt={{build_dir}}/{{binary_name}} --shells=zsh --verbose
+
+# Run all tests (unit + e2e)
+test-all: test e2e
 
 # Cross-compile for multiple platforms
 build-all:

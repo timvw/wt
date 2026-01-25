@@ -1,0 +1,60 @@
+# E2E tests for `wt remove` command
+name: remove
+description: Test worktree removal functionality
+
+scenarios:
+  - name: remove_clean_worktree
+    description: Remove a clean worktree successfully
+    setup:
+      - create_branch: clean-branch
+    steps:
+      - run: wt checkout clean-branch
+        expect:
+          exit_code: 0
+      - cd: $REPO_DIR
+      - run: wt remove clean-branch
+        expect:
+          exit_code: 0
+      - run: wt list
+        expect:
+          output_not_contains: clean-branch
+
+  - name: remove_cleans_directory
+    description: Remove deletes the worktree directory
+    setup:
+      - create_branch: dir-branch
+    steps:
+      - run: wt checkout dir-branch
+        expect:
+          cwd_ends_with: /dir-branch
+      - cd: $REPO_DIR
+      - run: wt remove dir-branch
+        expect:
+          exit_code: 0
+      - run: test -d "$WORKTREE_ROOT/$REPO_NAME/dir-branch" && echo "EXISTS" || echo "REMOVED"
+        expect:
+          output_contains: REMOVED
+
+  - name: remove_force_dirty_worktree
+    description: Force remove a worktree with uncommitted changes
+    setup:
+      - create_branch: dirty-branch
+    steps:
+      - run: wt checkout dirty-branch
+        expect:
+          exit_code: 0
+      - run: echo "uncommitted" > dirty-file.txt
+      - cd: $REPO_DIR
+      - run: wt remove --force dirty-branch
+        expect:
+          exit_code: 0
+      - run: wt list
+        expect:
+          output_not_contains: dirty-branch
+
+  - name: remove_nonexistent_fails
+    description: Removing non-existent worktree fails gracefully
+    steps:
+      - run: wt remove nonexistent-branch
+        expect:
+          exit_code: 1

@@ -1,0 +1,57 @@
+# E2E tests for `wt checkout` command
+name: checkout
+description: Test worktree checkout functionality with auto-cd
+
+scenarios:
+  - name: checkout_existing_branch
+    description: Checkout an existing branch creates worktree and auto-cds
+    setup:
+      - create_branch: feature-branch
+    steps:
+      - run: wt checkout feature-branch
+        expect:
+          cwd_ends_with: /feature-branch
+          branch: feature-branch
+          exit_code: 0
+
+  - name: checkout_auto_cd_verified
+    description: Verify pwd after checkout shows worktree path
+    setup:
+      - create_branch: test-branch
+    steps:
+      - run: wt checkout test-branch
+        expect:
+          cwd_ends_with: /test-branch
+      - run: pwd
+        expect:
+          output_contains: test-branch
+
+  - name: checkout_worktree_listed
+    description: After checkout, worktree appears in list
+    setup:
+      - create_branch: listed-branch
+    steps:
+      - run: wt checkout listed-branch
+        expect:
+          exit_code: 0
+      - run: wt list
+        expect:
+          output_contains: listed-branch
+
+  - name: checkout_preserves_files
+    description: Checkout preserves working directory files in worktree
+    setup:
+      # Add file to main first, then create branch (inherits file)
+      - create_file:
+          path: test-file.txt
+          content: "test content"
+      - git_add: test-file.txt
+      - git_commit: "add test file"
+      - create_branch: files-branch
+    steps:
+      - run: wt checkout files-branch
+        expect:
+          cwd_ends_with: /files-branch
+      - run: cat test-file.txt
+        expect:
+          output_contains: "test content"

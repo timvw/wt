@@ -1,0 +1,48 @@
+# E2E tests for `wt shellenv` command
+name: shellenv
+description: Test shell environment setup and validation
+
+scenarios:
+  - name: shellenv_produces_output
+    description: shellenv command produces output
+    skip_shellenv: true  # Run raw binary, don't source shellenv
+    steps:
+      - run: $WT_BIN shellenv
+        expect:
+          exit_code: 0
+          output_contains: "wt()"
+
+  - name: shellenv_contains_wt_function
+    description: shellenv output contains the wt wrapper function
+    skip_shellenv: true
+    steps:
+      - run: $WT_BIN shellenv
+        expect:
+          output_contains: "TREE_ME_CD"
+
+  - name: shellenv_bash_specific
+    description: shellenv contains bash-specific code
+    skip_shellenv: true
+    skip_shells: [zsh, powershell, pwsh]
+    steps:
+      - run: $WT_BIN shellenv
+        expect:
+          output_contains: "BASH_VERSION"
+
+  - name: shellenv_zsh_specific
+    description: shellenv contains zsh-specific code
+    skip_shellenv: true
+    skip_shells: [bash, powershell, pwsh]
+    steps:
+      - run: $WT_BIN shellenv
+        expect:
+          output_contains: "ZSH_VERSION"
+
+  - name: shellenv_powershell_specific
+    description: shellenv contains PowerShell-specific code
+    skip_shellenv: true
+    skip_shells: [bash, zsh]
+    steps:
+      - run: $WT_BIN shellenv
+        expect:
+          output_contains: "function wt"

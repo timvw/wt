@@ -1,0 +1,52 @@
+# E2E tests for `wt create` command
+name: create
+description: Test worktree creation with new branches
+
+scenarios:
+  - name: create_new_branch
+    description: Create a new branch and worktree, auto-cd to it
+    steps:
+      - run: wt create new-feature
+        expect:
+          cwd_ends_with: /new-feature
+          branch: new-feature
+          exit_code: 0
+
+  - name: create_with_base_branch
+    description: Create branch from specified base branch
+    setup:
+      # Add file to main, then create base-branch (inherits file)
+      - create_file:
+          path: base-file.txt
+          content: "from base"
+      - git_add: base-file.txt
+      - git_commit: "add base file"
+      - create_branch: base-branch
+    steps:
+      - run: wt create derived-feature base-branch
+        expect:
+          cwd_ends_with: /derived-feature
+          branch: derived-feature
+      - run: cat base-file.txt
+        expect:
+          output_contains: "from base"
+
+  - name: create_auto_cd_verified
+    description: Verify pwd shows new worktree path after create
+    steps:
+      - run: wt create another-feature
+        expect:
+          exit_code: 0
+      - run: pwd
+        expect:
+          output_contains: another-feature
+
+  - name: create_worktree_listed
+    description: Newly created worktree appears in list
+    steps:
+      - run: wt create listed-feature
+        expect:
+          exit_code: 0
+      - run: wt list
+        expect:
+          output_contains: listed-feature

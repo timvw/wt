@@ -1,0 +1,44 @@
+# E2E tests for `wt list` command
+name: list
+description: Test worktree listing functionality
+
+scenarios:
+  - name: list_empty
+    description: List shows no worktrees initially (only main repo)
+    steps:
+      - run: wt list
+        expect:
+          exit_code: 0
+
+  - name: list_single_worktree
+    description: List shows single worktree after checkout
+    setup:
+      - create_branch: single-branch
+    steps:
+      - run: wt checkout single-branch
+        expect:
+          exit_code: 0
+      - run: wt list
+        expect:
+          output_contains: single-branch
+          exit_code: 0
+
+  - name: list_multiple_worktrees
+    description: List shows all created worktrees
+    setup:
+      - create_branch: branch-one
+      - create_branch: branch-two
+    steps:
+      - run: wt checkout branch-one
+        expect:
+          exit_code: 0
+      - cd: $REPO_DIR
+      - run: wt checkout branch-two
+        expect:
+          exit_code: 0
+      - run: wt list
+        expect:
+          output_contains: branch-one
+      - run: wt list
+        expect:
+          output_contains: branch-two
