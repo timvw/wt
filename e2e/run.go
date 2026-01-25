@@ -23,23 +23,23 @@ type ScenarioFile struct {
 
 // Individual test scenario
 type Scenario struct {
-	Name          string   `yaml:"name"`
-	Description   string   `yaml:"description"`
-	Setup         []Setup  `yaml:"setup"`
-	Steps         []Step   `yaml:"steps"`
-	SkipShells    []string `yaml:"skip_shells"`
-	SkipOS        []string `yaml:"skip_os"`
-	SkipShellenv  bool     `yaml:"skip_shellenv"`
-	Interactive   bool     `yaml:"interactive"`
+	Name         string   `yaml:"name"`
+	Description  string   `yaml:"description"`
+	Setup        []Setup  `yaml:"setup"`
+	Steps        []Step   `yaml:"steps"`
+	SkipShells   []string `yaml:"skip_shells"`
+	SkipOS       []string `yaml:"skip_os"`
+	SkipShellenv bool     `yaml:"skip_shellenv"`
+	Interactive  bool     `yaml:"interactive"`
 }
 
 // Setup step (branch creation, file creation, etc.)
 type Setup struct {
-	CreateBranch string     `yaml:"create_branch"`
-	CreateFile   *FileSpec  `yaml:"create_file"`
-	GitAdd       string     `yaml:"git_add"`
-	GitCommit    string     `yaml:"git_commit"`
-	GitCheckout  string     `yaml:"git_checkout"`
+	CreateBranch string    `yaml:"create_branch"`
+	CreateFile   *FileSpec `yaml:"create_file"`
+	GitAdd       string    `yaml:"git_add"`
+	GitCommit    string    `yaml:"git_commit"`
+	GitCheckout  string    `yaml:"git_checkout"`
 }
 
 // File specification for create_file setup
@@ -114,7 +114,6 @@ func main() {
 	fmt.Printf("Loaded %d scenario files\n", len(scenarios))
 
 	// Run tests
-	var results []Result
 	passed, failed, skipped := 0, 0, 0
 
 	for _, shell := range shells {
@@ -133,7 +132,6 @@ func main() {
 
 				// Run scenario
 				result := runScenario(binary, shell, file.Name, scenario, *verbose)
-				results = append(results, result)
 
 				if result.Passed {
 					fmt.Printf("PASS: %s/%s\n", file.Name, scenario.Name)
