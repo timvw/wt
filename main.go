@@ -54,10 +54,13 @@ func init() {
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(removeCmd)
 	rootCmd.AddCommand(pruneCmd)
+	rootCmd.AddCommand(cleanupCmd)
 	rootCmd.AddCommand(shellenvCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(initCmd)
 	removeCmd.Flags().BoolVarP(&removeForce, "force", "f", false, "Force removal even if worktree has modifications")
+	cleanupCmd.Flags().BoolVar(&cleanupDryRun, "dry-run", false, "Preview what would be removed without making changes")
+	cleanupCmd.Flags().BoolVarP(&cleanupForce, "force", "f", false, "Remove all merged worktrees without confirmation")
 	initCmd.Flags().BoolVar(&initDryRun, "dry-run", false, "Preview changes without modifying files")
 	initCmd.Flags().BoolVar(&initUninstall, "uninstall", false, "Remove wt configuration from shell")
 	initCmd.Flags().BoolVar(&initNoPrompt, "no-prompt", false, "Skip activation instructions (for automated installs)")
@@ -288,6 +291,25 @@ func getExistingWorktreeBranches() ([]string, error) {
 		if matches := regexp.MustCompile(`\[([^\]]+)\]`).FindStringSubmatch(line); matches != nil {
 			branches = append(branches, matches[1])
 		}
+	}
+	return branches, nil
+}
+
+func getMergedBranches(base string) ([]string, error) {
+	cmd := exec.Command("git", "branch", "--merged", base, "--format=%(refname:short)")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get merged branches: %w", err)
+	}
+
+	var branches []string
+	for _, line := range strings.Split(string(output), "\n") {
+		branch := strings.TrimSpace(line)
+		// Skip empty lines and base branches
+		if branch == "" || branch == base || branch == "main" || branch == "master" {
+			continue
+		}
+		branches = append(branches, branch)
 	}
 	return branches, nil
 }
@@ -615,6 +637,8 @@ var listCmd = &cobra.Command{
 }
 
 var removeForce bool
+var cleanupDryRun bool
+var cleanupForce bool
 
 var removeCmd = &cobra.Command{
 	Use:     "remove [branch]",
@@ -701,6 +725,113 @@ var removeCmd = &cobra.Command{
 	},
 }
 
+var cleanupCmd = &cobra.Command{
+	Use:   "cleanup",
+	Short: "Remove worktrees for merged branches",
+	Long: `Remove worktrees for branches that have been merged into the base branch.
+
+This command finds all worktrees whose branches have been merged into main/master,
+and removes them. Use --dry-run to preview what would be removed.
+
+Examples:
+  wt cleanup              # Interactive confirmation for each worktree
+  wt cleanup --dry-run    # Preview what would be removed
+  wt cleanup --force      # Remove all without confirmation`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		base := getDefaultBase()
+
+		// Get merged branches
+		mergedBranches, err := getMergedBranches(base)
+		if err != nil {
+			return err
+		}
+
+		// Get existing worktree branches
+		worktreeBranches, err := getExistingWorktreeBranches()
+		if err != nil {
+			return fmt.Errorf("failed to get worktrees: %w", err)
+		}
+
+		// Create a set of merged branches for quick lookup
+		mergedSet := make(map[string]bool)
+		for _, b := range mergedBranches {
+			mergedSet[b] = true
+		}
+
+		// Find worktrees that are for merged branches
+		var toRemove []string
+		for _, branch := range worktreeBranches {
+			if mergedSet[branch] {
+				toRemove = append(toRemove, branch)
+			}
+		}
+
+		if len(toRemove) == 0 {
+			fmt.Println("No worktrees found for merged branches")
+			return nil
+		}
+
+		// Dry run mode - just show what would be removed
+		if cleanupDryRun {
+			fmt.Printf("Would remove %d worktree(s) for merged branches:\n", len(toRemove))
+			for _, branch := range toRemove {
+				if path, exists := worktreeExists(branch); exists {
+					fmt.Printf("  - %s (%s)\n", branch, path)
+				}
+			}
+			return nil
+		}
+
+		// Track results
+		removed := 0
+		skipped := 0
+
+		for _, branch := range toRemove {
+			existingPath, exists := worktreeExists(branch)
+			if !exists {
+				continue
+			}
+
+			// If not force mode, ask for confirmation
+			if !cleanupForce {
+				prompt := promptui.Prompt{
+					Label:     fmt.Sprintf("Remove worktree for merged branch '%s'", branch),
+					IsConfirm: true,
+				}
+				_, err := prompt.Run()
+				if err != nil {
+					fmt.Printf("  Skipped: %s\n", branch)
+					skipped++
+					continue
+				}
+			}
+
+			// Remove the worktree
+			gitCmd := exec.Command("git", "worktree", "remove", existingPath)
+			gitCmd.Stdout = os.Stdout
+			gitCmd.Stderr = os.Stderr
+			if err := gitCmd.Run(); err != nil {
+				fmt.Printf("  Failed to remove %s: %v\n", branch, err)
+				continue
+			}
+
+			if err := cleanupWorktreePath(existingPath); err != nil {
+				fmt.Printf("  Warning: failed to cleanup path for %s: %v\n", branch, err)
+			}
+
+			fmt.Printf("✓ Removed worktree: %s\n", branch)
+			removed++
+		}
+
+		// Run prune at the end
+		pruneGitCmd := exec.Command("git", "worktree", "prune")
+		_ = pruneGitCmd.Run()
+
+		fmt.Printf("\nCleanup complete: %d removed, %d skipped\n", removed, skipped)
+		return nil
+	},
+}
+
 var pruneCmd = &cobra.Command{
 	Use:   "prune",
 	Short: "Remove worktree administrative files",
@@ -758,7 +889,7 @@ function wt {
 Register-ArgumentCompleter -CommandName wt -ScriptBlock {
     param($commandName, $wordToComplete, $commandAst, $fakeBoundParameters)
 
-    $commands = @('checkout', 'co', 'create', 'pr', 'mr', 'list', 'ls', 'remove', 'rm', 'prune', 'help', 'shellenv', 'init', 'version')
+    $commands = @('checkout', 'co', 'create', 'pr', 'mr', 'list', 'ls', 'remove', 'rm', 'cleanup', 'prune', 'help', 'shellenv', 'init', 'version')
 
     # Get the position in the command line
     $position = $commandAst.CommandElements.Count - 1
@@ -820,7 +951,7 @@ if [ -n "$BASH_VERSION" ]; then
         COMPREPLY=()
         cur="${COMP_WORDS[COMP_CWORD]}"
         prev="${COMP_WORDS[COMP_CWORD-1]}"
-        commands="checkout co create pr mr list ls remove rm prune help shellenv init version"
+        commands="checkout co create pr mr list ls remove rm cleanup prune help shellenv init version"
 
         # Complete commands if first argument
         if [ $COMP_CWORD -eq 1 ]; then
@@ -855,6 +986,7 @@ if [ -n "$ZSH_VERSION" ]; then
             'ls:List all worktrees'
             'remove:Remove a worktree'
             'rm:Remove a worktree'
+            'cleanup:Remove worktrees for merged branches'
             'prune:Remove worktree administrative files'
             'help:Show help'
             'shellenv:Output shell function for auto-cd'
