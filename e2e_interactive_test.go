@@ -462,11 +462,11 @@ echo "Built wt binary: %s"
 		t.Fatalf("Non-interactive checkout failed: %v\nOutput:\n%s", err, ps.getOutput())
 	}
 
-	// Also verify the TREE_ME_CD marker is present
+	// Also verify the navigation marker is present
 	output := ps.getOutput()
 	expectedPath := filepath.Join(worktreeRoot, "test-repo", "feature-explicit")
-	if !strings.Contains(output, "TREE_ME_CD:"+expectedPath) {
-		t.Errorf("TREE_ME_CD marker not found in output.\nExpected path: %s\nOutput:\n%s",
+	if !strings.Contains(output, "wt navigating to: "+expectedPath) {
+		t.Errorf("navigation marker not found in output.\nExpected path: %s\nOutput:\n%s",
 			expectedPath, output)
 	}
 
@@ -636,11 +636,11 @@ echo "Built wt binary: %s"
 		t.Fatalf("Non-interactive checkout failed: %v\nOutput:\n%s", err, ps.getOutput())
 	}
 
-	// Also verify the TREE_ME_CD marker is present
+	// Also verify the navigation marker is present
 	output := ps.getOutput()
 	expectedPath := filepath.Join(worktreeRoot, "test-repo", "feature-explicit")
-	if !strings.Contains(output, "TREE_ME_CD:"+expectedPath) {
-		t.Errorf("TREE_ME_CD marker not found in output.\nExpected path: %s\nOutput:\n%s",
+	if !strings.Contains(output, "wt navigating to: "+expectedPath) {
+		t.Errorf("navigation marker not found in output.\nExpected path: %s\nOutput:\n%s",
 			expectedPath, output)
 	}
 
@@ -833,11 +833,11 @@ Write-Output "=== WT SHELLENV LOADED ==="
 		t.Fatalf("Non-interactive checkout failed: %v\nOutput:\n%s", err, ps.getOutput())
 	}
 
-	// Also verify the TREE_ME_CD marker is present
+	// Also verify the navigation marker is present
 	output := ps.getOutput()
 	expectedPath := filepath.Join(worktreeRoot, "test-repo", "feature-explicit")
-	if !strings.Contains(output, "TREE_ME_CD:"+expectedPath) {
-		t.Errorf("TREE_ME_CD marker not found in output.\nExpected path: %s\nOutput:\n%s",
+	if !strings.Contains(output, "wt navigating to: "+expectedPath) {
+		t.Errorf("navigation marker not found in output.\nExpected path: %s\nOutput:\n%s",
 			expectedPath, output)
 	}
 

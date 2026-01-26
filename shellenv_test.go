@@ -21,11 +21,11 @@ func TestShellenvInteractiveModeOutputCapture(t *testing.T) {
 	shellenv := string(output)
 
 	// The BUG: Interactive mode runs "command wt" directly without capturing output
-	// This means the TREE_ME_CD marker is never captured and auto-cd doesn't work
+	// This means the navigation marker is never captured and auto-cd doesn't work
 	if strings.Contains(shellenv, "# Run interactively without capturing output") {
 		t.Fatal("BUG DETECTED: Shell function has special case for interactive mode that skips output capture.\n" +
 			"This prevents auto-cd from working when running 'wt co', 'wt rm', etc. without arguments.\n" +
-			"The TREE_ME_CD marker is printed but never captured by the shell function.\n" +
+			"The navigation marker is printed but never captured by the shell function.\n" +
 			"EXPECTED: All commands should capture output using 'output=$(command wt \"$@\")'")
 	}
 
@@ -46,8 +46,8 @@ func TestShellenvInteractiveModeOutputCapture(t *testing.T) {
 	}
 
 	// Verify the fix: should extract cd_path from log file
-	if !strings.Contains(shellenv, "cd_path=$(grep '^TREE_ME_CD:' \"$log_file\"") {
-		t.Error("Shell function must extract cd_path from TREE_ME_CD marker in log file")
+	if !strings.Contains(shellenv, "cd_path=$(grep '^wt navigating to: ' \"$log_file\"") {
+		t.Error("Shell function must extract cd_path from navigation marker in log file")
 	}
 
 	// Verify the fix: should use script command for PTY allocation

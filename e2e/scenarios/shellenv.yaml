@@ -19,7 +19,7 @@ scenarios:
     steps:
       - run: $WT_BIN shellenv
         expect:
-          output_contains: "TREE_ME_CD"
+          output_contains: "navigation"
 
   - name: shellenv_bash_specific
     description: shellenv contains bash-specific code

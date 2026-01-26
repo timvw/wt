@@ -225,7 +225,7 @@ func isDirEmpty(path string) (bool, error) {
 }
 
 func printCDMarker(path string) {
-	fmt.Printf("TREE_ME_CD:%s\n", path)
+	fmt.Printf("wt navigating to: %s\n", path)
 }
 
 func getAvailableBranches() ([]string, error) {
@@ -746,7 +746,7 @@ function wt {
     $exitCode = $LASTEXITCODE
     Write-Output $output
     if ($exitCode -eq 0) {
-        $cdPath = $output | Select-String -Pattern "^TREE_ME_CD:" | ForEach-Object { $_.Line.Substring(11) }
+        $cdPath = $output | Select-String -Pattern "^wt navigating to: " | ForEach-Object { $_.Line.Substring(18) }
         if ($cdPath) {
             Set-Location $cdPath
         }
@@ -802,8 +802,8 @@ Register-ArgumentCompleter -CommandName wt -ScriptBlock {
     fi
     exit_code=$?
 
-    # Extract the TREE_ME_CD marker for auto-cd
-    cd_path=$(grep '^TREE_ME_CD:' "$log_file" | tail -1 | cut -d: -f2-)
+    # Extract the navigation marker for auto-cd
+    cd_path=$(grep '^wt navigating to: ' "$log_file" | tail -1 | sed 's/^wt navigating to: //')
     rm -f "$log_file"
     cd_path=${cd_path%$'\r'}
 
