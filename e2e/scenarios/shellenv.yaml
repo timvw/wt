@@ -6,6 +6,7 @@ scenarios:
   - name: shellenv_produces_output
     description: shellenv command produces output
     skip_shellenv: true  # Run raw binary, don't source shellenv
+    skip_shells: [powershell, pwsh]  # Shell detection differs on Windows
     steps:
       - run: $WT_BIN shellenv
         expect:

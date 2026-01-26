@@ -484,6 +484,12 @@ func generatePowerShellScript(wtBinary string, scenario Scenario) string {
 			runCmd = strings.ReplaceAll(runCmd, "$WT_BIN", "$env:WT_BIN")
 			runCmd = strings.ReplaceAll(runCmd, "$WORKTREE_ROOT", "$env:WORKTREE_ROOT")
 			runCmd = strings.ReplaceAll(runCmd, "$REPO_NAME", "'test-repo'")
+
+			// Add & call operator when command starts with a variable (like $env:WT_BIN)
+			if strings.HasPrefix(runCmd, "$env:") {
+				runCmd = "& " + runCmd
+			}
+
 			needsOutput := step.Expect != nil && (step.Expect.OutputContains != "" || step.Expect.OutputNotContains != "")
 			expectsNonZero := step.Expect != nil && step.Expect.ExitCode != nil && *step.Expect.ExitCode != 0
 
