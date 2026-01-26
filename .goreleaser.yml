@@ -1,0 +1,125 @@
+# GoReleaser configuration for wt
+# https://goreleaser.com
+
+version: 2
+
+project_name: wt
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: .
+    binary: wt
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - Merge pull request
+      - Merge branch
+
+# Linux packages via nfpm
+nfpms:
+  - package_name: wt
+    vendor: timvw
+    homepage: https://github.com/timvw/wt
+    maintainer: Tim Van Wassenhove <tim@vanwassenhove.be>
+    description: A fast, simple Git worktree helper
+    license: MIT
+    formats:
+      - deb
+      - rpm
+      - archlinux
+    bindir: /usr/bin
+    contents:
+      - src: ./LICENSE
+        dst: /usr/share/licenses/wt/LICENSE
+    scripts:
+      postinstall: scripts/postinstall.sh
+      preremove: scripts/preremove.sh
+
+# Homebrew tap
+brews:
+  - repository:
+      owner: timvw
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/timvw/wt
+    description: A fast, simple Git worktree helper
+    license: MIT
+    install: |
+      bin.install "wt"
+    post_install: |
+      system "#{bin}/wt", "init", "--no-prompt"
+    caveats: |
+      Shell integration has been configured automatically.
+
+      If you need to reconfigure, run:
+        wt init
+
+      To remove shell integration:
+        wt init --uninstall
+    test: |
+      assert_match "wt version", shell_output("#{bin}/wt version")
+
+# Scoop bucket for Windows
+scoops:
+  - repository:
+      owner: timvw
+      name: scoop-bucket
+      token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
+    homepage: https://github.com/timvw/wt
+    description: A fast, simple Git worktree helper
+    license: MIT
+
+# AUR package
+aurs:
+  - name: wt-bin
+    homepage: https://github.com/timvw/wt
+    description: A fast, simple Git worktree helper
+    maintainers:
+      - 'Tim Van Wassenhove <tim@vanwassenhove.be>'
+    license: MIT
+    private_key: '{{ .Env.AUR_KEY }}'
+    git_url: 'ssh://aur@aur.archlinux.org/wt-bin.git'
+    package: |-
+      install -Dm755 wt "${pkgdir}/usr/bin/wt"
+      install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/wt/LICENSE"
+
+release:
+  github:
+    owner: timvw
+    name: wt
+  draft: false
+  prerelease: auto
+  name_template: "{{.Tag}}"

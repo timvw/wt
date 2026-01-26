@@ -9,166 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build Binaries
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-            output: wt-linux-amd64
-            bottle: x86_64_linux
-          - goos: linux
-            goarch: arm64
-            output: wt-linux-arm64
-            bottle: aarch64_linux
-          - goos: darwin
-            goarch: amd64
-            output: wt-darwin-amd64
-            bottle: ventura
-          - goos: darwin
-            goarch: arm64
-            output: wt-darwin-arm64
-            bottle: arm64_sonoma
-          - goos: windows
-            goarch: amd64
-            output: wt-windows-amd64.exe
-            bottle: null
-
-    steps:
-      - name: Generate GitHub App token
-        id: generate-token
-        continue-on-error: true
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          token: ${{ steps.generate-token.outputs.token || github.token }}
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-          cache: true
-
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
-
-      - name: Build binary
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: |
-          mkdir -p dist
-          go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o dist/wt .
-
-      - name: Create Homebrew bottle
-        if: matrix.bottle != 'null'
-        run: |
-          # Create bottle directory structure: wt/VERSION/bin/wt
-          mkdir -p wt/${{ steps.version.outputs.VERSION }}/bin
-          cp dist/wt wt/${{ steps.version.outputs.VERSION }}/bin/
-
-          # Create tarball with proper naming: wt-VERSION.PLATFORM.bottle.tar.gz
-          tar czf wt-${{ steps.version.outputs.VERSION }}.${{ matrix.bottle }}.bottle.tar.gz wt
-
-          # Also keep the raw binary for non-Homebrew users
-          mv dist/wt dist/${{ matrix.output }}
-
-      - name: Skip bottle creation for Windows
-        if: matrix.bottle == 'null'
-        run: |
-          # Just rename the binary for Windows (no bottle needed)
-          mv dist/wt dist/${{ matrix.output }}
-
-      - name: Upload bottle artifact
-        if: matrix.bottle != 'null'
-        uses: actions/upload-artifact@v4
-        with:
-          name: bottle-${{ matrix.bottle }}
-          path: wt-${{ steps.version.outputs.VERSION }}.${{ matrix.bottle }}.bottle.tar.gz
-          if-no-files-found: error
-
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: binary-${{ matrix.output }}
-          path: dist/${{ matrix.output }}
-          if-no-files-found: error
-
-  release:
-    name: Create Release
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Generate GitHub App token
-        id: generate-token
-        continue-on-error: true
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          token: ${{ steps.generate-token.outputs.token || github.token }}
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-          cache: true
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts/
-
-      - name: Organize release files
-        run: |
-          mkdir -p release
-
-          # Move bottles to release directory
-          find artifacts/bottle-* -name "*.bottle.tar.gz" -exec mv {} release/ \;
-
-          # Move binaries to release directory
-          find artifacts/binary-* -type f -exec mv {} release/ \;
-
-          ls -la release/
-
-      - name: Generate checksums
-        run: |
-          cd release
-          shasum -a 256 * > checksums.txt
-          cat checksums.txt
-
-      - name: Upload checksums artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: checksums
-          path: release/checksums.txt
-          if-no-files-found: error
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
-        run: |
-          gh release create ${{ github.ref_name }} \
-            --title "Release ${{ github.ref_name }}" \
-            --generate-notes \
-            release/*
-
-  update-formula:
-    name: Update Homebrew Formula
-    needs: release
+  goreleaser:
+    name: Release with GoReleaser
     runs-on: ubuntu-latest
 
     steps:
@@ -182,10 +24,12 @@ jobs:
           repositories: |
             wt
             homebrew-tap
+            scoop-bucket
 
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           token: ${{ steps.generate-token.outputs.token || github.token }}
 
       - name: Set up Go
@@ -194,85 +38,14 @@ jobs:
           go-version: '1.25'
           cache: true
 
-      - name: Download checksums artifact
-        uses: actions/download-artifact@v4
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
         with:
-          path: artifacts/
-
-      - name: Extract version and checksums
-        id: version
-        run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-
-          # Find checksums.txt in artifacts
-          CHECKSUMS_FILE=$(find artifacts -name "checksums.txt" -type f | head -1)
-
-          # Extract bottle SHA256s from checksums
-          AARCH64_LINUX=$(grep "wt-${VERSION}.aarch64_linux.bottle.tar.gz" "$CHECKSUMS_FILE" | awk '{print $1}')
-          ARM64_SONOMA=$(grep "wt-${VERSION}.arm64_sonoma.bottle.tar.gz" "$CHECKSUMS_FILE" | awk '{print $1}')
-          VENTURA=$(grep "wt-${VERSION}.ventura.bottle.tar.gz" "$CHECKSUMS_FILE" | awk '{print $1}')
-          X86_64_LINUX=$(grep "wt-${VERSION}.x86_64_linux.bottle.tar.gz" "$CHECKSUMS_FILE" | awk '{print $1}')
-
-          echo "AARCH64_LINUX=$AARCH64_LINUX" >> $GITHUB_OUTPUT
-          echo "ARM64_SONOMA=$ARM64_SONOMA" >> $GITHUB_OUTPUT
-          echo "VENTURA=$VENTURA" >> $GITHUB_OUTPUT
-          echo "X86_64_LINUX=$X86_64_LINUX" >> $GITHUB_OUTPUT
-
-      - name: Download source tarball and calculate SHA256
-        id: source
-        run: |
-          VERSION=${{ steps.version.outputs.VERSION }}
-          wget "https://github.com/timvw/wt/archive/refs/tags/v${VERSION}.tar.gz" -O source.tar.gz
-          SOURCE_SHA256=$(shasum -a 256 source.tar.gz | awk '{print $1}')
-          echo "SHA256=$SOURCE_SHA256" >> $GITHUB_OUTPUT
-
-      - name: Clone homebrew-tap repository
-        run: |
-          git clone https://x-access-token:${{ steps.generate-token.outputs.token }}@github.com/timvw/homebrew-tap.git
-
-      - name: Update formula
-        run: |
-          cd homebrew-tap
-          VERSION=${{ steps.version.outputs.VERSION }}
-
-          # Update the formula file
-          cat > Formula/wt.rb << 'EOF'
-          class Wt < Formula
-            desc "Git worktree helper"
-            homepage "https://github.com/timvw/wt"
-            url "https://github.com/timvw/wt/archive/refs/tags/v${{ steps.version.outputs.VERSION }}.tar.gz"
-            sha256 "${{ steps.source.outputs.SHA256 }}"
-            license "MIT"
-            head "https://github.com/timvw/wt.git", branch: "main"
-
-            bottle do
-              root_url "https://github.com/timvw/wt/releases/download/v${{ steps.version.outputs.VERSION }}"
-              sha256 cellar: :any_skip_relocation, arm64_sonoma:  "${{ steps.version.outputs.ARM64_SONOMA }}"
-              sha256 cellar: :any_skip_relocation, ventura:       "${{ steps.version.outputs.VENTURA }}"
-              sha256 cellar: :any_skip_relocation, x86_64_linux:  "${{ steps.version.outputs.X86_64_LINUX }}"
-              sha256 cellar: :any_skip_relocation, aarch64_linux: "${{ steps.version.outputs.AARCH64_LINUX }}"
-            end
-
-            def install
-              bin.install "wt"
-            end
-
-            test do
-              assert_match "wt version", shell_output("#{bin}/wt version")
-            end
-          end
-          EOF
-
-      - name: Commit and push changes
-        run: |
-          cd homebrew-tap
-          git config user.name "timvw-ci-bot[bot]"
-          git config user.email "timvw-ci-bot[bot]@users.noreply.github.com"
-          git add Formula/wt.rb
-          git commit -m "chore: update wt formula to v${{ steps.version.outputs.VERSION }}
-
-          🤖 Generated with [Claude Code](https://claude.com/claude-code)
-
-          Co-Authored-By: Claude <noreply@anthropic.com>"
-          git push
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ steps.generate-token.outputs.token || github.token }}
+          HOMEBREW_TAP_TOKEN: ${{ steps.generate-token.outputs.token || github.token }}
+          SCOOP_BUCKET_TOKEN: ${{ steps.generate-token.outputs.token || github.token }}
+          AUR_KEY: ${{ secrets.AUR_KEY }}

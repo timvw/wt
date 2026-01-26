@@ -1,0 +1,92 @@
+# E2E tests for `wt init` command
+name: init
+description: Test shell initialization command
+
+scenarios:
+  - name: init_bash_dry_run
+    description: Init shows what would be added to bashrc
+    skip_shellenv: true
+    skip_shells: [zsh, powershell, pwsh]
+    steps:
+      - run: $WT_BIN init bash --dry-run
+        expect:
+          exit_code: 0
+          output_contains: "wt initialize"
+
+  - name: init_zsh_dry_run
+    description: Init shows what would be added to zshrc
+    skip_shellenv: true
+    skip_shells: [bash, powershell, pwsh]
+    steps:
+      - run: $WT_BIN init zsh --dry-run
+        expect:
+          exit_code: 0
+          output_contains: "wt initialize"
+
+  - name: init_powershell_dry_run
+    description: Init shows what would be added to PowerShell profile
+    skip_shellenv: true
+    skip_shells: [bash, zsh]
+    steps:
+      - run: $WT_BIN init powershell --dry-run
+        expect:
+          exit_code: 0
+          output_contains: "wt shellenv"
+
+  - name: init_creates_config
+    description: Init creates shell config with markers
+    skip_shellenv: true
+    skip_shells: [powershell, pwsh]
+    skip_os: [windows]
+    steps:
+      - run: |
+          touch "$TEST_DIR/.bashrc"
+          HOME="$TEST_DIR" $WT_BIN init bash --no-prompt
+          cat "$TEST_DIR/.bashrc"
+        expect:
+          exit_code: 0
+          output_contains: "wt initialize"
+
+  - name: init_idempotent
+    description: Running init twice does not duplicate config
+    skip_shellenv: true
+    skip_shells: [powershell, pwsh]
+    skip_os: [windows]
+    steps:
+      - run: |
+          touch "$TEST_DIR/.bashrc"
+          HOME="$TEST_DIR" $WT_BIN init bash --no-prompt
+          HOME="$TEST_DIR" $WT_BIN init bash --no-prompt
+          grep -c "wt initialize >>>" "$TEST_DIR/.bashrc"
+        expect:
+          exit_code: 0
+          output_contains: "1"
+
+  - name: init_uninstall
+    description: Init --uninstall removes the config
+    skip_shellenv: true
+    skip_shells: [powershell, pwsh]
+    skip_os: [windows]
+    steps:
+      - run: |
+          touch "$TEST_DIR/.bashrc"
+          HOME="$TEST_DIR" $WT_BIN init bash --no-prompt
+          HOME="$TEST_DIR" $WT_BIN init --uninstall --no-prompt
+          grep -c "wt initialize" "$TEST_DIR/.bashrc" 2>/dev/null || echo "0"
+        expect:
+          output_contains: "0"
+
+  - name: init_preserves_existing_content
+    description: Init preserves existing shell config content
+    skip_shellenv: true
+    skip_shells: [powershell, pwsh]
+    skip_os: [windows]
+    steps:
+      - run: |
+          echo "# My existing config" > "$TEST_DIR/.bashrc"
+          echo "export MY_VAR=hello" >> "$TEST_DIR/.bashrc"
+          HOME="$TEST_DIR" $WT_BIN init bash --no-prompt
+          cat "$TEST_DIR/.bashrc"
+        expect:
+          exit_code: 0
+          output_contains: "MY_VAR=hello"
