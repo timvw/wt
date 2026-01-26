@@ -518,12 +518,12 @@ func generatePowerShellScript(wtBinary string, scenario Scenario) string {
 				if step.Expect.CwdEndsWith != "" {
 					// Handle both forward and back slashes for cross-platform compatibility
 					suffix := step.Expect.CwdEndsWith
-					sb.WriteString(fmt.Sprintf("$__cwd = (Get-Location).Path.Replace('\\', '/')\n"))
+					sb.WriteString("$__cwd = (Get-Location).Path.Replace('\\', '/')\n")
 					sb.WriteString(fmt.Sprintf("if (-not $__cwd.EndsWith('%s')) { throw \"CWD $__cwd doesn't end with %s\" }\n",
 						suffix, suffix))
 				}
 				if step.Expect.Branch != "" {
-					sb.WriteString(fmt.Sprintf("$__branch = git branch --show-current\n"))
+					sb.WriteString("$__branch = git branch --show-current\n")
 					sb.WriteString(fmt.Sprintf("if ($__branch -ne '%s') { throw \"Expected branch %s, got $__branch\" }\n",
 						step.Expect.Branch, step.Expect.Branch))
 				}
