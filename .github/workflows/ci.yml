@@ -228,7 +228,6 @@ jobs:
 
       - name: Run E2E tests (Windows)
         if: matrix.os == 'windows'
-        continue-on-error: true  # Windows PowerShell tests need more work
         shell: pwsh
         run: |
           go run e2e/run.go --wt=bin/wt.exe --shells=${{ matrix.shell }}
