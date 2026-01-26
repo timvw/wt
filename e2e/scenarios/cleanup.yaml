@@ -1,0 +1,95 @@
+# E2E tests for `wt cleanup` command
+name: cleanup
+description: Test worktree cleanup functionality for merged branches
+
+scenarios:
+  - name: cleanup_dry_run_shows_merged
+    description: Dry run shows worktrees for merged branches
+    steps:
+      # Create a branch that will be merged
+      - run: git checkout -b merged-feature
+      - run: git commit --allow-empty -m "feature commit"
+      - run: git checkout main
+      # Merge the branch into main so it shows as merged
+      - run: git merge merged-feature --no-edit
+      # Create worktree for the merged branch
+      - run: wt checkout merged-feature
+        expect:
+          exit_code: 0
+      - cd: $REPO_DIR
+      - run: wt cleanup --dry-run
+        expect:
+          exit_code: 0
+          output_contains: "Would remove"
+
+  - name: cleanup_dry_run_preserves_worktrees
+    description: Dry run does not actually remove worktrees
+    steps:
+      # Create and merge a branch
+      - run: git checkout -b preserved-branch
+      - run: git commit --allow-empty -m "preserved commit"
+      - run: git checkout main
+      - run: git merge preserved-branch --no-edit
+      # Create worktree
+      - run: wt checkout preserved-branch
+        expect:
+          exit_code: 0
+      - cd: $REPO_DIR
+      - run: wt cleanup --dry-run
+        expect:
+          exit_code: 0
+      # Verify worktree still exists
+      - run: wt list
+        expect:
+          output_contains: preserved-branch
+
+  - name: cleanup_force_removes_merged
+    description: Force cleanup removes merged branch worktrees
+    steps:
+      # Create and merge a branch
+      - run: git checkout -b force-cleanup-branch
+      - run: git commit --allow-empty -m "force cleanup commit"
+      - run: git checkout main
+      - run: git merge force-cleanup-branch --no-edit
+      # Create worktree
+      - run: wt checkout force-cleanup-branch
+        expect:
+          exit_code: 0
+      - cd: $REPO_DIR
+      - run: wt cleanup --force
+        expect:
+          exit_code: 0
+          output_contains: "Removed worktree"
+      - run: wt list
+        expect:
+          output_not_contains: force-cleanup-branch
+
+  - name: cleanup_no_merged_branches
+    description: Cleanup reports nothing to do when no merged branches
+    skip_shellenv: true
+    steps:
+      - run: $WT_BIN cleanup --dry-run
+        expect:
+          exit_code: 0
+          output_contains: "No worktrees found for merged branches"
+
+  - name: cleanup_cleans_directory
+    description: Cleanup removes the worktree directory from filesystem
+    skip_os: [windows]  # Uses Unix test -d command
+    steps:
+      # Create and merge a branch
+      - run: git checkout -b cleanup-dir-branch
+      - run: git commit --allow-empty -m "cleanup dir commit"
+      - run: git checkout main
+      - run: git merge cleanup-dir-branch --no-edit
+      # Create worktree
+      - run: wt checkout cleanup-dir-branch
+        expect:
+          exit_code: 0
+      - cd: $REPO_DIR
+      - run: wt cleanup --force
+        expect:
+          exit_code: 0
+      - run: test -d "$WORKTREE_ROOT/$REPO_NAME/cleanup-dir-branch" && echo "EXISTS" || echo "REMOVED"
+        expect:
+          output_contains: REMOVED

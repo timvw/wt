@@ -177,9 +177,86 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 ### Before Creating PR
 
 1. ✅ Ensure all tests pass: `go test ./...`
-2. ✅ Run linter: `golangci-lint run` (or let CI do it)
-3. ✅ Build succeeds: `go build -o bin/wt .`
-4. ✅ Commit messages follow convention
+2. ✅ Run E2E tests: `go run e2e/run.go` (see Testing section below)
+3. ✅ Run linter: `golangci-lint run` (or let CI do it)
+4. ✅ Build succeeds: `go build -o bin/wt .`
+5. ✅ Commit messages follow convention
+
+## Testing
+
+### Unit Tests
+
+Standard Go tests in `*_test.go` files:
+
+```bash
+go test ./...
+```
+
+### E2E Tests (YAML-based)
+
+This project uses a **declarative YAML-based E2E test framework** in `e2e/scenarios/`. Each command has its own YAML file (e.g., `checkout.yaml`, `create.yaml`, `cleanup.yaml`).
+
+**Running E2E tests:**
+```bash
+# Build first, then run E2E tests
+go build -o bin/wt .
+go run e2e/run.go
+
+# With verbose output
+go run e2e/run.go -verbose
+```
+
+**Adding new E2E tests:**
+
+Create or edit a YAML file in `e2e/scenarios/`:
+
+```yaml
+name: my-command
+description: Test my-command functionality
+
+scenarios:
+  - name: basic_test
+    description: Test basic functionality
+    steps:
+      - run: wt my-command arg
+        expect:
+          exit_code: 0
+          output_contains: "expected output"
+```
+
+**Available setup steps** (defined in `e2e/run.go`):
+- `create_branch: branch-name` - Creates a branch with a commit
+- `create_file: {path: file.txt, content: "..."}` - Creates a file
+- `git_add: file.txt` - Stages a file
+- `git_commit: "message"` - Commits staged changes
+- `git_checkout: branch` - Switches branch
+
+**Available step actions:**
+- `run: command` - Execute a shell command
+- `cd: $REPO_DIR` - Change directory (use `$REPO_DIR` for test repo root)
+
+**Available expectations:**
+- `exit_code: 0` - Expected exit code
+- `output_contains: "text"` - Output includes string
+- `output_not_contains: "text"` - Output excludes string
+- `cwd_ends_with: /path` - Current directory ends with path
+- `branch: branch-name` - Current git branch
+
+**Skip conditions:**
+```yaml
+scenarios:
+  - name: unix_only_test
+    skip_os: [windows]
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true  # Skip shell integration wrapper
+```
+
+**Important notes for E2E tests:**
+- The framework creates a fresh git repo for each scenario
+- Use `run:` steps for git operations not covered by setup (e.g., `git merge`)
+- Tests run with both bash and zsh on Unix, PowerShell on Windows
+- The `$WT_BIN` variable points to the built binary
+- The `$REPO_DIR`, `$REPO_NAME`, and `$WORKTREE_ROOT` variables are available
 
 ## Shell Integration Note
 
