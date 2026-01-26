@@ -843,3 +843,49 @@ Write-Output "=== WT SHELLENV LOADED ==="
 
 	t.Log("SUCCESS: Non-interactive checkout with explicit branch name works correctly")
 }
+
+// Helper functions for test setup
+
+func setupTestRepo(t *testing.T, repoDir string) {
+	t.Helper()
+
+	if err := os.MkdirAll(repoDir, 0755); err != nil {
+		t.Fatalf("Failed to create repo dir: %v", err)
+	}
+
+	// Initialize git repo
+	runGitCommand(t, repoDir, "init")
+	runGitCommand(t, repoDir, "config", "user.email", "test@example.com")
+	runGitCommand(t, repoDir, "config", "user.name", "Test User")
+	runGitCommand(t, repoDir, "commit", "--allow-empty", "-m", "initial commit")
+	runGitCommand(t, repoDir, "branch", "-M", "main")
+}
+
+func buildWtBinary(t *testing.T, tmpDir string) string {
+	t.Helper()
+
+	binaryName := "wt"
+	// On Windows, executables need .exe extension
+	if filepath.Separator == '\\' {
+		binaryName = "wt.exe"
+	}
+
+	binaryPath := filepath.Join(tmpDir, binaryName)
+	cmd := exec.Command("go", "build", "-o", binaryPath, ".")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("Failed to build wt binary: %v\nOutput: %s", err, output)
+	}
+
+	return binaryPath
+}
+
+func runGitCommand(t *testing.T, dir string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("Git command failed: git %v\nError: %v\nOutput: %s",
+			args, err, output)
+	}
+}
