@@ -8,16 +8,17 @@ echo "Configuring wt shell integration..."
 
 # Try to run wt init for the installing user
 # When installed via sudo, $SUDO_USER contains the original user
+# Use full path /usr/bin/wt as PATH may not include it during package install
 if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
     # Run as the original user, not as root
-    if su - "$SUDO_USER" -c "wt init --no-prompt" 2>/dev/null; then
+    if su - "$SUDO_USER" -c "/usr/bin/wt init --no-prompt" 2>/dev/null; then
         echo "Shell integration configured for user $SUDO_USER"
     else
         echo "Note: Could not auto-configure shell. Run 'wt init' manually."
     fi
 elif [ "$(id -u)" != "0" ]; then
     # Not running as root, configure for current user
-    if wt init --no-prompt 2>/dev/null; then
+    if /usr/bin/wt init --no-prompt 2>/dev/null; then
         echo "Shell integration configured"
     else
         echo "Note: Could not auto-configure shell. Run 'wt init' manually."

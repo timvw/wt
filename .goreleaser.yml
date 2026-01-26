@@ -24,6 +24,8 @@ builds:
       - amd64
       - arm64
     ignore:
+      # Windows arm64 is excluded due to limited adoption and testing capability.
+      # Can be added later when Windows on ARM becomes more mainstream.
       - goos: windows
         goarch: arm64
 
