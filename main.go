@@ -758,7 +758,7 @@ function wt {
 Register-ArgumentCompleter -CommandName wt -ScriptBlock {
     param($commandName, $wordToComplete, $commandAst, $fakeBoundParameters)
 
-    $commands = @('checkout', 'co', 'create', 'pr', 'mr', 'list', 'ls', 'remove', 'rm', 'prune', 'help', 'shellenv')
+    $commands = @('checkout', 'co', 'create', 'pr', 'mr', 'list', 'ls', 'remove', 'rm', 'prune', 'help', 'shellenv', 'init', 'version')
 
     # Get the position in the command line
     $position = $commandAst.CommandElements.Count - 1
@@ -820,7 +820,7 @@ if [ -n "$BASH_VERSION" ]; then
         COMPREPLY=()
         cur="${COMP_WORDS[COMP_CWORD]}"
         prev="${COMP_WORDS[COMP_CWORD-1]}"
-        commands="checkout co create pr mr list ls remove rm prune help shellenv"
+        commands="checkout co create pr mr list ls remove rm prune help shellenv init version"
 
         # Complete commands if first argument
         if [ $COMP_CWORD -eq 1 ]; then
@@ -858,6 +858,8 @@ if [ -n "$ZSH_VERSION" ]; then
             'prune:Remove worktree administrative files'
             'help:Show help'
             'shellenv:Output shell function for auto-cd'
+            'init:Initialize shell integration'
+            'version:Show version information'
         )
 
         if (( CURRENT == 2 )); then
@@ -917,6 +919,14 @@ Examples:
 		shell := detectShell(args)
 		if shell == "" {
 			fmt.Fprintln(os.Stderr, "Error: could not detect shell. Please specify: wt init bash|zsh|powershell")
+			os.Exit(1)
+		}
+
+		// PowerShell init is only supported on Windows because wt shellenv
+		// only outputs PowerShell code when running on Windows
+		if shell == "powershell" && runtime.GOOS != "windows" {
+			fmt.Fprintln(os.Stderr, "Error: PowerShell shell integration is only supported on Windows.")
+			fmt.Fprintln(os.Stderr, "On macOS/Linux, use: wt init bash  or  wt init zsh")
 			os.Exit(1)
 		}
 
@@ -998,10 +1008,15 @@ func getShellConfigPath(shell string) string {
 		return filepath.Join(home, ".zshrc")
 	case "powershell":
 		// PowerShell profile location
+		// Check $PROFILE env var first (works for both Windows PowerShell 5.1 and PowerShell Core)
+		if profile := os.Getenv("PROFILE"); profile != "" {
+			return profile
+		}
 		if runtime.GOOS == "windows" {
-			// Windows PowerShell: Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1
-			// PowerShell Core: Documents\PowerShell\Microsoft.PowerShell_profile.ps1
-			docs := filepath.Join(home, "Documents", "PowerShell")
+			// Default to Windows PowerShell 5.1 path (more common)
+			// Windows PowerShell 5.1: Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1
+			// PowerShell Core 7+: Documents\PowerShell\Microsoft.PowerShell_profile.ps1
+			docs := filepath.Join(home, "Documents", "WindowsPowerShell")
 			if err := os.MkdirAll(docs, 0755); err == nil {
 				return filepath.Join(docs, "Microsoft.PowerShell_profile.ps1")
 			}

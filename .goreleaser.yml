@@ -79,15 +79,15 @@ brews:
     license: MIT
     install: |
       bin.install "wt"
-    post_install: |
-      system "#{bin}/wt", "init", "--no-prompt"
     caveats: |
-      Shell integration has been configured automatically.
-
-      If you need to reconfigure, run:
+      To enable shell integration (auto-cd after checkout/create), run:
         wt init
 
-      To remove shell integration:
+      Then restart your shell or run:
+        source ~/.zshrc    # for zsh
+        source ~/.bashrc   # for bash
+
+      To remove shell integration later:
         wt init --uninstall
     test: |
       assert_match "wt version", shell_output("#{bin}/wt version")
