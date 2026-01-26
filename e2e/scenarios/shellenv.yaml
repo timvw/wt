@@ -47,3 +47,25 @@ scenarios:
       - run: $WT_BIN shellenv
         expect:
           output_contains: "function wt"
+
+  - name: shellenv_uses_portable_sed
+    description: shellenv uses portable sed syntax for completion (not gawk)
+    skip_shellenv: true
+    skip_shells: [powershell, pwsh]
+    steps:
+      - run: $WT_BIN shellenv
+        expect:
+          output_contains: "sed -n"
+          output_not_contains: "match($0"
+
+  - name: shellenv_completion_sed_works
+    description: The sed command for branch extraction works correctly
+    skip_shellenv: true
+    skip_shells: [powershell, pwsh]
+    steps:
+      - run: |
+          echo '/path/to/main  abc1234 [main]
+          /path/to/feature  def5678 [feature-branch]' | tail -n +2 | sed -n 's/.*\[\([^]]*\)\].*/\1/p'
+        expect:
+          exit_code: 0
+          output_contains: "feature-branch"
