@@ -19,7 +19,7 @@ scenarios:
     steps:
       - run: $WT_BIN shellenv
         expect:
-          output_contains: "navigation"
+          output_contains: "navigating"
 
   - name: shellenv_bash_specific
     description: shellenv contains bash-specific code
