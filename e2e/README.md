@@ -26,9 +26,6 @@ e2e/
 │   ├── list.yaml
 │   ├── remove.yaml
 │   └── shellenv.yaml
-├── lib/                # Shared helpers (not used by orchestrator)
-│   ├── setup.sh
-│   └── setup.ps1
 ├── run.go              # Go orchestrator
 └── README.md
 ```
