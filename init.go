@@ -305,9 +305,7 @@ func removeShellConfig(configPath, shell string, dryRun bool) error {
 		before = before[:len(before)-1]
 	}
 	// Remove leading newline from after (the one we added)
-	if strings.HasPrefix(after, "\n") {
-		after = after[1:]
-	}
+	after = strings.TrimPrefix(after, "\n")
 
 	newContent := before + after
 

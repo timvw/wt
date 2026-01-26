@@ -163,10 +163,10 @@ func TestGetShellConfigContent(t *testing.T) {
 
 func TestSuccessPrefix(t *testing.T) {
 	tests := []struct {
-		name   string
-		envCI  string
+		name    string
+		envCI   string
 		envTerm string
-		want   string
+		want    string
 	}{
 		{
 			name: "normal terminal shows checkmark",
