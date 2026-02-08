@@ -13,8 +13,9 @@ bin/
 # Output of the go coverage tool
 *.out
 
-# Go workspace file
+# Go workspace files
 go.work
+go.work.sum
 
 # IDE
 .vscode/

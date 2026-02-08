@@ -30,6 +30,11 @@ clean:
 test:
     go test -v -short ./...
 
+# Print shell integration that runs wt from source (for local development)
+dev-shellenv:
+    test -f {{justfile_directory()}}/go.work || (cd {{justfile_directory()}} && go work init .)
+    go run . shellenv | sed "s|command wt |env GOWORK={{justfile_directory()}}/go.work go run {{justfile_directory()}} |g"
+
 # Run e2e tests with all available shells
 e2e: build
     go run e2e/run.go --wt={{build_dir}}/{{binary_name}} --verbose
