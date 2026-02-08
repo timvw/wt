@@ -15,8 +15,8 @@ Inspired by [haacked/dotfiles/tree-me](https://github.com/haacked/dotfiles/blob/
 - Organized worktree structure: `~/dev/worktrees/<repo>/<branch>`
 - Simple commands for common worktree operations
 - **Interactive selection menus** for checkout, remove, pr, and mr commands
-- GitHub PR support via `wt pr` command (uses `gh` CLI)
-- GitLab MR support via `wt mr` command (uses `glab` CLI)
+- GitHub PR support via `wt pr` command (uses `gh` CLI) — checks out the PR's actual branch name
+- GitLab MR support via `wt mr` command (uses `glab` CLI) — checks out the MR's actual branch name
 - Shell integration with auto-cd functionality
 - Tab completion for Bash and Zsh
 
@@ -125,13 +125,13 @@ wt co                             # interactive: select from available branches
 wt create my-feature
 wt create my-feature develop      # specify base branch
 
-# Checkout GitHub PR in worktree (requires gh CLI)
-wt pr 123                                          # GitHub PR number
+# Checkout GitHub PR in worktree using the PR's branch name (requires gh CLI)
+wt pr 123                                          # looks up branch for PR #123
 wt pr https://github.com/org/repo/pull/123         # GitHub PR URL
 wt pr                                              # interactive: select from open PRs
 
-# Checkout GitLab MR in worktree (requires glab CLI)
-wt mr 123                                          # GitLab MR number
+# Checkout GitLab MR in worktree using the MR's branch name (requires glab CLI)
+wt mr 123                                          # looks up branch for MR !123
 wt mr https://gitlab.com/org/repo/-/merge_requests/123  # GitLab MR URL
 wt mr                                              # interactive: select from open MRs
 
@@ -184,21 +184,23 @@ Use the arrow keys to navigate: ↓ ↑ → ←
     feature/update-docs
     bugfix/login-issue
 
-# Interactive PR checkout (requires gh CLI)
+# Interactive PR checkout — resolves to the PR's branch name (requires gh CLI)
 $ wt pr
 Use the arrow keys to navigate: ↓ ↑ → ←
-? Select PR to checkout:
+? Select Pull Request:
   ▸ #123: Add authentication feature
     #124: Update documentation
     #125: Fix login bug
+# e.g. selecting #123 creates worktree at ~/dev/worktrees/<repo>/feat/add-auth
 
-# Interactive MR checkout (requires glab CLI)
+# Interactive MR checkout — resolves to the MR's branch name (requires glab CLI)
 $ wt mr
 Use the arrow keys to navigate: ↓ ↑ → ←
-? Select MR to checkout:
+? Select Merge Request:
   ▸ !456: Add authentication feature
     !457: Update documentation
     !458: Fix login bug
+# e.g. selecting !456 creates worktree at ~/dev/worktrees/<repo>/feat/add-auth
 ```
 
 ### Examples
@@ -210,10 +212,10 @@ wt create add-auth-feature
 # Checkout an existing branch
 wt checkout bugfix-login
 
-# Work on a GitHub PR
+# Work on a GitHub PR (checks out the PR's branch, e.g. feat/add-auth)
 wt pr 456
 
-# Work on a GitLab MR
+# Work on a GitLab MR (checks out the MR's branch, e.g. fix/api-cleanup)
 wt mr 789
 
 # List all your worktrees

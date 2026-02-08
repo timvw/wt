@@ -144,7 +144,7 @@ wt pr 123
 wt pr https://github.com/owner/repo/pull/123
 ```
 
-This creates a worktree at `~/dev/worktrees/wt/pr-123`
+This looks up the PR's actual branch name (e.g. `feat/add-auth`) and creates a worktree at `~/dev/worktrees/wt/feat/add-auth` — identical to `wt co feat/add-auth`.
 
 ### GitLab Merge Requests
 ```bash
@@ -156,7 +156,7 @@ wt mr 456
 wt mr https://gitlab.com/owner/repo/-/merge_requests/456
 ```
 
-This creates a worktree at `~/dev/worktrees/wt/mr-456`
+This looks up the MR's actual branch name (e.g. `fix/api-cleanup`) and creates a worktree at `~/dev/worktrees/wt/fix/api-cleanup` — identical to `wt co fix/api-cleanup`.
 
 ## Project-Specific Guidelines
 

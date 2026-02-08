@@ -622,6 +622,148 @@ invalid line without proper format
 	}
 }
 
+func TestParseGitHubBranchName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "Valid response with simple branch",
+			input:   `{"headRefName": "fix/login-bug"}`,
+			want:    "fix/login-bug",
+			wantErr: false,
+		},
+		{
+			name:    "Valid response with feature branch",
+			input:   `{"headRefName": "feat/add-auth"}`,
+			want:    "feat/add-auth",
+			wantErr: false,
+		},
+		{
+			name:    "Valid response with extra fields",
+			input:   `{"headRefName": "main", "number": 123, "title": "Some PR"}`,
+			want:    "main",
+			wantErr: false,
+		},
+		{
+			name:    "Empty branch name",
+			input:   `{"headRefName": ""}`,
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "Missing headRefName field",
+			input:   `{"number": 123}`,
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "Invalid JSON",
+			input:   `not json`,
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "Empty JSON",
+			input:   `{}`,
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "Branch with slashes",
+			input:   `{"headRefName": "user/feat/deep/branch"}`,
+			want:    "user/feat/deep/branch",
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseGitHubBranchName(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseGitHubBranchName() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("parseGitHubBranchName() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseGitLabBranchName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "Valid response with simple branch",
+			input:   `{"source_branch": "fix/login-bug"}`,
+			want:    "fix/login-bug",
+			wantErr: false,
+		},
+		{
+			name:    "Valid response with feature branch",
+			input:   `{"source_branch": "feat/add-auth"}`,
+			want:    "feat/add-auth",
+			wantErr: false,
+		},
+		{
+			name:    "Valid response with extra fields",
+			input:   `{"source_branch": "main", "iid": 123, "title": "Some MR", "target_branch": "main"}`,
+			want:    "main",
+			wantErr: false,
+		},
+		{
+			name:    "Empty branch name",
+			input:   `{"source_branch": ""}`,
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "Missing source_branch field",
+			input:   `{"iid": 123}`,
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "Invalid JSON",
+			input:   `not json`,
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "Empty JSON",
+			input:   `{}`,
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "Branch with slashes",
+			input:   `{"source_branch": "user/feat/deep/branch"}`,
+			want:    "user/feat/deep/branch",
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseGitLabBranchName(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseGitLabBranchName() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("parseGitLabBranchName() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEnsureWorktreePathCreatesMissingRoot(t *testing.T) {
 	originalRoot := worktreeRoot
 	t.Cleanup(func() {

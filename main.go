@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -481,7 +482,8 @@ var prCmd = &cobra.Command{
 	Short: "Checkout GitHub PR in worktree (uses gh CLI)",
 	Long: `Checkout a GitHub Pull Request in a worktree.
 
-Uses the 'gh' CLI to fetch and checkout pull requests.
+Looks up the PR's actual branch name using the 'gh' CLI, then creates
+a worktree with that branch name — just like 'wt checkout <branch>'.
 For GitLab Merge Requests, use 'wt mr' instead.
 
 Examples:
@@ -524,7 +526,8 @@ var mrCmd = &cobra.Command{
 	Short: "Checkout GitLab MR in worktree (uses glab CLI)",
 	Long: `Checkout a GitLab Merge Request in a worktree.
 
-Uses the 'glab' CLI to fetch and checkout merge requests.
+Looks up the MR's actual branch name using the 'glab' CLI, then creates
+a worktree with that branch name — just like 'wt checkout <branch>'.
 For GitHub Pull Requests, use 'wt pr' instead.
 
 Examples:
@@ -562,6 +565,56 @@ Examples:
 	},
 }
 
+// parseGitHubBranchName extracts the branch name from gh pr view JSON output.
+func parseGitHubBranchName(jsonOutput string) (string, error) {
+	var result struct {
+		HeadRefName string `json:"headRefName"`
+	}
+	if err := json.Unmarshal([]byte(jsonOutput), &result); err != nil {
+		return "", fmt.Errorf("failed to parse GitHub PR JSON: %w", err)
+	}
+	if result.HeadRefName == "" {
+		return "", fmt.Errorf("empty branch name in GitHub PR response")
+	}
+	return result.HeadRefName, nil
+}
+
+// parseGitLabBranchName extracts the branch name from glab mr view JSON output.
+func parseGitLabBranchName(jsonOutput string) (string, error) {
+	var result struct {
+		SourceBranch string `json:"source_branch"`
+	}
+	if err := json.Unmarshal([]byte(jsonOutput), &result); err != nil {
+		return "", fmt.Errorf("failed to parse GitLab MR JSON: %w", err)
+	}
+	if result.SourceBranch == "" {
+		return "", fmt.Errorf("empty branch name in GitLab MR response")
+	}
+	return result.SourceBranch, nil
+}
+
+// getPRBranchName looks up the actual branch name for a PR/MR using the gh/glab CLI.
+func getPRBranchName(prNumber string, remoteType RemoteType) (string, error) {
+	switch remoteType {
+	case RemoteGitHub:
+		cmd := exec.Command("gh", "pr", "view", prNumber, "--json", "headRefName")
+		output, err := cmd.Output()
+		if err != nil {
+			return "", fmt.Errorf("failed to get PR branch name: %w", err)
+		}
+		return parseGitHubBranchName(string(output))
+	case RemoteGitLab:
+		cmd := exec.Command("glab", "mr", "view", prNumber, "--output", "json")
+		output, err := cmd.Output()
+		if err != nil {
+			return "", fmt.Errorf("failed to get MR branch name: %w", err)
+		}
+		return parseGitLabBranchName(string(output))
+	default:
+		return "", fmt.Errorf("invalid remote type")
+	}
+}
+
 func checkoutPROrMR(input string, remoteType RemoteType) error {
 	prNumber, err := getPRNumber(input)
 	if err != nil {
@@ -587,14 +640,18 @@ func checkoutPROrMR(input string, remoteType RemoteType) error {
 		return fmt.Errorf("invalid remote type")
 	}
 
+	// Look up the actual branch name from the PR/MR
+	branch, err := getPRBranchName(prNumber, remoteType)
+	if err != nil {
+		return fmt.Errorf("failed to look up branch for %s #%s: %w", strings.ToUpper(prefix), prNumber, err)
+	}
+
 	repo, err := getRepoName()
 	if err != nil {
 		return err
 	}
 
-	branch := fmt.Sprintf("%s-%s", prefix, prNumber)
-
-	// Check if worktree already exists
+	// Check if worktree already exists for this branch
 	if existingPath, exists := worktreeExists(branch); exists {
 		fmt.Printf("✓ Worktree already exists: %s\n", existingPath)
 		printCDMarker(existingPath)
@@ -606,20 +663,30 @@ func checkoutPROrMR(input string, remoteType RemoteType) error {
 		return err
 	}
 
-	// Fetch the PR/MR
-	fetchCmd := exec.Command("git", "fetch", "origin", fmt.Sprintf("%s:%s", refSpec, branch))
+	// Try fetching the branch directly from origin
+	fetchCmd := exec.Command("git", "fetch", "origin", branch)
 	fetchCmd.Stderr = os.Stderr
-	_ = fetchCmd.Run() // Ignore errors, branch might already exist
+	if err := fetchCmd.Run(); err != nil {
+		// Fallback: fetch via PR/MR refspec (e.g. for fork PRs)
+		fallbackCmd := exec.Command("git", "fetch", "origin", fmt.Sprintf("%s:%s", refSpec, branch))
+		fallbackCmd.Stderr = os.Stderr
+		_ = fallbackCmd.Run()
+	}
 
-	// Create worktree
-	gitCmd := exec.Command("git", "worktree", "add", path, branch)
+	// Create worktree — prefer the remote-tracking branch, fall back to local
+	var gitCmd *exec.Cmd
+	if branchExists(branch) {
+		gitCmd = exec.Command("git", "worktree", "add", path, branch)
+	} else {
+		gitCmd = exec.Command("git", "worktree", "add", path, "-b", branch, fmt.Sprintf("origin/%s", branch))
+	}
 	gitCmd.Stdout = os.Stdout
 	gitCmd.Stderr = os.Stderr
 	if err := gitCmd.Run(); err != nil {
 		return fmt.Errorf("failed to create worktree: %w", err)
 	}
 
-	fmt.Printf("✓ %s #%s checked out at: %s\n", strings.ToUpper(prefix), prNumber, path)
+	fmt.Printf("✓ %s #%s (%s) checked out at: %s\n", strings.ToUpper(prefix), prNumber, branch, path)
 	printCDMarker(path)
 	return nil
 }
