@@ -686,6 +686,11 @@ func checkoutPROrMR(input string, remoteType RemoteType) error {
 		return fmt.Errorf("failed to create worktree: %w", err)
 	}
 
+	// Ensure upstream tracking is set (best-effort, may fail for fork PRs)
+	upstreamCmd := exec.Command("git", "branch", "--set-upstream-to",
+		fmt.Sprintf("origin/%s", branch), branch)
+	_ = upstreamCmd.Run()
+
 	fmt.Printf("✓ %s #%s (%s) checked out at: %s\n", strings.ToUpper(prefix), prNumber, branch, path)
 	printCDMarker(path)
 	return nil
