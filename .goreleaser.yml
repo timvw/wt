@@ -124,9 +124,15 @@ winget:
       - developer-tools
     release_notes_url: "https://github.com/timvw/wt/releases/tag/{{.Tag}}"
     repository:
-      owner: microsoft
+      owner: timvw
       name: winget-pkgs
       token: "{{ .Env.WINGET_TOKEN }}"
+      pull_request:
+        enabled: true
+        base:
+          owner: microsoft
+          name: winget-pkgs
+          branch: master
 
 # AUR package
 aurs:
