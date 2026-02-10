@@ -110,7 +110,6 @@ winget:
     publisher: timvw
     publisher_url: https://timvw.be
     publisher_support_url: https://github.com/timvw/wt/issues
-    package_url: https://github.com/timvw/wt
     short_description: "A fast, simple Git worktree helper"
     description: |
       wt is a fast, simple Git worktree helper written in Go.
