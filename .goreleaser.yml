@@ -104,6 +104,31 @@ scoops:
     description: A fast, simple Git worktree helper
     license: MIT
 
+# WinGet package (Windows Package Manager)
+winget:
+  - name: wt
+    publisher: timvw
+    publisher_url: https://timvw.be
+    publisher_support_url: https://github.com/timvw/wt/issues
+    package_url: https://github.com/timvw/wt
+    short_description: "A fast, simple Git worktree helper"
+    description: |
+      wt is a fast, simple Git worktree helper written in Go.
+      It wraps Git's native worktree commands with a convenient interface,
+      organized directory structure, and shell integration with auto-cd.
+    license: MIT
+    license_url: https://github.com/timvw/wt/blob/main/LICENSE
+    tags:
+      - git
+      - worktree
+      - cli
+      - developer-tools
+    release_notes_url: "https://github.com/timvw/wt/releases/tag/{{.Tag}}"
+    repository:
+      owner: microsoft
+      name: winget-pkgs
+      token: "{{ .Env.WINGET_TOKEN }}"
+
 # AUR package
 aurs:
   - name: wt-bin

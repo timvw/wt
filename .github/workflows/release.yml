@@ -49,3 +49,4 @@ jobs:
           HOMEBREW_TAP_TOKEN: ${{ steps.generate-token.outputs.token || github.token }}
           SCOOP_BUCKET_TOKEN: ${{ steps.generate-token.outputs.token || github.token }}
           AUR_KEY: ${{ secrets.AUR_KEY }}
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}

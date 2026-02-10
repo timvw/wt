@@ -37,6 +37,13 @@ scoop install wt
 wt init  # Configure shell integration
 ```
 
+### WinGet (Windows)
+
+```powershell
+winget install timvw.wt
+wt init  # Configure shell integration
+```
+
 ### Linux Packages
 
 Download `.deb`, `.rpm`, or `.pkg.tar.zst` packages from the [releases page](https://github.com/timvw/wt/releases).

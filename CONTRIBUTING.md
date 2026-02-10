@@ -127,10 +127,13 @@ Every push triggers:
    git push origin v0.1.x
    ```
 3. Automated workflow:
-   - Builds binaries for all platforms
-   - Creates Homebrew bottles
-   - Publishes GitHub release
-   - Updates Homebrew formula automatically
+    - Builds binaries for all platforms
+    - Publishes GitHub release
+    - Updates Homebrew tap formula
+    - Updates Scoop bucket manifest
+    - Submits WinGet package to `microsoft/winget-pkgs`
+    - Publishes AUR package (`wt-bin`)
+    - Creates `.deb`, `.rpm`, and `.pkg.tar.zst` packages
 
 ## Getting Help
 
