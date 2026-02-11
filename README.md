@@ -305,6 +305,7 @@ Available pattern variables:
 - `{.branch}` git branch name
 - `{.branchSafe}` git branch name (sanitized for filesystem paths)
 - `{.worktreeRoot}` value of `WORKTREE_ROOT`
+- `{.env.VARNAME}` value of environment variable `VARNAME` (e.g. `{.env.USER}`, `{.env.HOME}`)
 
 Default patterns per strategy:
 
@@ -364,6 +365,30 @@ This groups all repositories for a task together:
     shared-lib/
     main-app/
 ```
+
+### Example: Using environment variables in patterns
+
+You can reference any environment variable in your pattern with `{.env.VARNAME}`. This is useful for per-user paths, CI environments, or dynamic configuration:
+
+```toml
+# ~/.config/wt/config.toml
+strategy = "custom"
+pattern = "{.worktreeRoot}/{.env.USER}/{.repo.Name}/{.branch}"
+```
+
+This produces paths like:
+
+```
+~/dev/worktrees/
+  alice/
+    my-repo/
+      feat/new-feature/
+  bob/
+    my-repo/
+      fix/bug-123/
+```
+
+If the referenced environment variable is not set, `wt` will return an error.
 
 ## Development
 
