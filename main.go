@@ -354,11 +354,20 @@ func buildWorktreePath(info repoInfo, branch string) (string, error) {
 		return "", err
 	}
 
+	envMap := map[string]string{}
+	for _, e := range os.Environ() {
+		parts := strings.SplitN(e, "=", 2)
+		if len(parts) == 2 {
+			envMap[parts[0]] = parts[1]
+		}
+	}
+
 	context := map[string]any{
 		"repo":         info,
 		"branch":       branch,
 		"branchSafe":   strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(branch, "/", "-"), "\\", "-")),
 		"worktreeRoot": worktreeRoot,
+		"env":          envMap,
 	}
 
 	if pattern == "" {
@@ -1198,8 +1207,9 @@ Strategies:
   inside-dotdir    -> {.repo.Main}/.worktrees/{.branch}
   custom           -> requires pattern setting
 
-Pattern variables: {.repo.Name}, {.repo.Main}, {.repo.Owner}, {.repo.Host}, {.branch}, {.branchSafe}, {.worktreeRoot}
+Pattern variables: {.repo.Name}, {.repo.Main}, {.repo.Owner}, {.repo.Host}, {.branch}, {.branchSafe}, {.worktreeRoot}, {.env.VARNAME}
 Note: {.branchSafe} is sanitized for filesystem paths (slashes replaced).
+Note: {.env.VARNAME} accesses the environment variable VARNAME (e.g. {.env.HOME}).
 `, configFilePath, configStatus, worktreeStrategy, pattern, worktreeRoot)
 		return nil
 	},

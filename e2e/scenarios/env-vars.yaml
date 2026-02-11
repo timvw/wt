@@ -1,0 +1,29 @@
+# E2E tests for environment variable support in template patterns
+name: env-vars
+description: Test environment variables in worktree patterns
+
+scenarios:
+  - name: env_var_in_custom_pattern
+    description: Environment variables can be used in custom patterns via {.env.VARNAME}
+    steps:
+      - run: wt create feature-env
+        env:
+          WORKTREE_STRATEGY: custom
+          WORKTREE_PATTERN: "{.worktreeRoot}/{.env.MY_WT_TEST_LABEL}/{.repo.Name}/{.branch}"
+          MY_WT_TEST_LABEL: custom-label
+        expect:
+          exit_code: 0
+      - run: pwd
+        expect:
+          cwd_ends_with: /worktrees/custom-label/test-repo/feature-env
+
+  - name: env_var_missing_fails
+    description: Missing environment variable in pattern causes an error
+    skip_shellenv: true  # Error path: no auto-cd needed
+    steps:
+      - run: $WT_BIN create feature-missing-env
+        env:
+          WORKTREE_STRATEGY: custom
+          WORKTREE_PATTERN: "{.worktreeRoot}/{.env.TOTALLY_UNDEFINED_VAR}/{.branch}"
+        expect:
+          exit_code: 1

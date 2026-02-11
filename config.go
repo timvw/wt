@@ -50,7 +50,8 @@ const defaultConfigTemplate = `# wt configuration file
 
 # Custom pattern (used when strategy = "custom", or to override any strategy's default)
 # Available variables: {.worktreeRoot}, {.repo.Name}, {.repo.Main},
-#                      {.repo.Owner}, {.repo.Host}, {.branch}, {.branchSafe}
+#                      {.repo.Owner}, {.repo.Host}, {.branch}, {.branchSafe},
+#                      {.env.VARNAME} (access environment variables, e.g. {.env.USER})
 # pattern = "{.worktreeRoot}/{.repo.Name}/{.branch}"
 `
 

@@ -1113,3 +1113,66 @@ func TestResolveWorktreePatternCustomRequiresPattern(t *testing.T) {
 		t.Fatal("expected resolveWorktreePattern() to fail when custom pattern is missing")
 	}
 }
+
+func TestBuildWorktreePathWithEnvVar(t *testing.T) {
+	originalRoot := worktreeRoot
+	originalStrategy := worktreeStrategy
+	originalPattern := worktreePattern
+	t.Cleanup(func() {
+		worktreeRoot = originalRoot
+		worktreeStrategy = originalStrategy
+		worktreePattern = originalPattern
+	})
+
+	tmpDir := t.TempDir()
+	worktreeRoot = filepath.Join(tmpDir, "worktrees")
+	worktreeStrategy = "custom"
+	worktreePattern = "{.worktreeRoot}/{.env.MY_CUSTOM_VAR}/{.branch}"
+
+	t.Setenv("MY_CUSTOM_VAR", "custom-value")
+
+	info := repoInfo{
+		Main: filepath.Join(tmpDir, "repo"),
+		Name: "repo",
+	}
+
+	path, err := buildWorktreePath(info, "feat/test")
+	if err != nil {
+		t.Fatalf("buildWorktreePath() unexpected error: %v", err)
+	}
+
+	expectedPath := filepath.Join(worktreeRoot, "custom-value", "feat", "test")
+	if path != expectedPath {
+		t.Fatalf("buildWorktreePath() = %s, want %s", path, expectedPath)
+	}
+}
+
+func TestBuildWorktreePathMissingEnvVar(t *testing.T) {
+	originalRoot := worktreeRoot
+	originalStrategy := worktreeStrategy
+	originalPattern := worktreePattern
+	t.Cleanup(func() {
+		worktreeRoot = originalRoot
+		worktreeStrategy = originalStrategy
+		worktreePattern = originalPattern
+	})
+
+	tmpDir := t.TempDir()
+	worktreeRoot = filepath.Join(tmpDir, "worktrees")
+	worktreeStrategy = "custom"
+	worktreePattern = "{.worktreeRoot}/{.env.TOTALLY_MISSING_VAR_12345}/{.branch}"
+
+	// Ensure the var is not set
+	t.Setenv("TOTALLY_MISSING_VAR_12345", "")
+	os.Unsetenv("TOTALLY_MISSING_VAR_12345")
+
+	info := repoInfo{
+		Main: filepath.Join(tmpDir, "repo"),
+		Name: "repo",
+	}
+
+	_, err := buildWorktreePath(info, "branch")
+	if err == nil {
+		t.Fatal("expected buildWorktreePath() to fail when env var in pattern is missing")
+	}
+}
