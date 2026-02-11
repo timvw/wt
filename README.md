@@ -17,6 +17,7 @@ Inspired by [haacked/dotfiles/tree-me](https://github.com/haacked/dotfiles/blob/
 - **Interactive selection menus** for checkout, remove, pr, and mr commands
 - GitHub PR support via `wt pr` command (uses `gh` CLI) — checks out the PR's actual branch name
 - GitLab MR support via `wt mr` command (uses `glab` CLI) — checks out the MR's actual branch name
+- **Pre/post command hooks** — run custom scripts (e.g. copy `.env`, install deps) on create/checkout/remove
 - Shell integration with auto-cd functionality
 - Tab completion for Bash and Zsh
 
@@ -362,6 +363,62 @@ pattern = "{.repo.Main}/../{.repo.Name}/{.branch}"
 ```
 
 Run `wt info` to see the active strategy, pattern, and available variables.
+
+### Hooks
+
+Hooks let you run custom commands before or after `wt` operations. Define them in the `[hooks]` section of your config file:
+
+```toml
+# ~/.config/wt/config.toml
+[hooks]
+post_create = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]
+post_checkout = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]
+pre_remove = ["echo Removing worktree at $WT_PATH"]
+```
+
+**Available hooks:**
+
+| Hook | When it runs |
+| --- | --- |
+| `pre_create` / `post_create` | Before/after `wt create` |
+| `pre_checkout` / `post_checkout` | Before/after `wt checkout` (alias `wt co`) |
+| `pre_remove` / `post_remove` | Before/after `wt remove` (alias `wt rm`) |
+| `pre_pr` / `post_pr` | Before/after `wt pr` |
+| `pre_mr` / `post_mr` | Before/after `wt mr` |
+
+Hooks only run when a **new worktree is actually created** (or removed). If a worktree already exists, the early-return path skips hooks entirely.
+
+**Environment variables** available in hook commands:
+
+| Variable | Description |
+| --- | --- |
+| `$WT_PATH` | Worktree path being created/removed |
+| `$WT_BRANCH` | Branch name |
+| `$WT_MAIN` | Path to the main worktree |
+| `$WT_REPO_NAME` | Repository name |
+| `$WT_REPO_HOST` | Git host (e.g. `github.com`) |
+| `$WT_REPO_OWNER` | Repository owner/group |
+
+**Behavior:**
+
+- **Pre-hooks** abort the operation if any command exits non-zero
+- **Post-hooks** print a warning on failure but do not fail the `wt` command
+- Each hook is a list of shell commands executed via `sh -c` (or `cmd /c` on Windows)
+- Set `WT_HOOKS_DISABLED=1` to skip all hooks (useful for scripting or CI)
+
+**Common patterns:**
+
+```toml
+[hooks]
+# Copy .env file to new worktrees (only if it exists in main)
+post_create = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]
+
+# Install dependencies after checkout
+post_checkout = ["cd $WT_PATH && npm install"]
+
+# Run cleanup before removing a worktree
+pre_remove = ["cd $WT_PATH && npm run clean"]
+```
 
 ### Example: Task spanning multiple repositories
 
