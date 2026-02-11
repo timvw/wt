@@ -53,6 +53,10 @@ const defaultConfigTemplate = `# wt configuration file
 #                      {.repo.Owner}, {.repo.Host}, {.branch}, {.branchSafe},
 #                      {.env.VARNAME} (access environment variables, e.g. {.env.USER})
 # pattern = "{.worktreeRoot}/{.repo.Name}/{.branch}"
+
+# Example: group worktrees by a FEATURE environment variable
+# strategy = "custom"
+# pattern = "{.worktreeRoot}/{.env.FEATURE}/{.repo.Name}"
 `
 
 // configDir returns the directory where wt config files are stored.
