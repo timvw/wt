@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1240,5 +1241,236 @@ func TestBuildWorktreePathMissingEnvVar(t *testing.T) {
 	_, err := buildWorktreePath(info, "branch")
 	if err == nil {
 		t.Fatal("expected buildWorktreePath() to fail when env var in pattern is missing")
+	}
+}
+
+// --- Hook tests ---
+
+func TestGetHooks(t *testing.T) {
+	original := worktreeHooks
+	t.Cleanup(func() { worktreeHooks = original })
+
+	worktreeHooks = Hooks{
+		PreCreate:    []string{"echo pre-create"},
+		PostCreate:   []string{"echo post-create"},
+		PreCheckout:  []string{"echo pre-checkout"},
+		PostCheckout: []string{"echo post-checkout"},
+		PreRemove:    []string{"echo pre-remove"},
+		PostRemove:   []string{"echo post-remove"},
+		PrePR:        []string{"echo pre-pr"},
+		PostPR:       []string{"echo post-pr"},
+		PreMR:        []string{"echo pre-mr"},
+		PostMR:       []string{"echo post-mr"},
+	}
+
+	tests := []struct {
+		name     string
+		hookName string
+		want     []string
+	}{
+		{"pre_create", "pre_create", []string{"echo pre-create"}},
+		{"post_create", "post_create", []string{"echo post-create"}},
+		{"pre_checkout", "pre_checkout", []string{"echo pre-checkout"}},
+		{"post_checkout", "post_checkout", []string{"echo post-checkout"}},
+		{"pre_remove", "pre_remove", []string{"echo pre-remove"}},
+		{"post_remove", "post_remove", []string{"echo post-remove"}},
+		{"pre_pr", "pre_pr", []string{"echo pre-pr"}},
+		{"post_pr", "post_pr", []string{"echo post-pr"}},
+		{"pre_mr", "pre_mr", []string{"echo pre-mr"}},
+		{"post_mr", "post_mr", []string{"echo post-mr"}},
+		{"unknown returns nil", "unknown", nil},
+		{"empty string returns nil", "", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := getHooks(tt.hookName)
+			if tt.want == nil {
+				if got != nil {
+					t.Errorf("getHooks(%q) = %v, want nil", tt.hookName, got)
+				}
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Errorf("getHooks(%q) length = %d, want %d", tt.hookName, len(got), len(tt.want))
+				return
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("getHooks(%q)[%d] = %q, want %q", tt.hookName, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestBuildHookEnv(t *testing.T) {
+	info := repoInfo{
+		Main:  "/home/user/repo",
+		Name:  "my-repo",
+		Host:  "github.com",
+		Owner: "my-org",
+	}
+	env := buildHookEnv(info, "feat/test", "/home/user/worktrees/my-repo/feat/test")
+
+	expected := map[string]string{
+		"WT_PATH":       "/home/user/worktrees/my-repo/feat/test",
+		"WT_BRANCH":     "feat/test",
+		"WT_MAIN":       "/home/user/repo",
+		"WT_REPO_NAME":  "my-repo",
+		"WT_REPO_HOST":  "github.com",
+		"WT_REPO_OWNER": "my-org",
+	}
+
+	for k, want := range expected {
+		got, ok := env[k]
+		if !ok {
+			t.Errorf("buildHookEnv() missing key %q", k)
+			continue
+		}
+		if got != want {
+			t.Errorf("buildHookEnv()[%q] = %q, want %q", k, got, want)
+		}
+	}
+
+	if len(env) != len(expected) {
+		t.Errorf("buildHookEnv() has %d keys, want %d", len(env), len(expected))
+	}
+}
+
+func TestRunHooksEmpty(t *testing.T) {
+	err := runHooks("pre_create", nil, nil)
+	if err != nil {
+		t.Errorf("runHooks() with nil commands returned error: %v", err)
+	}
+
+	err = runHooks("pre_create", []string{}, nil)
+	if err != nil {
+		t.Errorf("runHooks() with empty commands returned error: %v", err)
+	}
+}
+
+func TestRunHooksDisabled(t *testing.T) {
+	t.Setenv("WT_HOOKS_DISABLED", "1")
+
+	// Even with a command that would fail, hooks should be skipped
+	err := runHooks("pre_create", []string{"false"}, map[string]string{})
+	if err != nil {
+		t.Errorf("runHooks() with WT_HOOKS_DISABLED=1 returned error: %v", err)
+	}
+}
+
+func TestRunHooksSuccess(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+
+	err := runHooks("post_create", []string{"true"}, map[string]string{})
+	if err != nil {
+		t.Errorf("runHooks() with 'true' command returned error: %v", err)
+	}
+}
+
+func TestRunHooksPreAborts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+
+	err := runHooks("pre_create", []string{"false"}, map[string]string{})
+	if err == nil {
+		t.Error("runHooks() pre-hook with 'false' should return error")
+	}
+}
+
+func TestRunHooksPostWarnsOnly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+
+	err := runHooks("post_create", []string{"false"}, map[string]string{})
+	if err != nil {
+		t.Errorf("runHooks() post-hook with 'false' should not return error, got: %v", err)
+	}
+}
+
+func TestRunHooksPreStopsOnFirstFailure(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	marker := filepath.Join(tmpDir, "should-not-exist")
+
+	// Second command fails, third should not run
+	cmds := []string{
+		"true",
+		"false",
+		fmt.Sprintf("touch '%s'", marker),
+	}
+
+	err := runHooks("pre_create", cmds, map[string]string{})
+	if err == nil {
+		t.Error("runHooks() pre-hook should return error on failure")
+	}
+
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Error("runHooks() pre-hook should stop on first failure; third command ran")
+	}
+}
+
+func TestRunHooksEnvVarsAvailable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	outFile := filepath.Join(tmpDir, "env-output.txt")
+
+	env := map[string]string{
+		"WT_PATH":   "/test/path",
+		"WT_BRANCH": "feat/hooks",
+	}
+
+	cmds := []string{
+		fmt.Sprintf("echo $WT_PATH > '%s'", outFile),
+	}
+
+	err := runHooks("post_create", cmds, env)
+	if err != nil {
+		t.Fatalf("runHooks() returned error: %v", err)
+	}
+
+	data, readErr := os.ReadFile(outFile)
+	if readErr != nil {
+		t.Fatalf("failed to read output file: %v", readErr)
+	}
+
+	output := strings.TrimSpace(string(data))
+	if output != "/test/path" {
+		t.Errorf("hook env WT_PATH = %q, want %q", output, "/test/path")
+	}
+}
+
+func TestRunHooksMultiplePostContinueOnFailure(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	marker := filepath.Join(tmpDir, "second-ran")
+
+	// First command fails but post-hooks should continue
+	cmds := []string{
+		"false",
+		fmt.Sprintf("touch '%s'", marker),
+	}
+
+	err := runHooks("post_create", cmds, map[string]string{})
+	if err != nil {
+		t.Errorf("runHooks() post-hook should not return error, got: %v", err)
+	}
+
+	if _, statErr := os.Stat(marker); statErr != nil {
+		t.Error("runHooks() post-hook should continue after failure; second command did not run")
 	}
 }

@@ -16,6 +16,21 @@ type Config struct {
 	Strategy  string `toml:"strategy"`
 	Pattern   string `toml:"pattern"`
 	Separator string `toml:"separator"`
+	Hooks     Hooks  `toml:"hooks"`
+}
+
+// Hooks holds pre/post command hook commands.
+type Hooks struct {
+	PreCreate    []string `toml:"pre_create"`
+	PostCreate   []string `toml:"post_create"`
+	PreCheckout  []string `toml:"pre_checkout"`
+	PostCheckout []string `toml:"post_checkout"`
+	PreRemove    []string `toml:"pre_remove"`
+	PostRemove   []string `toml:"post_remove"`
+	PrePR        []string `toml:"pre_pr"`
+	PostPR       []string `toml:"post_pr"`
+	PreMR        []string `toml:"pre_mr"`
+	PostMR       []string `toml:"post_mr"`
 }
 
 // configSource tracks where each config value came from.
@@ -34,6 +49,9 @@ var configFileFound bool
 
 // configSources tracks the origin of each resolved value.
 var configSources configSource
+
+// worktreeHooks holds the loaded hook configuration.
+var worktreeHooks Hooks
 
 // configFlag is the --config flag value (set by cobra).
 var configFlag string
@@ -65,6 +83,17 @@ const defaultConfigTemplate = `# wt configuration file
 # Example: group worktrees by a FEATURE environment variable
 # strategy = "custom"
 # pattern = "{.worktreeRoot}/{.env.FEATURE}/{.repo.Name}"
+
+# Hooks — run commands before/after wt operations
+# Available env vars in hooks: $WT_PATH, $WT_BRANCH, $WT_MAIN,
+#                              $WT_REPO_NAME, $WT_REPO_HOST, $WT_REPO_OWNER
+# Pre-hooks abort on failure; post-hooks warn only.
+# Set WT_HOOKS_DISABLED=1 to skip all hooks.
+#
+# [hooks]
+# post_create = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]
+# post_checkout = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]
+# pre_remove = ["echo Removing $WT_PATH"]
 `
 
 // configDir returns the directory where wt config files are stored.
@@ -112,6 +141,9 @@ func loadWorktreeConfig() {
 		Separator: "default",
 	}
 
+	// Reset hooks
+	worktreeHooks = Hooks{}
+
 	// 2. Load config file
 	configFilePath = resolveConfigPath(configFlag)
 	configFileFound = false
@@ -136,6 +168,7 @@ func loadWorktreeConfig() {
 				worktreeSeparator = cfg.Separator
 				configSources.Separator = "config file"
 			}
+			worktreeHooks = cfg.Hooks
 		}
 	}
 

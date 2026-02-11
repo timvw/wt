@@ -635,6 +635,88 @@ func getOpenMRs() ([]string, []string, error) {
 	return numbers, labels, nil
 }
 
+// Hooks
+
+// getHooks returns the hook commands for a given hook name.
+func getHooks(hookName string) []string {
+	switch hookName {
+	case "pre_create":
+		return worktreeHooks.PreCreate
+	case "post_create":
+		return worktreeHooks.PostCreate
+	case "pre_checkout":
+		return worktreeHooks.PreCheckout
+	case "post_checkout":
+		return worktreeHooks.PostCheckout
+	case "pre_remove":
+		return worktreeHooks.PreRemove
+	case "post_remove":
+		return worktreeHooks.PostRemove
+	case "pre_pr":
+		return worktreeHooks.PrePR
+	case "post_pr":
+		return worktreeHooks.PostPR
+	case "pre_mr":
+		return worktreeHooks.PreMR
+	case "post_mr":
+		return worktreeHooks.PostMR
+	default:
+		return nil
+	}
+}
+
+// buildHookEnv creates the environment variables map for hook commands.
+func buildHookEnv(info repoInfo, branch, worktreePath string) map[string]string {
+	return map[string]string{
+		"WT_PATH":       worktreePath,
+		"WT_BRANCH":     branch,
+		"WT_MAIN":       info.Main,
+		"WT_REPO_NAME":  info.Name,
+		"WT_REPO_HOST":  info.Host,
+		"WT_REPO_OWNER": info.Owner,
+	}
+}
+
+// runHooks executes hook commands. For pre-hooks (hookName starts with "pre_"),
+// any command failure aborts the operation. For post-hooks, failures are warned
+// but do not fail the overall operation.
+func runHooks(hookName string, hookCommands []string, env map[string]string) error {
+	if os.Getenv("WT_HOOKS_DISABLED") == "1" {
+		return nil
+	}
+	if len(hookCommands) == 0 {
+		return nil
+	}
+
+	isPre := strings.HasPrefix(hookName, "pre_")
+
+	// Build environment slice from current env + hook vars
+	environ := os.Environ()
+	for k, v := range env {
+		environ = append(environ, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	for _, cmdStr := range hookCommands {
+		var cmd *exec.Cmd
+		if runtime.GOOS == "windows" {
+			cmd = exec.Command("cmd", "/c", cmdStr)
+		} else {
+			cmd = exec.Command("sh", "-c", cmdStr)
+		}
+		cmd.Env = environ
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		if err := cmd.Run(); err != nil {
+			if isPre {
+				return fmt.Errorf("command %q failed: %w", cmdStr, err)
+			}
+			fmt.Fprintf(os.Stderr, "\u26a0 %s hook failed: command %q: %v\n", hookName, cmdStr, err)
+		}
+	}
+	return nil
+}
+
 // Commands
 
 var checkoutCmd = &cobra.Command{
@@ -689,6 +771,13 @@ var checkoutCmd = &cobra.Command{
 			return err
 		}
 
+		hookEnv := buildHookEnv(info, branch, path)
+
+		// Run pre-checkout hooks
+		if err := runHooks("pre_checkout", getHooks("pre_checkout"), hookEnv); err != nil {
+			return fmt.Errorf("pre-checkout hook failed: %w", err)
+		}
+
 		// Create worktree
 		gitCmd := exec.Command("git", "worktree", "add", path, branch)
 		gitCmd.Stdout = os.Stdout
@@ -698,6 +787,10 @@ var checkoutCmd = &cobra.Command{
 		}
 
 		fmt.Printf("✓ Worktree created at: %s\n", path)
+
+		// Run post-checkout hooks (warn only)
+		runHooks("post_checkout", getHooks("post_checkout"), hookEnv)
+
 		printCDMarker(path)
 		return nil
 	},
@@ -731,6 +824,13 @@ var createCmd = &cobra.Command{
 			return err
 		}
 
+		hookEnv := buildHookEnv(info, branch, path)
+
+		// Run pre-create hooks
+		if err := runHooks("pre_create", getHooks("pre_create"), hookEnv); err != nil {
+			return fmt.Errorf("pre-create hook failed: %w", err)
+		}
+
 		// Create new branch and worktree
 		gitCmd := exec.Command("git", "worktree", "add", path, "-b", branch, base)
 		gitCmd.Stdout = os.Stdout
@@ -740,6 +840,10 @@ var createCmd = &cobra.Command{
 		}
 
 		fmt.Printf("✓ Worktree created at: %s\n", path)
+
+		// Run post-create hooks (warn only)
+		runHooks("post_create", getHooks("post_create"), hookEnv)
+
 		printCDMarker(path)
 		return nil
 	},
@@ -931,6 +1035,19 @@ func checkoutPROrMR(input string, remoteType RemoteType) error {
 		return err
 	}
 
+	// Determine hook name based on remote type
+	hookPrefix := "pr"
+	if remoteType == RemoteGitLab {
+		hookPrefix = "mr"
+	}
+	hookEnv := buildHookEnv(info, branch, path)
+
+	// Run pre-pr/pre-mr hooks
+	preHookName := "pre_" + hookPrefix
+	if err := runHooks(preHookName, getHooks(preHookName), hookEnv); err != nil {
+		return fmt.Errorf("%s hook failed: %w", preHookName, err)
+	}
+
 	// Try fetching the branch directly from origin
 	fetchCmd := exec.Command("git", "fetch", "origin", branch)
 	fetchCmd.Stderr = os.Stderr
@@ -960,6 +1077,11 @@ func checkoutPROrMR(input string, remoteType RemoteType) error {
 	_ = upstreamCmd.Run()
 
 	fmt.Printf("✓ %s #%s (%s) checked out at: %s\n", strings.ToUpper(prefix), prNumber, branch, path)
+
+	// Run post-pr/post-mr hooks (warn only)
+	postHookName := "post_" + hookPrefix
+	runHooks(postHookName, getHooks(postHookName), hookEnv)
+
 	printCDMarker(path)
 	return nil
 }
@@ -1018,6 +1140,15 @@ var removeCmd = &cobra.Command{
 			return fmt.Errorf("no worktree found for branch: %s", branch)
 		}
 
+		// Build hook env for remove hooks
+		info, _ := getRepoInfo()
+		hookEnv := buildHookEnv(info, branch, existingPath)
+
+		// Run pre-remove hooks
+		if err := runHooks("pre_remove", getHooks("pre_remove"), hookEnv); err != nil {
+			return fmt.Errorf("pre-remove hook failed: %w", err)
+		}
+
 		// Check if we're currently in the worktree being removed
 		cwd, err := os.Getwd()
 		inRemovedWorktree := err == nil && strings.HasPrefix(cwd, existingPath)
@@ -1057,6 +1188,9 @@ var removeCmd = &cobra.Command{
 		}
 
 		fmt.Printf("✓ Removed worktree: %s\n", existingPath)
+
+		// Run post-remove hooks (warn only)
+		runHooks("post_remove", getHooks("post_remove"), hookEnv)
 
 		// If we were in the removed worktree, navigate to main
 		if inRemovedWorktree && mainWorktreePath != "" {
@@ -1226,6 +1360,45 @@ Note: The separator setting controls how "/" and "\" in value variables are repl
       Path variables ({.repo.Main}, {.worktreeRoot}) are never transformed.
 Note: {.env.VARNAME} accesses the environment variable VARNAME (e.g. {.env.HOME}).
 `, configFilePath, configStatus, worktreeStrategy, pattern, worktreeRoot, worktreeSeparator)
+
+		// Show configured hooks
+		hookNames := []struct {
+			name  string
+			hooks []string
+		}{
+			{"pre_create", worktreeHooks.PreCreate},
+			{"post_create", worktreeHooks.PostCreate},
+			{"pre_checkout", worktreeHooks.PreCheckout},
+			{"post_checkout", worktreeHooks.PostCheckout},
+			{"pre_remove", worktreeHooks.PreRemove},
+			{"post_remove", worktreeHooks.PostRemove},
+			{"pre_pr", worktreeHooks.PrePR},
+			{"post_pr", worktreeHooks.PostPR},
+			{"pre_mr", worktreeHooks.PreMR},
+			{"post_mr", worktreeHooks.PostMR},
+		}
+		hasHooks := false
+		for _, h := range hookNames {
+			if len(h.hooks) > 0 {
+				hasHooks = true
+				break
+			}
+		}
+		if hasHooks {
+			fmt.Println("Hooks:")
+			for _, h := range hookNames {
+				if len(h.hooks) > 0 {
+					for _, cmd := range h.hooks {
+						fmt.Printf("  %-15s %s\n", h.name+":", cmd)
+					}
+				}
+			}
+			fmt.Println()
+		} else {
+			fmt.Println("Hooks:    (none configured)")
+			fmt.Println()
+		}
+
 		return nil
 	},
 }
