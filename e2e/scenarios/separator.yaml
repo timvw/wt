@@ -59,6 +59,7 @@ scenarios:
 
   - name: separator_empty_removes_slashes
     description: Empty separator removes slashes entirely
+    skip_os: [windows]  # PowerShell treats empty env vars as unset
     steps:
       - run: wt create feature/empty
         env:
