@@ -789,7 +789,7 @@ var checkoutCmd = &cobra.Command{
 		fmt.Printf("✓ Worktree created at: %s\n", path)
 
 		// Run post-checkout hooks (warn only)
-		runHooks("post_checkout", getHooks("post_checkout"), hookEnv)
+		_ = runHooks("post_checkout", getHooks("post_checkout"), hookEnv)
 
 		printCDMarker(path)
 		return nil
@@ -842,7 +842,7 @@ var createCmd = &cobra.Command{
 		fmt.Printf("✓ Worktree created at: %s\n", path)
 
 		// Run post-create hooks (warn only)
-		runHooks("post_create", getHooks("post_create"), hookEnv)
+		_ = runHooks("post_create", getHooks("post_create"), hookEnv)
 
 		printCDMarker(path)
 		return nil
@@ -1080,7 +1080,7 @@ func checkoutPROrMR(input string, remoteType RemoteType) error {
 
 	// Run post-pr/post-mr hooks (warn only)
 	postHookName := "post_" + hookPrefix
-	runHooks(postHookName, getHooks(postHookName), hookEnv)
+	_ = runHooks(postHookName, getHooks(postHookName), hookEnv)
 
 	printCDMarker(path)
 	return nil
@@ -1190,7 +1190,7 @@ var removeCmd = &cobra.Command{
 		fmt.Printf("✓ Removed worktree: %s\n", existingPath)
 
 		// Run post-remove hooks (warn only)
-		runHooks("post_remove", getHooks("post_remove"), hookEnv)
+		_ = runHooks("post_remove", getHooks("post_remove"), hookEnv)
 
 		// If we were in the removed worktree, navigate to main
 		if inRemovedWorktree && mainWorktreePath != "" {
