@@ -368,24 +368,55 @@ This groups all repositories for a task together:
 
 ### Example: Using environment variables in patterns
 
-You can reference any environment variable in your pattern with `{.env.VARNAME}`. This is useful for per-user paths, CI environments, or dynamic configuration:
+You can reference any environment variable in your pattern with `{.env.VARNAME}`. This lets you group worktrees by an external value such as a feature name, ticket ID, or sprint.
 
 ```toml
 # ~/.config/wt/config.toml
 strategy = "custom"
-pattern = "{.worktreeRoot}/{.env.USER}/{.repo.Name}/{.branch}"
+pattern = "{.worktreeRoot}/{.env.FEATURE}/{.repo.Name}"
 ```
 
-This produces paths like:
+Set the `FEATURE` environment variable and create worktrees across repos:
+
+```bash
+export FEATURE=PROJ-42-new-checkout
+
+cd ~/src/frontend
+wt create main        # any branch name works; layout is driven by FEATURE
+
+cd ~/src/backend
+wt create main
+```
+
+This groups all repositories for a feature together:
 
 ```
 ~/dev/worktrees/
-  alice/
-    my-repo/
-      feat/new-feature/
-  bob/
-    my-repo/
-      fix/bug-123/
+  PROJ-42-new-checkout/
+    frontend/
+    backend/
+```
+
+Switch to a different feature by changing the variable:
+
+```bash
+export FEATURE=PROJ-99-hotfix
+
+cd ~/src/frontend
+wt create main
+
+cd ~/src/backend
+wt create main
+```
+
+```
+~/dev/worktrees/
+  PROJ-42-new-checkout/
+    frontend/
+    backend/
+  PROJ-99-hotfix/
+    frontend/
+    backend/
 ```
 
 If the referenced environment variable is not set, `wt` will return an error.
