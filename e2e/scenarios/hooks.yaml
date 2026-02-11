@@ -66,3 +66,33 @@ scenarios:
         expect:
           exit_code: 0
           output_contains: "HOOK_PRE_REMOVE"
+
+  - name: copy_env_file_when_exists
+    description: Post-create hook copies .env from main to worktree when it exists
+    skip_os: [windows]
+    skip_shellenv: true
+    setup:
+      - create_file:
+          path: .env
+          content: "SECRET_KEY=abc123"
+      - git_add: .env
+      - git_commit: "add .env file"
+    steps:
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_create = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN create env-branch
+        expect:
+          exit_code: 0
+      - run: cat "$WORKTREE_ROOT/test-repo/env-branch/.env"
+        expect:
+          output_contains: "SECRET_KEY=abc123"
+
+  - name: copy_env_file_skipped_when_missing
+    description: Post-create hook silently skips when .env does not exist in main
+    skip_os: [windows]
+    skip_shellenv: true
+    steps:
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_create = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN create no-env-branch
+        expect:
+          exit_code: 0
+      - run: test -f "$WORKTREE_ROOT/test-repo/no-env-branch/.env" && echo "ENV_EXISTS" || echo "ENV_MISSING"
+        expect:
+          output_contains: "ENV_MISSING"
