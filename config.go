@@ -92,7 +92,7 @@ const defaultConfigTemplate = `# wt configuration file
 #
 # [hooks]
 # post_create = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]
-# post_checkout = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]
+# post_checkout = ["cd $WT_PATH && npm install"]
 # pre_remove = ["echo Removing $WT_PATH"]
 `
 

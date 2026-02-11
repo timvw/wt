@@ -372,7 +372,7 @@ Hooks let you run custom commands before or after `wt` operations. Define them i
 # ~/.config/wt/config.toml
 [hooks]
 post_create = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]
-post_checkout = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]
+post_checkout = ["cd $WT_PATH && npm install"]
 pre_remove = ["echo Removing worktree at $WT_PATH"]
 ```
 
