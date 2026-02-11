@@ -19,10 +19,11 @@ import (
 )
 
 var (
-	version          = "dev"
-	worktreeRoot     string
-	worktreeStrategy string
-	worktreePattern  string
+	version           = "dev"
+	worktreeRoot      string
+	worktreeStrategy  string
+	worktreePattern   string
+	worktreeSeparator string
 )
 
 func init() {
@@ -354,19 +355,30 @@ func buildWorktreePath(info repoInfo, branch string) (string, error) {
 		return "", err
 	}
 
+	sep := worktreeSeparator
+
+	// transformValue replaces "/" and "\" with the configured separator.
+	transformValue := func(s string) string {
+		return strings.ReplaceAll(strings.ReplaceAll(s, "/", sep), "\\", sep)
+	}
+
 	envMap := map[string]string{}
 	for _, e := range os.Environ() {
 		parts := strings.SplitN(e, "=", 2)
 		if len(parts) == 2 {
-			envMap[parts[0]] = parts[1]
+			envMap[parts[0]] = transformValue(parts[1])
 		}
 	}
 
 	context := map[string]any{
-		"repo":         info,
-		"branch":       branch,
-		"branchSafe":   strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(branch, "/", "-"), "\\", "-")),
-		"worktreeRoot": worktreeRoot,
+		"repo": repoInfo{
+			Main:  info.Main, // full path — NOT transformed
+			Host:  info.Host,
+			Owner: transformValue(info.Owner),
+			Name:  info.Name,
+		},
+		"branch":       strings.TrimSpace(transformValue(branch)),
+		"worktreeRoot": worktreeRoot, // full path — NOT transformed
 		"env":          envMap,
 	}
 
@@ -453,7 +465,7 @@ func resolveWorktreePattern() (string, error) {
 	case "global":
 		return "{.worktreeRoot}/{.repo.Name}/{.branch}", nil
 	case "sibling-repo", "sibling":
-		return "{.repo.Main}/../{.repo.Name}-{.branchSafe}", nil
+		return "{.repo.Main}/../{.repo.Name}-{.branch}", nil
 	case "parent-worktrees", "parent-centered":
 		return "{.repo.Main}/../{.repo.Name}.worktrees/{.branch}", nil
 	case "parent-branches", "repo-root":
@@ -1192,25 +1204,28 @@ var infoCmd = &cobra.Command{
 			configStatus = "found"
 		}
 
-		fmt.Printf(`Config:   %s (%s)
+		fmt.Printf(`Config:    %s (%s)
 
-Strategy: %s
-Pattern:  %s
-Root:     %s
+Strategy:  %s
+Pattern:   %s
+Root:      %s
+Separator: %q
 
 Strategies:
   global           -> {.worktreeRoot}/{.repo.Name}/{.branch}
-  sibling-repo     -> {.repo.Main}/../{.repo.Name}-{.branchSafe}
+  sibling-repo     -> {.repo.Main}/../{.repo.Name}-{.branch}
   parent-branches  -> {.repo.Main}/../{.branch}
   parent-worktrees -> {.repo.Main}/../{.repo.Name}.worktrees/{.branch}
   parent-dotdir    -> {.repo.Main}/../.worktrees/{.branch}
   inside-dotdir    -> {.repo.Main}/.worktrees/{.branch}
   custom           -> requires pattern setting
 
-Pattern variables: {.repo.Name}, {.repo.Main}, {.repo.Owner}, {.repo.Host}, {.branch}, {.branchSafe}, {.worktreeRoot}, {.env.VARNAME}
-Note: {.branchSafe} is sanitized for filesystem paths (slashes replaced).
+Pattern variables: {.repo.Name}, {.repo.Main}, {.repo.Owner}, {.repo.Host}, {.branch}, {.worktreeRoot}, {.env.VARNAME}
+Note: The separator setting controls how "/" and "\" in value variables are replaced.
+      Default "/" preserves slashes (nested dirs). Set to "-" or "_" for flat paths.
+      Path variables ({.repo.Main}, {.worktreeRoot}) are never transformed.
 Note: {.env.VARNAME} accesses the environment variable VARNAME (e.g. {.env.HOME}).
-`, configFilePath, configStatus, worktreeStrategy, pattern, worktreeRoot)
+`, configFilePath, configStatus, worktreeStrategy, pattern, worktreeRoot, worktreeSeparator)
 		return nil
 	},
 }
@@ -1264,6 +1279,7 @@ var configShowCmd = &cobra.Command{
 		} else {
 			fmt.Printf("  %-10s = %-40s (%s)\n", "pattern", pattern, configSources.Pattern)
 		}
+		fmt.Printf("  %-10s = %-40s (%s)\n", "separator", fmt.Sprintf("%q", worktreeSeparator), configSources.Separator)
 	},
 }
 

@@ -271,6 +271,10 @@ root = "~/projects/worktrees"
 # Worktree placement strategy
 strategy = "sibling-repo"
 
+# Separator replaces "/" and "\" in value variables ({.branch}, {.repo.Owner}, {.env.*})
+# Default "/" preserves slashes (nested dirs). Set to "-" or "_" for flat paths.
+# separator = "/"
+
 # Custom pattern (used when strategy = "custom", or to override any strategy's default)
 # pattern = "{.worktreeRoot}/{.repo.Name}/{.branch}"
 ```
@@ -280,7 +284,7 @@ strategy = "sibling-repo"
 Configuration values are resolved in this order (highest priority first):
 
 1. **CLI flags** (`--config`)
-2. **Environment variables** (`WORKTREE_ROOT`, `WORKTREE_STRATEGY`, `WORKTREE_PATTERN`)
+2. **Environment variables** (`WORKTREE_ROOT`, `WORKTREE_STRATEGY`, `WORKTREE_PATTERN`, `WORKTREE_SEPARATOR`)
 3. **Config file** (`~/.config/wt/config.toml`)
 4. **Built-in defaults**
 
@@ -295,16 +299,16 @@ Configure the location with environment variables or the config file:
 - `WORKTREE_ROOT` / `root` (default: `~/dev/worktrees`)
 - `WORKTREE_STRATEGY` / `strategy` (`global`, `sibling-repo`, `parent-branches`, `parent-worktrees`, `parent-dotdir`, `inside-dotdir`, `custom`)
 - `WORKTREE_PATTERN` / `pattern` (optional; overrides the default structure within the chosen strategy)
+- `WORKTREE_SEPARATOR` / `separator` (default: `/`; controls how `/` and `\` in value variables are replaced)
 
 Available pattern variables:
 
 - `{.repo.Name}` repo name
-- `{.repo.Main}` main branch worktree path
+- `{.repo.Main}` main branch worktree path (path variable, not transformed by separator)
 - `{.repo.Owner}` repo owner/group (from origin URL)
 - `{.repo.Host}` git host (from origin URL)
 - `{.branch}` git branch name
-- `{.branchSafe}` git branch name (sanitized for filesystem paths)
-- `{.worktreeRoot}` value of `WORKTREE_ROOT`
+- `{.worktreeRoot}` value of `WORKTREE_ROOT` (path variable, not transformed by separator)
 - `{.env.VARNAME}` value of environment variable `VARNAME` (e.g. `{.env.USER}`, `{.env.HOME}`)
 
 Default patterns per strategy:
@@ -312,18 +316,39 @@ Default patterns per strategy:
 | Strategy | Description | Default pattern |
 | --- | --- | --- |
 | `global` | worktrees under a global directory | `{.worktreeRoot}/{.repo.Name}/{.branch}` |
-| `sibling-repo` | worktrees next to the main repo directory | `{.repo.Main}/../{.repo.Name}-{.branchSafe}` |
+| `sibling-repo` | worktrees next to the main repo directory | `{.repo.Main}/../{.repo.Name}-{.branch}` |
 | `parent-branches` | branches as siblings of main | `{.repo.Main}/../{.branch}` |
 | `parent-worktrees` | branches under `<repo>.worktrees/` | `{.repo.Main}/../{.repo.Name}.worktrees/{.branch}` |
 | `parent-dotdir` | branches under `.worktrees/` next to main | `{.repo.Main}/../.worktrees/{.branch}` |
 | `inside-dotdir` | branches under `.worktrees/` inside main | `{.repo.Main}/.worktrees/{.branch}` |
 | `custom` | user-defined pattern | `WORKTREE_PATTERN` |
 
+### Separator
+
+The `separator` setting controls how `/` and `\` characters in **value variables** (`{.branch}`, `{.repo.Owner}`, `{.env.*}`) are replaced. **Path variables** (`{.repo.Main}`, `{.worktreeRoot}`) are never transformed.
+
+| Separator | Branch `feat/foo` becomes | Use case |
+| --- | --- | --- |
+| `/` (default) | `feat/foo` (nested dirs) | Standard layout |
+| `-` | `feat-foo` (flat) | Sibling-repo, flat directories |
+| `_` | `feat_foo` (flat) | Alternative flat layout |
+| `""` | `featfoo` | Compact (rarely used) |
+
+```toml
+# ~/.config/wt/config.toml
+separator = "-"   # feat/foo -> feat-foo
+```
+
+```bash
+export WORKTREE_SEPARATOR="-"
+```
+
 Customize the location via environment variables:
 
 ```bash
 export WORKTREE_ROOT="$HOME/projects/worktrees"
 export WORKTREE_STRATEGY="sibling-repo"
+export WORKTREE_SEPARATOR="-"
 export WORKTREE_PATTERN="{.repo.Main}/../{.repo.Name}/{.branch}"
 ```
 
@@ -332,6 +357,7 @@ Or via config file:
 ```toml
 root = "~/projects/worktrees"
 strategy = "sibling-repo"
+separator = "-"
 pattern = "{.repo.Main}/../{.repo.Name}/{.branch}"
 ```
 

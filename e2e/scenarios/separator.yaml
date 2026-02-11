@@ -1,0 +1,113 @@
+# E2E tests for the separator configuration
+name: separator
+description: Test WORKTREE_SEPARATOR controls how slashes in value variables are replaced
+
+scenarios:
+  - name: separator_default_preserves_slashes
+    description: Default separator "/" preserves slashes as subdirectories
+    steps:
+      - run: wt create feature/deep/branch
+        env:
+          WORKTREE_STRATEGY: global
+        expect:
+          exit_code: 0
+      - run: pwd
+        expect:
+          cwd_ends_with: /worktrees/test-repo/feature/deep/branch
+
+  - name: separator_dash
+    description: Separator "-" replaces slashes with dashes
+    steps:
+      - run: wt create feature/dash-test
+        env:
+          WORKTREE_STRATEGY: custom
+          WORKTREE_PATTERN: "{.worktreeRoot}/{.repo.Name}/{.branch}"
+          WORKTREE_SEPARATOR: "-"
+        expect:
+          exit_code: 0
+      - run: pwd
+        expect:
+          cwd_ends_with: /worktrees/test-repo/feature-dash-test
+
+  - name: separator_underscore
+    description: Separator "_" replaces slashes with underscores
+    steps:
+      - run: wt create feature/underscore-test
+        env:
+          WORKTREE_STRATEGY: custom
+          WORKTREE_PATTERN: "{.worktreeRoot}/{.repo.Name}/{.branch}"
+          WORKTREE_SEPARATOR: "_"
+        expect:
+          exit_code: 0
+      - run: pwd
+        expect:
+          cwd_ends_with: /worktrees/test-repo/feature_underscore-test
+
+  - name: separator_double_dash
+    description: Separator "--" replaces slashes with double dashes
+    steps:
+      - run: wt create feature/double
+        env:
+          WORKTREE_STRATEGY: custom
+          WORKTREE_PATTERN: "{.worktreeRoot}/{.repo.Name}/{.branch}"
+          WORKTREE_SEPARATOR: "--"
+        expect:
+          exit_code: 0
+      - run: pwd
+        expect:
+          cwd_ends_with: /worktrees/test-repo/feature--double
+
+  - name: separator_empty_removes_slashes
+    description: Empty separator removes slashes entirely
+    steps:
+      - run: wt create feature/empty
+        env:
+          WORKTREE_STRATEGY: custom
+          WORKTREE_PATTERN: "{.worktreeRoot}/{.repo.Name}/{.branch}"
+          WORKTREE_SEPARATOR: ""
+        expect:
+          exit_code: 0
+      - run: pwd
+        expect:
+          cwd_ends_with: /worktrees/test-repo/featureempty
+
+  - name: separator_with_sibling_repo
+    description: Separator works with sibling-repo strategy
+    steps:
+      - run: wt create feature/sibling-sep
+        env:
+          WORKTREE_STRATEGY: sibling-repo
+          WORKTREE_SEPARATOR: "-"
+        expect:
+          exit_code: 0
+      - run: pwd
+        expect:
+          cwd_ends_with: /test-repo-feature-sibling-sep
+
+  - name: separator_multiple_slashes
+    description: Separator replaces multiple slashes in branch name
+    steps:
+      - run: wt create a/b/c/d
+        env:
+          WORKTREE_STRATEGY: custom
+          WORKTREE_PATTERN: "{.worktreeRoot}/{.repo.Name}/{.branch}"
+          WORKTREE_SEPARATOR: "_"
+        expect:
+          exit_code: 0
+      - run: pwd
+        expect:
+          cwd_ends_with: /worktrees/test-repo/a_b_c_d
+
+  - name: separator_no_effect_without_slashes
+    description: Separator has no effect on branches without slashes
+    steps:
+      - run: wt create simple-branch
+        env:
+          WORKTREE_STRATEGY: custom
+          WORKTREE_PATTERN: "{.worktreeRoot}/{.repo.Name}/{.branch}"
+          WORKTREE_SEPARATOR: "-"
+        expect:
+          exit_code: 0
+      - run: pwd
+        expect:
+          cwd_ends_with: /worktrees/test-repo/simple-branch

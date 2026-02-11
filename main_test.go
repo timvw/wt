@@ -936,10 +936,12 @@ func TestBuildWorktreePathStrategies(t *testing.T) {
 	originalRoot := worktreeRoot
 	originalStrategy := worktreeStrategy
 	originalPattern := worktreePattern
+	originalSeparator := worktreeSeparator
 	t.Cleanup(func() {
 		worktreeRoot = originalRoot
 		worktreeStrategy = originalStrategy
 		worktreePattern = originalPattern
+		worktreeSeparator = originalSeparator
 	})
 
 	tmpDir := t.TempDir()
@@ -951,46 +953,53 @@ func TestBuildWorktreePathStrategies(t *testing.T) {
 		Name: "repo",
 	}
 	tests := []struct {
-		name     string
-		strategy string
-		branch   string
-		want     string
+		name      string
+		strategy  string
+		separator string
+		branch    string
+		want      string
 	}{
 		{
-			name:     "global",
-			strategy: "global",
-			branch:   "feature-branch",
-			want:     filepath.Join(worktreeRoot, "repo", "feature-branch"),
+			name:      "global",
+			strategy:  "global",
+			separator: "/",
+			branch:    "feature-branch",
+			want:      filepath.Join(worktreeRoot, "repo", "feature-branch"),
 		},
 		{
-			name:     "sibling-repo",
-			strategy: "sibling-repo",
-			branch:   "feature/sibling",
-			want:     filepath.Join(tmpDir, "repo-feature-sibling"),
+			name:      "sibling-repo",
+			strategy:  "sibling-repo",
+			separator: "-",
+			branch:    "feature/sibling",
+			want:      filepath.Join(tmpDir, "repo-feature-sibling"),
 		},
 		{
-			name:     "parent-worktrees",
-			strategy: "parent-worktrees",
-			branch:   "feature-branch",
-			want:     filepath.Join(tmpDir, "repo.worktrees", "feature-branch"),
+			name:      "parent-worktrees",
+			strategy:  "parent-worktrees",
+			separator: "/",
+			branch:    "feature-branch",
+			want:      filepath.Join(tmpDir, "repo.worktrees", "feature-branch"),
 		},
 		{
-			name:     "parent-branches",
-			strategy: "parent-branches",
-			branch:   "feature-branch",
-			want:     filepath.Join(tmpDir, "feature-branch"),
+			name:      "parent-branches",
+			strategy:  "parent-branches",
+			separator: "/",
+			branch:    "feature-branch",
+			want:      filepath.Join(tmpDir, "feature-branch"),
 		},
 		{
-			name:     "parent-dotdir",
-			strategy: "parent-dotdir",
-			branch:   "feature-branch",
-			want:     filepath.Join(tmpDir, ".worktrees", "feature-branch"),
+			name:      "parent-dotdir",
+			strategy:  "parent-dotdir",
+			separator: "/",
+			branch:    "feature-branch",
+			want:      filepath.Join(tmpDir, ".worktrees", "feature-branch"),
 		},
 		{
-			name:     "inside-dotdir",
-			strategy: "inside-dotdir",
-			branch:   "feature-branch",
-			want:     filepath.Join(repoRoot, ".worktrees", "feature-branch"),
+			name:      "inside-dotdir",
+			strategy:  "inside-dotdir",
+			separator: "/",
+			branch:    "feature-branch",
+			want:      filepath.Join(repoRoot, ".worktrees", "feature-branch"),
 		},
 	}
 
@@ -998,6 +1007,7 @@ func TestBuildWorktreePathStrategies(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			worktreeStrategy = tt.strategy
 			worktreePattern = ""
+			worktreeSeparator = tt.separator
 
 			path, err := buildWorktreePath(info, tt.branch)
 			if err != nil {
@@ -1041,36 +1051,92 @@ func TestBuildWorktreePathCustomPattern(t *testing.T) {
 	}
 }
 
-func TestBuildWorktreePathSanitizesBranch(t *testing.T) {
+func TestBuildWorktreePathSeparator(t *testing.T) {
 	originalRoot := worktreeRoot
 	originalStrategy := worktreeStrategy
 	originalPattern := worktreePattern
+	originalSeparator := worktreeSeparator
 	t.Cleanup(func() {
 		worktreeRoot = originalRoot
 		worktreeStrategy = originalStrategy
 		worktreePattern = originalPattern
+		worktreeSeparator = originalSeparator
 	})
 
 	tmpDir := t.TempDir()
 	worktreeRoot = filepath.Join(tmpDir, "worktrees")
 	worktreeStrategy = "custom"
-	worktreePattern = "{.worktreeRoot}/{.repo.Name}/{.branchSafe}"
+	worktreePattern = "{.worktreeRoot}/{.repo.Name}/{.branch}"
 
 	info := repoInfo{
 		Main: filepath.Join(tmpDir, "repo"),
 		Name: "repo",
 	}
 
-	branch := "feature/with/slash"
-	wantBranch := "feature-with-slash"
-	path, err := buildWorktreePath(info, branch)
-	if err != nil {
-		t.Fatalf("buildWorktreePath() unexpected error: %v", err)
+	tests := []struct {
+		name       string
+		separator  string
+		branch     string
+		wantBranch string
+	}{
+		{
+			name:       "Default separator preserves slashes",
+			separator:  "/",
+			branch:     "feat/foo",
+			wantBranch: "feat/foo",
+		},
+		{
+			name:       "Dash separator",
+			separator:  "-",
+			branch:     "feat/foo",
+			wantBranch: "feat-foo",
+		},
+		{
+			name:       "Underscore separator",
+			separator:  "_",
+			branch:     "feat/foo",
+			wantBranch: "feat_foo",
+		},
+		{
+			name:       "Double dash separator",
+			separator:  "--",
+			branch:     "feat/foo",
+			wantBranch: "feat--foo",
+		},
+		{
+			name:       "Empty separator",
+			separator:  "",
+			branch:     "feat/foo",
+			wantBranch: "featfoo",
+		},
+		{
+			name:       "Multiple slashes with underscore",
+			separator:  "_",
+			branch:     "feat/sub/thing",
+			wantBranch: "feat_sub_thing",
+		},
+		{
+			name:       "Backslash with underscore separator",
+			separator:  "_",
+			branch:     "feat\\bar",
+			wantBranch: "feat_bar",
+		},
 	}
 
-	expectedPath := filepath.Join(worktreeRoot, "repo", wantBranch)
-	if path != expectedPath {
-		t.Fatalf("buildWorktreePath() = %s, want %s", path, expectedPath)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			worktreeSeparator = tt.separator
+
+			path, err := buildWorktreePath(info, tt.branch)
+			if err != nil {
+				t.Fatalf("buildWorktreePath() unexpected error: %v", err)
+			}
+
+			expectedPath := filepath.Join(worktreeRoot, "repo", tt.wantBranch)
+			if path != expectedPath {
+				t.Fatalf("buildWorktreePath() = %s, want %s", path, expectedPath)
+			}
+		})
 	}
 }
 

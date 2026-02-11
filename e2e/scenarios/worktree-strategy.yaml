@@ -21,6 +21,7 @@ scenarios:
       - run: wt create feature/sibling
         env:
           WORKTREE_STRATEGY: sibling-repo
+          WORKTREE_SEPARATOR: "-"
         expect:
           exit_code: 0
       - run: pwd
@@ -100,12 +101,13 @@ scenarios:
           exit_code: 1
 
   - name: strategy_branch_sanitized
-    description: Branch names are sanitized when using branchSafe
+    description: Separator replaces slashes in branch names
     steps:
       - run: wt create feature/sanitized
         env:
           WORKTREE_STRATEGY: custom
-          WORKTREE_PATTERN: "{.worktreeRoot}/{.repo.Name}/{.branchSafe}"
+          WORKTREE_PATTERN: "{.worktreeRoot}/{.repo.Name}/{.branch}"
+          WORKTREE_SEPARATOR: "-"
         expect:
           exit_code: 0
       - run: pwd
@@ -158,7 +160,8 @@ scenarios:
         env:
           WORKTREE_ROOT: worktrees
           WORKTREE_STRATEGY: custom
-          WORKTREE_PATTERN: "{.repo.Main}/../{.worktreeRoot}/custom/{.repo.Host}/{.repo.Owner}/{.repo.Name}/{.branchSafe}"
+          WORKTREE_PATTERN: "{.repo.Main}/../{.worktreeRoot}/custom/{.repo.Host}/{.repo.Owner}/{.repo.Name}/{.branch}"
+          WORKTREE_SEPARATOR: "-"
         expect:
           exit_code: 0
       - run: pwd
@@ -192,6 +195,7 @@ scenarios:
       - run: wt checkout checkout-sibling-branch
         env:
           WORKTREE_STRATEGY: sibling-repo
+          WORKTREE_SEPARATOR: "-"
         expect:
           exit_code: 0
       - run: pwd
@@ -206,6 +210,7 @@ scenarios:
       - run: wt checkout remove-sibling-branch
         env:
           WORKTREE_STRATEGY: sibling-repo
+          WORKTREE_SEPARATOR: "-"
         expect:
           exit_code: 0
       - cd: $REPO_DIR

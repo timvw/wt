@@ -10,7 +10,7 @@ scenarios:
       - run: $WT_BIN info
         expect:
           exit_code: 0
-          output_contains: "Strategy: global"
+          output_contains: "Strategy:  global"
       - run: $WT_BIN info
         expect:
           output_contains: "Pattern variables:"
@@ -24,4 +24,4 @@ scenarios:
           WORKTREE_STRATEGY: sibling-repo
         expect:
           exit_code: 0
-          output_contains: "Strategy: sibling-repo"
+          output_contains: "Strategy:  sibling-repo"

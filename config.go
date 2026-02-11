@@ -12,16 +12,18 @@ import (
 
 // Config represents the wt configuration file structure.
 type Config struct {
-	Root     string `toml:"root"`
-	Strategy string `toml:"strategy"`
-	Pattern  string `toml:"pattern"`
+	Root      string `toml:"root"`
+	Strategy  string `toml:"strategy"`
+	Pattern   string `toml:"pattern"`
+	Separator string `toml:"separator"`
 }
 
 // configSource tracks where each config value came from.
 type configSource struct {
-	Root     string
-	Strategy string
-	Pattern  string
+	Root      string
+	Strategy  string
+	Pattern   string
+	Separator string
 }
 
 // configFilePath is the resolved path to the config file (set during loading).
@@ -50,9 +52,15 @@ const defaultConfigTemplate = `# wt configuration file
 
 # Custom pattern (used when strategy = "custom", or to override any strategy's default)
 # Available variables: {.worktreeRoot}, {.repo.Name}, {.repo.Main},
-#                      {.repo.Owner}, {.repo.Host}, {.branch}, {.branchSafe},
+#                      {.repo.Owner}, {.repo.Host}, {.branch},
 #                      {.env.VARNAME} (access environment variables, e.g. {.env.USER})
 # pattern = "{.worktreeRoot}/{.repo.Name}/{.branch}"
+
+# Separator replaces "/" and "\" in template value variables ({.branch}, {.repo.Owner}, {.env.*})
+# Default is "/" (no transformation — slashes create subdirectories).
+# Set to "-" or "_" for flat paths (e.g. feat/foo -> feat-foo).
+# Does NOT affect path variables ({.repo.Main}, {.worktreeRoot}).
+# separator = "/"
 
 # Example: group worktrees by a FEATURE environment variable
 # strategy = "custom"
@@ -95,11 +103,13 @@ func loadWorktreeConfig() {
 	worktreeRoot = defaultRoot
 	worktreeStrategy = "global"
 	worktreePattern = ""
+	worktreeSeparator = "/"
 
 	configSources = configSource{
-		Root:     "default",
-		Strategy: "default",
-		Pattern:  "default",
+		Root:      "default",
+		Strategy:  "default",
+		Pattern:   "default",
+		Separator: "default",
 	}
 
 	// 2. Load config file
@@ -122,6 +132,10 @@ func loadWorktreeConfig() {
 				worktreePattern = strings.TrimSpace(cfg.Pattern)
 				configSources.Pattern = "config file"
 			}
+			if cfg.Separator != "" {
+				worktreeSeparator = cfg.Separator
+				configSources.Separator = "config file"
+			}
 		}
 	}
 
@@ -137,6 +151,10 @@ func loadWorktreeConfig() {
 	if v := os.Getenv("WORKTREE_PATTERN"); v != "" {
 		worktreePattern = strings.TrimSpace(v)
 		configSources.Pattern = "env: WORKTREE_PATTERN"
+	}
+	if v, ok := os.LookupEnv("WORKTREE_SEPARATOR"); ok {
+		worktreeSeparator = v
+		configSources.Separator = "env: WORKTREE_SEPARATOR"
 	}
 }
 
