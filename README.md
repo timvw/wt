@@ -105,7 +105,7 @@ After running `wt init`, restart your shell or run:
 
 ```bash
 source ~/.bashrc   # for bash
-source ~/.zshrc    # for zsh
+source "${ZDOTDIR:-$HOME}/.zshrc"    # for zsh
 ```
 
 Shell integration enables:

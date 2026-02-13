@@ -97,6 +97,11 @@ func TestGetShellConfigPath(t *testing.T) {
 		t.Fatalf("Failed to get home dir: %v", err)
 	}
 
+	// Ensure tests are stable even when the developer machine has ZDOTDIR set.
+	origZdotdir := os.Getenv("ZDOTDIR")
+	os.Setenv("ZDOTDIR", "")
+	t.Cleanup(func() { os.Setenv("ZDOTDIR", origZdotdir) })
+
 	tests := []struct {
 		name  string
 		shell string
@@ -116,6 +121,25 @@ func TestGetShellConfigPath(t *testing.T) {
 				t.Errorf("getShellConfigPath(%q) = %q, want %q", tt.shell, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestGetShellConfigPathZshRespectsZdotdir(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("Failed to get home dir: %v", err)
+	}
+
+	orig := os.Getenv("ZDOTDIR")
+	t.Cleanup(func() { os.Setenv("ZDOTDIR", orig) })
+
+	zdotdir := filepath.Join(home, ".config", "zsh")
+	os.Setenv("ZDOTDIR", zdotdir)
+
+	got := getShellConfigPath("zsh")
+	want := filepath.Join(zdotdir, ".zshrc")
+	if got != want {
+		t.Fatalf("getShellConfigPath(%q) = %q, want %q", "zsh", got, want)
 	}
 }
 

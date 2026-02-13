@@ -32,7 +32,7 @@ var initCmd = &cobra.Command{
 
 Automatically detects your shell and updates the appropriate config file:
   - bash: ~/.bashrc
-  - zsh:  ~/.zshrc
+  - zsh:  ~/.zshrc (or $ZDOTDIR/.zshrc if ZDOTDIR is set)
   - powershell: $PROFILE (Windows only)
 
 The configuration is wrapped in markers so it can be safely updated or removed.
@@ -135,6 +135,14 @@ func getShellConfigPath(shell string) string {
 		}
 		return bashrc
 	case "zsh":
+		// Respect ZDOTDIR if set: zsh reads its startup files from $ZDOTDIR (default: $HOME).
+		// This avoids writing to the wrong (potentially unused or broken) ~/.zshrc.
+		if zdotdir := strings.TrimSpace(os.Getenv("ZDOTDIR")); zdotdir != "" {
+			if !filepath.IsAbs(zdotdir) {
+				zdotdir = filepath.Join(home, zdotdir)
+			}
+			return filepath.Join(filepath.Clean(zdotdir), ".zshrc")
+		}
 		return filepath.Join(home, ".zshrc")
 	case "powershell":
 		// Check $PROFILE env var first (works for both Windows PowerShell 5.1 and PowerShell Core)
@@ -258,9 +266,9 @@ func installShellConfig(configPath, shell string, dryRun, noPrompt bool) error {
 		fmt.Println("To activate, run:")
 		switch shell {
 		case "bash":
-			fmt.Println("  source ~/.bashrc")
+			fmt.Printf("  source %s\n", configPath)
 		case "zsh":
-			fmt.Println("  source ~/.zshrc")
+			fmt.Printf("  source %s\n", configPath)
 		case "powershell":
 			fmt.Println("  . $PROFILE")
 		}
