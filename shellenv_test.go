@@ -108,3 +108,24 @@ func TestShellenvZshCompdefError(t *testing.T) {
 		t.Log("Warning: Shell function should be defined even when compdef is not available")
 	}
 }
+
+// TestShellenvBypassesWrapperForShellenv ensures `wt shellenv` itself does not
+// go through the PTY/script wrapper. If it does, process substitution like
+// `source <(wt shellenv)` can include CR bytes and break zsh parsing when a
+// session re-sources shellenv.
+func TestShellenvBypassesWrapperForShellenv(t *testing.T) {
+	cmd := exec.Command("go", "run", ".", "shellenv")
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("Failed to run wt shellenv: %v", err)
+	}
+	shellenv := string(output)
+
+	if !strings.Contains(shellenv, `if [ "$1" = "shellenv" ]; then`) {
+		t.Fatal("shellenv wrapper must bypass PTY handling for 'wt shellenv'")
+	}
+
+	if !strings.Contains(shellenv, `command wt "$@"`) {
+		t.Fatal("shellenv bypass must call binary directly using 'command wt \"$@\"'")
+	}
+}

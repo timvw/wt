@@ -1547,6 +1547,13 @@ Register-ArgumentCompleter -CommandName wt -ScriptBlock {
 
 		// Bash/Zsh integration for Unix systems
 		fmt.Print(`wt() {
+    # Avoid wrapping shellenv generation itself through script(1)
+    # to prevent control characters in process substitution output.
+    if [ "$1" = "shellenv" ]; then
+        command wt "$@"
+        return $?
+    fi
+
     # Use script(1) to provide a PTY for interactive commands (e.g., promptui menus)
     # Command substitution $(command wt) doesn't allocate a TTY, which breaks interactive prompts
     local log_file exit_code cd_path
