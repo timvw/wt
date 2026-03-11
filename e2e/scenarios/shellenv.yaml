@@ -69,3 +69,16 @@ scenarios:
         expect:
           exit_code: 0
           output_contains: "feature-branch"
+
+  - name: shellenv_includes_json_guard
+    description: shellenv wrapper detects --format json and skips auto-cd
+    skip_shellenv: true
+    skip_shells: [powershell, pwsh]
+    steps:
+      - run: $WT_BIN shellenv
+        expect:
+          exit_code: 0
+          output_contains: "--format=json"
+      - run: $WT_BIN shellenv
+        expect:
+          output_contains: "--format json"

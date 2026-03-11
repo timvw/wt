@@ -1,0 +1,63 @@
+# E2E tests for global --format json behavior
+name: format-json
+description: Test JSON format output and no-auto-navigation behavior
+
+scenarios:
+  - name: version_json
+    description: version command returns JSON envelope
+    skip_shellenv: true
+    steps:
+      - run: $WT_BIN --format json version
+        expect:
+          exit_code: 0
+          output_contains: '"ok":true'
+      - run: $WT_BIN --format json version
+        expect:
+          output_contains: '"version"'
+
+  - name: list_json
+    description: list command returns structured JSON worktrees
+    skip_shellenv: true
+    steps:
+      - run: $WT_BIN --format json list
+        expect:
+          exit_code: 0
+          output_contains: '"worktrees"'
+
+  - name: create_json_no_navigation_marker
+    description: create command JSON omits navigation marker from stdout
+    skip_shellenv: true
+    steps:
+      - run: $WT_BIN --format json create feature-json
+        expect:
+          exit_code: 0
+          output_contains: '"navigate_to"'
+      - run: $WT_BIN --format json create feature-json
+        expect:
+          output_not_contains: "wt navigating to:"
+
+  - name: remove_json_requires_argument
+    description: remove command in json mode requires explicit branch argument
+    skip_shellenv: true
+    steps:
+      - run: $WT_BIN --format json remove
+        expect:
+          exit_code: 1
+          output_contains: "requires an explicit branch argument"
+
+  - name: cleanup_json_requires_force_or_dry_run
+    description: cleanup in json mode requires --force or --dry-run
+    skip_shellenv: true
+    setup:
+      - create_branch: merged-feature
+    steps:
+      - run: git merge --ff-only merged-feature
+        expect:
+          exit_code: 0
+      - run: $WT_BIN checkout merged-feature
+        expect:
+          exit_code: 0
+      - run: $WT_BIN --format json cleanup
+        expect:
+          exit_code: 1
+          output_contains: "requires --force or --dry-run"

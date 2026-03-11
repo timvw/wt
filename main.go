@@ -33,21 +33,32 @@ func init() {
 
 func main() {
 	// Re-load config after cobra parses flags so --config is available
-	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		if err := validateOutputFormat(); err != nil {
+			return err
+		}
 		if configFlag != "" {
 			loadWorktreeConfig()
 			rootCmd.Long = buildRootCmdLong()
 		}
+		return nil
 	}
 	if err := rootCmd.Execute(); err != nil {
+		if isJSONOutput() {
+			_ = emitJSONError(rootCmd, err)
+		} else {
+			fmt.Fprintln(os.Stderr, err)
+		}
 		os.Exit(1)
 	}
 }
 
 var rootCmd = &cobra.Command{
-	Use:   "wt",
-	Short: "Git worktree helper with organized directory structure",
-	Long:  "",
+	Use:           "wt",
+	Short:         "Git worktree helper with organized directory structure",
+	Long:          "",
+	SilenceErrors: true,
+	SilenceUsage:  true,
 	Run: func(cmd *cobra.Command, args []string) {
 		_ = cmd.Help()
 	},
@@ -55,6 +66,7 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&configFlag, "config", "", "Path to config file (default: ~/.config/wt/config.toml)")
+	rootCmd.PersistentFlags().StringVar(&outputFormat, "format", formatText, "Output format: text or json")
 	rootCmd.AddCommand(checkoutCmd)
 	rootCmd.AddCommand(createCmd)
 	rootCmd.AddCommand(prCmd)
@@ -69,6 +81,7 @@ func init() {
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(infoCmd)
 	rootCmd.AddCommand(configCmd)
+	rootCmd.AddCommand(examplesCmd)
 	removeCmd.Flags().BoolVarP(&removeForce, "force", "f", false, "Force removal even if worktree has modifications")
 	cleanupCmd.Flags().BoolVar(&cleanupDryRun, "dry-run", false, "Preview what would be removed without making changes")
 	cleanupCmd.Flags().BoolVarP(&cleanupForce, "force", "f", false, "Remove all merged worktrees without confirmation")
@@ -508,7 +521,69 @@ func isDirEmpty(path string) (bool, error) {
 }
 
 func printCDMarker(path string) {
+	if isJSONOutput() {
+		return
+	}
 	fmt.Printf("wt navigating to: %s\n", path)
+}
+
+type worktreeListEntry struct {
+	Path     string `json:"path"`
+	HEAD     string `json:"head,omitempty"`
+	Branch   string `json:"branch,omitempty"`
+	Bare     bool   `json:"bare,omitempty"`
+	Detached bool   `json:"detached,omitempty"`
+	Locked   string `json:"locked,omitempty"`
+	Prunable string `json:"prunable,omitempty"`
+}
+
+func getWorktreeListPorcelain() ([]worktreeListEntry, error) {
+	cmd := exec.Command("git", "worktree", "list", "--porcelain")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	entries := make([]worktreeListEntry, 0)
+	current := worktreeListEntry{}
+
+	for _, rawLine := range strings.Split(string(output), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			if current.Path != "" {
+				entries = append(entries, current)
+				current = worktreeListEntry{}
+			}
+			continue
+		}
+
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			if current.Path != "" {
+				entries = append(entries, current)
+			}
+			current = worktreeListEntry{Path: strings.TrimPrefix(line, "worktree ")}
+		case strings.HasPrefix(line, "HEAD "):
+			current.HEAD = strings.TrimPrefix(line, "HEAD ")
+		case strings.HasPrefix(line, "branch "):
+			branch := strings.TrimPrefix(line, "branch ")
+			current.Branch = strings.TrimPrefix(branch, "refs/heads/")
+		case line == "bare":
+			current.Bare = true
+		case line == "detached":
+			current.Detached = true
+		case strings.HasPrefix(line, "locked"):
+			current.Locked = strings.TrimSpace(strings.TrimPrefix(line, "locked"))
+		case strings.HasPrefix(line, "prunable"):
+			current.Prunable = strings.TrimSpace(strings.TrimPrefix(line, "prunable"))
+		}
+	}
+
+	if current.Path != "" {
+		entries = append(entries, current)
+	}
+
+	return entries, nil
 }
 
 func getAvailableBranches() ([]string, error) {
@@ -715,8 +790,13 @@ func runHooks(hookName string, hookCommands []string, env map[string]string) err
 			cmd = exec.Command("sh", "-c", cmdStr)
 		}
 		cmd.Env = environ
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		if isJSONOutput() {
+			cmd.Stdout = os.Stderr
+			cmd.Stderr = os.Stderr
+		} else {
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+		}
 
 		if err := cmd.Run(); err != nil {
 			if isPre {
@@ -740,6 +820,9 @@ var checkoutCmd = &cobra.Command{
 
 		// Interactive selection if no branch provided
 		if len(args) == 0 {
+			if isJSONOutput() {
+				return fmt.Errorf("wt checkout with --format json requires an explicit branch argument")
+			}
 			branches, err := getAvailableBranches()
 			if err != nil {
 				return fmt.Errorf("failed to get branches: %w", err)
@@ -767,6 +850,14 @@ var checkoutCmd = &cobra.Command{
 
 		// Check if worktree already exists
 		if existingPath, exists := worktreeExists(branch); exists {
+			if isJSONOutput() {
+				return emitJSONSuccess(cmd, map[string]any{
+					"status":      "exists",
+					"branch":      branch,
+					"path":        existingPath,
+					"navigate_to": existingPath,
+				})
+			}
 			fmt.Printf("✓ Worktree already exists: %s\n", existingPath)
 			printCDMarker(existingPath)
 			return nil
@@ -791,16 +882,27 @@ var checkoutCmd = &cobra.Command{
 
 		// Create worktree
 		gitCmd := exec.Command("git", "worktree", "add", path, branch)
-		gitCmd.Stdout = os.Stdout
-		gitCmd.Stderr = os.Stderr
+		if !isJSONOutput() {
+			gitCmd.Stdout = os.Stdout
+			gitCmd.Stderr = os.Stderr
+		}
 		if err := gitCmd.Run(); err != nil {
 			return fmt.Errorf("failed to create worktree: %w", err)
 		}
 
-		fmt.Printf("✓ Worktree created at: %s\n", path)
-
 		// Run post-checkout hooks (warn only)
 		_ = runHooks("post_checkout", getHooks("post_checkout"), hookEnv)
+
+		if isJSONOutput() {
+			return emitJSONSuccess(cmd, map[string]any{
+				"status":      "created",
+				"branch":      branch,
+				"path":        path,
+				"navigate_to": path,
+			})
+		}
+
+		fmt.Printf("✓ Worktree created at: %s\n", path)
 
 		printCDMarker(path)
 		return nil
@@ -825,6 +927,15 @@ var createCmd = &cobra.Command{
 
 		// Check if worktree already exists
 		if existingPath, exists := worktreeExists(branch); exists {
+			if isJSONOutput() {
+				return emitJSONSuccess(cmd, map[string]any{
+					"status":      "exists",
+					"branch":      branch,
+					"base":        base,
+					"path":        existingPath,
+					"navigate_to": existingPath,
+				})
+			}
 			fmt.Printf("✓ Worktree already exists: %s\n", existingPath)
 			printCDMarker(existingPath)
 			return nil
@@ -844,16 +955,28 @@ var createCmd = &cobra.Command{
 
 		// Create new branch and worktree
 		gitCmd := exec.Command("git", "worktree", "add", path, "-b", branch, base)
-		gitCmd.Stdout = os.Stdout
-		gitCmd.Stderr = os.Stderr
+		if !isJSONOutput() {
+			gitCmd.Stdout = os.Stdout
+			gitCmd.Stderr = os.Stderr
+		}
 		if err := gitCmd.Run(); err != nil {
 			return fmt.Errorf("failed to create worktree: %w", err)
 		}
 
-		fmt.Printf("✓ Worktree created at: %s\n", path)
-
 		// Run post-create hooks (warn only)
 		_ = runHooks("post_create", getHooks("post_create"), hookEnv)
+
+		if isJSONOutput() {
+			return emitJSONSuccess(cmd, map[string]any{
+				"status":      "created",
+				"branch":      branch,
+				"base":        base,
+				"path":        path,
+				"navigate_to": path,
+			})
+		}
+
+		fmt.Printf("✓ Worktree created at: %s\n", path)
 
 		printCDMarker(path)
 		return nil
@@ -879,6 +1002,9 @@ Examples:
 
 		// Interactive selection if no PR provided
 		if len(args) == 0 {
+			if isJSONOutput() {
+				return fmt.Errorf("wt pr with --format json requires an explicit PR number or URL")
+			}
 			numbers, labels, err := getOpenPRs()
 			if err != nil {
 				return fmt.Errorf("failed to get PRs: %w (is 'gh' CLI installed?)", err)
@@ -900,7 +1026,7 @@ Examples:
 			input = args[0]
 		}
 
-		return checkoutPROrMR(input, RemoteGitHub)
+		return checkoutPROrMR(cmd, input, RemoteGitHub)
 	},
 }
 
@@ -923,6 +1049,9 @@ Examples:
 
 		// Interactive selection if no MR provided
 		if len(args) == 0 {
+			if isJSONOutput() {
+				return fmt.Errorf("wt mr with --format json requires an explicit MR number or URL")
+			}
 			numbers, labels, err := getOpenMRs()
 			if err != nil {
 				return fmt.Errorf("failed to get MRs: %w (is 'glab' CLI installed?)", err)
@@ -944,7 +1073,7 @@ Examples:
 			input = args[0]
 		}
 
-		return checkoutPROrMR(input, RemoteGitLab)
+		return checkoutPROrMR(cmd, input, RemoteGitLab)
 	},
 }
 
@@ -998,7 +1127,8 @@ func getPRBranchName(prNumber string, remoteType RemoteType) (string, error) {
 	}
 }
 
-func checkoutPROrMR(input string, remoteType RemoteType) error {
+func checkoutPROrMR(cmd *cobra.Command, input string, remoteType RemoteType) error {
+	jsonMode := isJSONOutput()
 	prNumber, err := getPRNumber(input)
 	if err != nil {
 		return err
@@ -1036,6 +1166,16 @@ func checkoutPROrMR(input string, remoteType RemoteType) error {
 
 	// Check if worktree already exists for this branch
 	if existingPath, exists := worktreeExists(branch); exists {
+		if jsonMode {
+			return emitJSONSuccess(cmd, map[string]any{
+				"status":      "exists",
+				"id":          prNumber,
+				"kind":        prefix,
+				"branch":      branch,
+				"path":        existingPath,
+				"navigate_to": existingPath,
+			})
+		}
 		fmt.Printf("✓ Worktree already exists: %s\n", existingPath)
 		printCDMarker(existingPath)
 		return nil
@@ -1076,8 +1216,10 @@ func checkoutPROrMR(input string, remoteType RemoteType) error {
 	} else {
 		gitCmd = exec.Command("git", "worktree", "add", path, "-b", branch, fmt.Sprintf("origin/%s", branch))
 	}
-	gitCmd.Stdout = os.Stdout
-	gitCmd.Stderr = os.Stderr
+	if !jsonMode {
+		gitCmd.Stdout = os.Stdout
+		gitCmd.Stderr = os.Stderr
+	}
 	if err := gitCmd.Run(); err != nil {
 		return fmt.Errorf("failed to create worktree: %w", err)
 	}
@@ -1087,11 +1229,22 @@ func checkoutPROrMR(input string, remoteType RemoteType) error {
 		fmt.Sprintf("origin/%s", branch), branch)
 	_ = upstreamCmd.Run()
 
-	fmt.Printf("✓ %s #%s (%s) checked out at: %s\n", strings.ToUpper(prefix), prNumber, branch, path)
-
 	// Run post-pr/post-mr hooks (warn only)
 	postHookName := "post_" + hookPrefix
 	_ = runHooks(postHookName, getHooks(postHookName), hookEnv)
+
+	if jsonMode {
+		return emitJSONSuccess(cmd, map[string]any{
+			"status":      "created",
+			"id":          prNumber,
+			"kind":        prefix,
+			"branch":      branch,
+			"path":        path,
+			"navigate_to": path,
+		})
+	}
+
+	fmt.Printf("✓ %s #%s (%s) checked out at: %s\n", strings.ToUpper(prefix), prNumber, branch, path)
 
 	printCDMarker(path)
 	return nil
@@ -1101,11 +1254,22 @@ var listCmd = &cobra.Command{
 	Use:     "list",
 	Aliases: []string{"ls"},
 	Short:   "List all worktrees",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if isJSONOutput() {
+			entries, err := getWorktreeListPorcelain()
+			if err != nil {
+				return err
+			}
+			return emitJSONSuccess(cmd, map[string]any{"worktrees": entries})
+		}
+
 		gitCmd := exec.Command("git", "worktree", "list")
 		gitCmd.Stdout = os.Stdout
 		gitCmd.Stderr = os.Stderr
-		_ = gitCmd.Run()
+		if err := gitCmd.Run(); err != nil {
+			return err
+		}
+		return nil
 	},
 }
 
@@ -1123,9 +1287,13 @@ var removeCmd = &cobra.Command{
 	Args:    cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var branch string
+		jsonMode := isJSONOutput()
 
 		// Interactive selection if no branch provided
 		if len(args) == 0 {
+			if jsonMode {
+				return fmt.Errorf("wt remove with --format json requires an explicit branch argument")
+			}
 			branches, err := getExistingWorktreeBranches()
 			if err != nil {
 				return fmt.Errorf("failed to get worktrees: %w", err)
@@ -1189,8 +1357,10 @@ var removeCmd = &cobra.Command{
 		gitArgs = append(gitArgs, existingPath)
 
 		gitCmd := exec.Command("git", gitArgs...)
-		gitCmd.Stdout = os.Stdout
-		gitCmd.Stderr = os.Stderr
+		if !jsonMode {
+			gitCmd.Stdout = os.Stdout
+			gitCmd.Stderr = os.Stderr
+		}
 		if err := gitCmd.Run(); err != nil {
 			return fmt.Errorf("failed to remove worktree: %w", err)
 		}
@@ -1199,10 +1369,19 @@ var removeCmd = &cobra.Command{
 			return err
 		}
 
-		fmt.Printf("✓ Removed worktree: %s\n", existingPath)
-
 		// Run post-remove hooks (warn only)
 		_ = runHooks("post_remove", getHooks("post_remove"), hookEnv)
+
+		if jsonMode {
+			return emitJSONSuccess(cmd, map[string]any{
+				"status":      "removed",
+				"branch":      branch,
+				"path":        existingPath,
+				"navigate_to": mainWorktreePath,
+			})
+		}
+
+		fmt.Printf("✓ Removed worktree: %s\n", existingPath)
 
 		// If we were in the removed worktree, navigate to main
 		if inRemovedWorktree && mainWorktreePath != "" {
@@ -1227,6 +1406,7 @@ Examples:
   wt cleanup --force      # Remove all without confirmation`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		base := getDefaultBase()
+		jsonMode := isJSONOutput()
 
 		// Get merged branches
 		mergedBranches, err := getMergedBranches(base)
@@ -1255,12 +1435,28 @@ Examples:
 		}
 
 		if len(toRemove) == 0 {
+			if jsonMode {
+				return emitJSONSuccess(cmd, map[string]any{"removed": 0, "skipped": 0, "base": base, "worktrees": []string{}})
+			}
 			fmt.Println("No worktrees found for merged branches")
 			return nil
 		}
 
+		if jsonMode && !cleanupDryRun && !cleanupForce {
+			return fmt.Errorf("wt cleanup with --format json requires --force or --dry-run")
+		}
+
 		// Dry run mode - just show what would be removed
 		if cleanupDryRun {
+			if jsonMode {
+				planned := make([]map[string]string, 0, len(toRemove))
+				for _, branch := range toRemove {
+					if path, exists := worktreeExists(branch); exists {
+						planned = append(planned, map[string]string{"branch": branch, "path": path})
+					}
+				}
+				return emitJSONSuccess(cmd, map[string]any{"dry_run": true, "base": base, "worktrees": planned})
+			}
 			fmt.Printf("Would remove %d worktree(s) for merged branches:\n", len(toRemove))
 			for _, branch := range toRemove {
 				if path, exists := worktreeExists(branch); exists {
@@ -1296,24 +1492,39 @@ Examples:
 
 			// Remove the worktree
 			gitCmd := exec.Command("git", "worktree", "remove", existingPath)
-			gitCmd.Stdout = os.Stdout
-			gitCmd.Stderr = os.Stderr
+			if !jsonMode {
+				gitCmd.Stdout = os.Stdout
+				gitCmd.Stderr = os.Stderr
+			}
 			if err := gitCmd.Run(); err != nil {
+				if jsonMode {
+					skipped++
+					continue
+				}
 				fmt.Printf("  Failed to remove %s: %v\n", branch, err)
 				continue
 			}
 
 			if err := cleanupWorktreePath(existingPath); err != nil {
+				if jsonMode {
+					continue
+				}
 				fmt.Printf("  Warning: failed to cleanup path for %s: %v\n", branch, err)
 			}
 
-			fmt.Printf("✓ Removed worktree: %s\n", branch)
+			if !jsonMode {
+				fmt.Printf("✓ Removed worktree: %s\n", branch)
+			}
 			removed++
 		}
 
 		// Run prune at the end
 		pruneGitCmd := exec.Command("git", "worktree", "prune")
 		_ = pruneGitCmd.Run()
+
+		if jsonMode {
+			return emitJSONSuccess(cmd, map[string]any{"dry_run": false, "base": base, "removed": removed, "skipped": skipped})
+		}
 
 		fmt.Printf("\nCleanup complete: %d removed, %d skipped\n", removed, skipped)
 		return nil
@@ -1323,13 +1534,22 @@ Examples:
 var pruneCmd = &cobra.Command{
 	Use:   "prune",
 	Short: "Remove worktree administrative files",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		gitCmd := exec.Command("git", "worktree", "prune")
-		gitCmd.Stdout = os.Stdout
-		gitCmd.Stderr = os.Stderr
-		if err := gitCmd.Run(); err == nil {
-			fmt.Println("✓ Pruned stale worktree administrative files")
+		if !isJSONOutput() {
+			gitCmd.Stdout = os.Stdout
+			gitCmd.Stderr = os.Stderr
 		}
+		if err := gitCmd.Run(); err != nil {
+			return err
+		}
+
+		if isJSONOutput() {
+			return emitJSONSuccess(cmd, map[string]any{"status": "pruned"})
+		}
+
+		fmt.Println("✓ Pruned stale worktree administrative files")
+		return nil
 	},
 }
 
@@ -1337,6 +1557,7 @@ var infoCmd = &cobra.Command{
 	Use:   "info",
 	Short: "Show worktree location configuration",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		jsonMode := isJSONOutput()
 		pattern, err := resolveWorktreePattern()
 		if err != nil {
 			pattern = worktreePattern
@@ -1348,6 +1569,43 @@ var infoCmd = &cobra.Command{
 		configStatus := "not found, using defaults"
 		if configFileFound {
 			configStatus = "found"
+		}
+
+		hooks := map[string][]string{
+			"pre_create":    worktreeHooks.PreCreate,
+			"post_create":   worktreeHooks.PostCreate,
+			"pre_checkout":  worktreeHooks.PreCheckout,
+			"post_checkout": worktreeHooks.PostCheckout,
+			"pre_remove":    worktreeHooks.PreRemove,
+			"post_remove":   worktreeHooks.PostRemove,
+			"pre_pr":        worktreeHooks.PrePR,
+			"post_pr":       worktreeHooks.PostPR,
+			"pre_mr":        worktreeHooks.PreMR,
+			"post_mr":       worktreeHooks.PostMR,
+		}
+
+		if jsonMode {
+			return emitJSONSuccess(cmd, map[string]any{
+				"config": map[string]string{
+					"path":      configFilePath,
+					"status":    configStatus,
+					"strategy":  worktreeStrategy,
+					"pattern":   pattern,
+					"root":      worktreeRoot,
+					"separator": worktreeSeparator,
+				},
+				"strategies": []map[string]string{
+					{"name": "global", "pattern": "{.worktreeRoot}/{.repo.Name}/{.branch}"},
+					{"name": "sibling-repo", "pattern": "{.repo.Main}/../{.repo.Name}-{.branch}"},
+					{"name": "parent-branches", "pattern": "{.repo.Main}/../{.branch}"},
+					{"name": "parent-worktrees", "pattern": "{.repo.Main}/../{.repo.Name}.worktrees/{.branch}"},
+					{"name": "parent-dotdir", "pattern": "{.repo.Main}/../.worktrees/{.branch}"},
+					{"name": "inside-dotdir", "pattern": "{.repo.Main}/.worktrees/{.branch}"},
+					{"name": "custom", "pattern": "requires pattern setting"},
+				},
+				"pattern_variables": []string{"{.repo.Name}", "{.repo.Main}", "{.repo.Owner}", "{.repo.Host}", "{.branch}", "{.worktreeRoot}", "{.env.VARNAME}"},
+				"hooks":             hooks,
+			})
 		}
 
 		fmt.Printf(`Config:    %s (%s)
@@ -1433,6 +1691,9 @@ var configInitCmd = &cobra.Command{
 		if err := writeDefaultConfig(path, configInitForce); err != nil {
 			return err
 		}
+		if isJSONOutput() {
+			return emitJSONSuccess(cmd, map[string]string{"path": path, "status": "created"})
+		}
 		fmt.Printf("Created config file: %s\n", path)
 		return nil
 	},
@@ -1441,7 +1702,7 @@ var configInitCmd = &cobra.Command{
 var configShowCmd = &cobra.Command{
 	Use:   "show",
 	Short: "Show effective configuration with sources",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		pattern, err := resolveWorktreePattern()
 		if err != nil {
 			pattern = worktreePattern
@@ -1455,6 +1716,25 @@ var configShowCmd = &cobra.Command{
 			configStatus = "found"
 		}
 
+		if isJSONOutput() {
+			resolvedPattern := pattern
+			if worktreePattern != "" {
+				resolvedPattern = worktreePattern
+			}
+			return emitJSONSuccess(cmd, map[string]any{
+				"config_file": map[string]string{
+					"path":   configFilePath,
+					"status": configStatus,
+				},
+				"effective": map[string]any{
+					"root":      map[string]string{"value": worktreeRoot, "source": configSources.Root},
+					"strategy":  map[string]string{"value": worktreeStrategy, "source": configSources.Strategy},
+					"pattern":   map[string]string{"value": resolvedPattern, "source": configSources.Pattern},
+					"separator": map[string]string{"value": worktreeSeparator, "source": configSources.Separator},
+				},
+			})
+		}
+
 		fmt.Printf("Config file: %s (%s)\n\n", configFilePath, configStatus)
 		fmt.Printf("Effective configuration:\n")
 		fmt.Printf("  %-10s = %-40s (%s)\n", "root", worktreeRoot, configSources.Root)
@@ -1465,14 +1745,19 @@ var configShowCmd = &cobra.Command{
 			fmt.Printf("  %-10s = %-40s (%s)\n", "pattern", pattern, configSources.Pattern)
 		}
 		fmt.Printf("  %-10s = %-40s (%s)\n", "separator", fmt.Sprintf("%q", worktreeSeparator), configSources.Separator)
+		return nil
 	},
 }
 
 var configPathCmd = &cobra.Command{
 	Use:   "path",
 	Short: "Print the config file path",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if isJSONOutput() {
+			return emitJSONSuccess(cmd, map[string]string{"path": resolveConfigPath(configFlag)})
+		}
 		fmt.Println(resolveConfigPath(configFlag))
+		return nil
 	},
 }
 
@@ -1499,6 +1784,12 @@ This enables:
 - Automatic cd to worktree after checkout/create/pr/mr commands
 - Tab completion for commands and branch names`,
 	Run: func(cmd *cobra.Command, args []string) {
+		if isJSONOutput() {
+			_ = emitJSONSuccess(cmd, map[string]string{
+				"note": "shellenv outputs shell script text; run without --format json to source it",
+			})
+			return
+		}
 		// Output OS-specific shell integration
 		// On Windows, default to PowerShell. On Unix, output bash/zsh.
 		if runtime.GOOS == "windows" {
@@ -1513,6 +1804,22 @@ function wt {
     $output = & wt.exe @args
     $exitCode = $LASTEXITCODE
     Write-Output $output
+
+    # In JSON mode, keep stdout machine-readable and skip auto-navigation.
+    $isJson = $false
+    for ($i = 0; $i -lt $args.Count; $i++) {
+        if ($args[$i] -eq '--format' -and $i + 1 -lt $args.Count -and $args[$i + 1] -eq 'json') {
+            $isJson = $true
+        }
+        if ($args[$i] -eq '--format=json') {
+            $isJson = $true
+        }
+    }
+    if ($isJson) {
+        $global:LASTEXITCODE = $exitCode
+        return
+    }
+
     if ($exitCode -eq 0) {
         $cdPath = $output | Select-String -Pattern "^wt navigating to: " | ForEach-Object { $_.Line.Substring(18) }
         if ($cdPath) {
@@ -1526,7 +1833,7 @@ function wt {
 Register-ArgumentCompleter -CommandName wt -ScriptBlock {
     param($commandName, $wordToComplete, $commandAst, $fakeBoundParameters)
 
-    $commands = @('checkout', 'co', 'create', 'pr', 'mr', 'list', 'ls', 'remove', 'rm', 'cleanup', 'migrate', 'prune', 'help', 'shellenv', 'init', 'info', 'config', 'version')
+    $commands = @('checkout', 'co', 'create', 'pr', 'mr', 'list', 'ls', 'remove', 'rm', 'cleanup', 'migrate', 'prune', 'help', 'shellenv', 'init', 'info', 'config', 'examples', 'version')
 
     # Get the position in the command line
     $position = $commandAst.CommandElements.Count - 1
@@ -1566,6 +1873,14 @@ Register-ArgumentCompleter -CommandName wt -ScriptBlock {
         return $?
     fi
 
+    # In JSON mode, keep stdout machine-readable and skip auto-navigation.
+    case " $* " in
+        *" --format json "*|*" --format=json "*)
+            command wt "$@"
+            return $?
+            ;;
+    esac
+
     # Use script(1) to provide a PTY for interactive commands (e.g., promptui menus)
     # Command substitution $(command wt) doesn't allocate a TTY, which breaks interactive prompts
     local log_file exit_code cd_path
@@ -1599,7 +1914,7 @@ if [ -n "$BASH_VERSION" ]; then
         COMPREPLY=()
         cur="${COMP_WORDS[COMP_CWORD]}"
         prev="${COMP_WORDS[COMP_CWORD-1]}"
-        commands="checkout co create pr mr list ls remove rm cleanup migrate prune help shellenv init info config version"
+        commands="checkout co create pr mr list ls remove rm cleanup migrate prune help shellenv init info config examples version"
 
         # Complete commands if first argument
         if [ $COMP_CWORD -eq 1 ]; then
@@ -1646,6 +1961,7 @@ if [ -n "$ZSH_VERSION" ]; then
             'init:Initialize shell integration'
             'info:Show worktree location configuration'
             'config:Manage wt configuration'
+            'examples:Show practical command examples'
             'version:Show version information'
         )
 
@@ -1681,7 +1997,11 @@ fi
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Show version information",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if isJSONOutput() {
+			return emitJSONSuccess(cmd, map[string]string{"version": version})
+		}
 		fmt.Printf("wt version %s\n", version)
+		return nil
 	},
 }

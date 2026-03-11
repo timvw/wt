@@ -1,0 +1,37 @@
+# E2E tests for `wt examples` command
+name: examples
+description: Test examples command output and JSON behavior
+
+scenarios:
+  - name: examples_lists_topics
+    description: examples command lists known topics
+    skip_shellenv: true
+    steps:
+      - run: $WT_BIN examples
+        expect:
+          exit_code: 0
+          output_contains: "Topics:"
+      - run: $WT_BIN examples
+        expect:
+          output_contains: "create"
+
+  - name: examples_topic_json
+    description: examples topic supports JSON output
+    skip_shellenv: true
+    steps:
+      - run: $WT_BIN --format json examples create
+        expect:
+          exit_code: 0
+          output_contains: '"ok":true'
+      - run: $WT_BIN --format json examples create
+        expect:
+          output_contains: '"name":"create"'
+
+  - name: examples_unknown_topic
+    description: unknown topic returns an error
+    skip_shellenv: true
+    steps:
+      - run: $WT_BIN examples unknown-topic
+        expect:
+          exit_code: 1
+          output_contains: "unknown examples topic"
