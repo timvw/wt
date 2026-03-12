@@ -52,3 +52,19 @@ func TestCreateExamplesIncludeOutcomeAndFailureModes(t *testing.T) {
 		t.Fatal("expected create example to define failure modes")
 	}
 }
+
+func TestRemoveExampleIncludesPathExample(t *testing.T) {
+	topic, ok := exampleCatalog["remove"]
+	if !ok {
+		t.Fatal("expected remove topic in catalog")
+	}
+	if len(topic.Examples) == 0 {
+		t.Fatal("expected remove topic to contain examples")
+	}
+	if topic.Examples[0].PathExample == "" {
+		t.Fatal("expected remove example to define a path example")
+	}
+	if topic.Examples[0].PathBasis == "" {
+		t.Fatal("expected remove example to define path basis")
+	}
+}

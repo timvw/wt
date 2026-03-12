@@ -280,6 +280,9 @@ wt rm add-auth-feature
 # Show full examples catalog (filter with rg/grep if needed)
 wt examples
 
+# Each example includes outcome + path illustration based on config pattern
+# e.g. path example: $WORKTREE_ROOT/<repo>/<branch> -> (removed)
+
 # JSON mode does not auto-navigate; use returned navigate_to
 wt --format json create add-auth-feature
 ```

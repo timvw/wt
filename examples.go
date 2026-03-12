@@ -12,6 +12,8 @@ type usageExample struct {
 	Purpose       string   `json:"purpose"`
 	Outcome       string   `json:"outcome"`
 	ExitCode      string   `json:"exit_code"`
+	PathExample   string   `json:"path_example,omitempty"`
+	PathBasis     string   `json:"path_basis,omitempty"`
 	Preconditions []string `json:"preconditions,omitempty"`
 	SideEffects   []string `json:"side_effects,omitempty"`
 	FailureModes  []string `json:"failure_modes,omitempty"`
@@ -35,6 +37,8 @@ var exampleCatalog = map[string]exampleTopic{
 				Purpose:       "Create or reuse a worktree for an existing local branch.",
 				Outcome:       "Worktree for feature-branch exists and branch is checked out there.",
 				ExitCode:      "0 on success; non-zero if branch does not exist or git worktree creation fails.",
+				PathExample:   "$WORKTREE_ROOT/<repo>/feature-branch (existing or created)",
+				PathBasis:     "Derived from active pattern in wt info; this example assumes default global strategy.",
 				SideEffects:   []string{"In text mode with shellenv, wrapper may auto-navigate to target path.", "In --format json mode, wrapper does not auto-navigate."},
 				FailureModes:  []string{"Branch does not exist: create it first or use wt create.", "Worktree add failure: inspect git worktree list and path conflicts."},
 				FollowUp:      []string{"wt list", "wt remove feature-branch"},
@@ -59,6 +63,8 @@ var exampleCatalog = map[string]exampleTopic{
 				Purpose:       "Create a new branch from default base (main/master) and create worktree.",
 				Outcome:       "New branch exists, worktree directory is created, branch checked out there.",
 				ExitCode:      "0 on success; non-zero if base is missing or branch/path conflicts.",
+				PathExample:   "$WORKTREE_ROOT/<repo>/my-feature (created)",
+				PathBasis:     "Derived from active pattern in wt info; this example assumes default global strategy.",
 				Preconditions: []string{"Repository has main or master (or use explicit base argument)."},
 				SideEffects:   []string{"Runs configured post_create/post_checkout hooks.", "Text mode + shellenv may auto-navigate."},
 				FailureModes:  []string{"Base branch missing: use wt create my-feature <base>.", "Worktree path conflict: inspect existing worktrees with wt list."},
@@ -150,6 +156,8 @@ var exampleCatalog = map[string]exampleTopic{
 				Purpose:       "Delete worktree for branch and clean up directory bookkeeping.",
 				Outcome:       "Branch worktree path is removed; shell wrapper may navigate back to main worktree in text mode.",
 				ExitCode:      "0 on success; non-zero if branch has no worktree or removal fails.",
+				PathExample:   "$WORKTREE_ROOT/<repo>/old-branch -> (removed)",
+				PathBasis:     "Derived from active pattern in wt info; this example assumes default global strategy.",
 				Preconditions: []string{"Target branch currently has a worktree."},
 				FailureModes:  []string{"Dirty worktree requires --force.", "No matching worktree for branch."},
 				FollowUp:      []string{"wt list"},
@@ -173,6 +181,8 @@ var exampleCatalog = map[string]exampleTopic{
 				Purpose:      "Preview merged-branch worktrees that would be removed.",
 				Outcome:      "Lists candidate worktrees without deleting them.",
 				ExitCode:     "0 on success.",
+				PathExample:  "$WORKTREE_ROOT/<repo>/<merged-branch> -> (candidate for removal)",
+				PathBasis:    "Candidates are discovered from merged branches and mapped through active pattern.",
 				SideEffects:  []string{"No deletions in dry-run mode."},
 				FollowUp:     []string{"wt cleanup --force"},
 				FailureModes: []string{"Merge-base detection issues if repository state is unusual."},
@@ -195,6 +205,8 @@ var exampleCatalog = map[string]exampleTopic{
 				Purpose:       "Move managed worktrees to paths derived from current configuration.",
 				Outcome:       "Worktrees are moved where possible; non-empty target paths are skipped.",
 				ExitCode:      "0 when migration operation completes; non-zero on fatal errors.",
+				PathExample:   "$WORKTREE_ROOT_OLD/<repo>/<branch> -> $WORKTREE_ROOT_NEW/<repo>/<branch>",
+				PathBasis:     "Source and destination paths are computed from old/new active pattern and variables.",
 				Preconditions: []string{"Set desired strategy/pattern first (wt config show / env vars)."},
 				FailureModes:  []string{"Target path already exists and is non-empty.", "Filesystem move/rename failures."},
 				FollowUp:      []string{"wt list", "wt info"},
@@ -323,6 +335,12 @@ func renderExamplesText(topics []exampleTopic) {
 			fmt.Printf("    exit: %s\n", ex.ExitCode)
 			if len(ex.Preconditions) > 0 {
 				fmt.Printf("    preconditions: %s\n", ex.Preconditions[0])
+			}
+			if ex.PathExample != "" {
+				fmt.Printf("    path example: %s\n", ex.PathExample)
+			}
+			if ex.PathBasis != "" {
+				fmt.Printf("    path basis: %s\n", ex.PathBasis)
 			}
 			if len(ex.FailureModes) > 0 {
 				fmt.Printf("    common failure: %s\n", ex.FailureModes[0])

@@ -17,6 +17,9 @@ scenarios:
       - run: $WT_BIN examples
         expect:
           output_contains: "=>"
+      - run: $WT_BIN examples
+        expect:
+          output_contains: "path example:"
 
   - name: examples_json_full_catalog
     description: JSON output includes full topics catalog
