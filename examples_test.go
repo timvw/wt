@@ -24,3 +24,17 @@ func TestSortedTopicsIncludesCreate(t *testing.T) {
 		t.Fatal("expected create topic in sortedTopics")
 	}
 }
+
+func TestSortedTopicsIncludesMigrate(t *testing.T) {
+	topics := sortedTopics()
+	found := false
+	for _, topic := range topics {
+		if topic == "migrate" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected migrate topic in sortedTopics")
+	}
+}

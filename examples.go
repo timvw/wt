@@ -83,6 +83,14 @@ var exampleCatalog = map[string]exampleTopic{
 			{Command: "wt --format json cleanup --force", Description: "Machine-readable cleanup summary"},
 		},
 	},
+	"migrate": {
+		Name:        "migrate",
+		Description: "Migrate existing worktrees to configured paths",
+		Examples: []usageExample{
+			{Command: "wt migrate", Description: "Move worktrees to paths derived from current config"},
+			{Command: "wt migrate --force", Description: "Replace non-empty targets during migration"},
+		},
+	},
 	"info": {
 		Name:        "info",
 		Description: "Show active worktree placement configuration",
