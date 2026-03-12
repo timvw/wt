@@ -2,15 +2,6 @@ package main
 
 import "testing"
 
-func TestCanonicalTopicAlias(t *testing.T) {
-	if got := canonicalTopic("rm"); got != "remove" {
-		t.Fatalf("canonicalTopic(rm) = %q, want remove", got)
-	}
-	if got := canonicalTopic("co"); got != "checkout" {
-		t.Fatalf("canonicalTopic(co) = %q, want checkout", got)
-	}
-}
-
 func TestSortedTopicsIncludesCreate(t *testing.T) {
 	topics := sortedTopics()
 	found := false
@@ -36,5 +27,21 @@ func TestSortedTopicsIncludesMigrate(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected migrate topic in sortedTopics")
+	}
+}
+
+func TestCreateExamplesIncludeOutcomeAndFailureModes(t *testing.T) {
+	topic, ok := exampleCatalog["create"]
+	if !ok {
+		t.Fatal("expected create topic in catalog")
+	}
+	if len(topic.Examples) == 0 {
+		t.Fatal("expected create topic to contain examples")
+	}
+	if topic.Examples[0].Outcome == "" {
+		t.Fatal("expected create example to define an outcome")
+	}
+	if len(topic.Examples[0].FailureModes) == 0 {
+		t.Fatal("expected create example to define failure modes")
 	}
 }

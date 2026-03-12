@@ -3,35 +3,41 @@ name: examples
 description: Test examples command output and JSON behavior
 
 scenarios:
-  - name: examples_lists_topics
-    description: examples command lists known topics
+  - name: examples_lists_full_catalog
+    description: examples command prints full catalog by default
     skip_shellenv: true
     steps:
       - run: $WT_BIN examples
         expect:
           exit_code: 0
-          output_contains: "Topics:"
+          output_contains: "create: Create a new branch in a worktree"
       - run: $WT_BIN examples
         expect:
-          output_contains: "create"
+          output_contains: "migrate: Migrate existing worktrees to configured paths"
+      - run: $WT_BIN examples
+        expect:
+          output_contains: "Outcome:"
 
-  - name: examples_topic_json
-    description: examples topic supports JSON output
+  - name: examples_json_full_catalog
+    description: JSON output includes full topics catalog
     skip_shellenv: true
     steps:
-      - run: $WT_BIN --format json examples create
+      - run: $WT_BIN --format json examples
         expect:
           exit_code: 0
           output_contains: '"ok":true'
-      - run: $WT_BIN --format json examples create
+      - run: $WT_BIN --format json examples
+        expect:
+          output_contains: '"catalog_scope":"full"'
+      - run: $WT_BIN --format json examples
         expect:
           output_contains: '"name":"create"'
 
-  - name: examples_unknown_topic
-    description: unknown topic returns an error
+  - name: examples_rejects_topic_argument
+    description: topic filtering is removed from examples command
     skip_shellenv: true
     steps:
-      - run: $WT_BIN examples unknown-topic
+      - run: $WT_BIN examples create
         expect:
           exit_code: 1
-          output_contains: "unknown examples topic"
+          output_contains: "accepts 0 arg(s), received 1"

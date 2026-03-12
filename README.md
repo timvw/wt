@@ -188,7 +188,6 @@ wt <command> --help
 
 # Show practical examples
 wt examples
-wt examples create
 
 # Use machine-readable output
 wt --format json version
@@ -204,7 +203,7 @@ wt --format json version
 wt --format json info
 wt --format json config show
 wt --format json list
-wt --format json examples create
+wt --format json examples
 ```
 
 Important behavior for shell integration:
@@ -276,8 +275,8 @@ wt list
 # Remove a worktree when done
 wt rm add-auth-feature
 
-# Discover examples by topic
-wt examples create
+# Show full examples catalog (filter with rg/grep if needed)
+wt examples
 
 # JSON mode does not auto-navigate; use returned navigate_to
 wt --format json create add-auth-feature
