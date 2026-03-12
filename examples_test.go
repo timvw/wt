@@ -98,6 +98,23 @@ func TestRemoveJSONExampleIncludesSamplePayload(t *testing.T) {
 	}
 }
 
+func TestAllExamplesHaveConcreteSamples(t *testing.T) {
+	for topicName, topic := range exampleCatalog {
+		for _, ex := range topic.Examples {
+			if strings.Contains(ex.Command, "--format json") {
+				if ex.JSONExample == "" {
+					t.Fatalf("expected json example for topic %s command %q", topicName, ex.Command)
+				}
+				continue
+			}
+
+			if ex.TextExample == "" {
+				t.Fatalf("expected text example for topic %s command %q", topicName, ex.Command)
+			}
+		}
+	}
+}
+
 func TestListTextExampleLooksRawStyle(t *testing.T) {
 	topic := exampleCatalog["list"]
 	if len(topic.Examples) == 0 {
