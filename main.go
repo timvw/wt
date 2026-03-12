@@ -59,14 +59,38 @@ var rootCmd = &cobra.Command{
 	Long:          "",
 	SilenceErrors: true,
 	SilenceUsage:  true,
-	Run: func(cmd *cobra.Command, args []string) {
-		_ = cmd.Help()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return printCommandHelp(cmd)
 	},
+}
+
+func printCommandHelp(cmd *cobra.Command) error {
+	return cmd.Help()
 }
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&configFlag, "config", "", "Path to config file (default: ~/.config/wt/config.toml)")
 	rootCmd.PersistentFlags().StringVar(&outputFormat, "format", formatText, "Output format: text or json")
+
+	defaultHelp := rootCmd.HelpFunc()
+	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		if !isJSONOutput() {
+			defaultHelp(cmd, args)
+			return
+		}
+
+		buf := bytes.NewBuffer(nil)
+		origOut := cmd.OutOrStdout()
+		origErr := cmd.ErrOrStderr()
+		cmd.SetOut(buf)
+		cmd.SetErr(buf)
+		defaultHelp(cmd, args)
+		cmd.SetOut(origOut)
+		cmd.SetErr(origErr)
+
+		_ = emitJSONSuccess(cmd, map[string]any{"help": buf.String()})
+	})
+
 	rootCmd.AddCommand(checkoutCmd)
 	rootCmd.AddCommand(createCmd)
 	rootCmd.AddCommand(prCmd)
@@ -1678,8 +1702,8 @@ var configInitForce bool
 var configCmd = &cobra.Command{
 	Use:   "config",
 	Short: "Manage wt configuration",
-	Run: func(cmd *cobra.Command, args []string) {
-		_ = cmd.Help()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return printCommandHelp(cmd)
 	},
 }
 

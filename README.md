@@ -192,6 +192,7 @@ wt examples
 # Use machine-readable output
 wt --format json version
 wt --format json list
+wt --format json
 ```
 
 ### JSON Output (`--format json`)
@@ -204,6 +205,7 @@ wt --format json info
 wt --format json config show
 wt --format json list
 wt --format json examples
+wt --format json          # root help in JSON envelope
 ```
 
 Important behavior for shell integration:

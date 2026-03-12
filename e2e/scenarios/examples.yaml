@@ -16,7 +16,7 @@ scenarios:
           output_contains: "migrate: Migrate existing worktrees to configured paths"
       - run: $WT_BIN examples
         expect:
-          output_contains: "Outcome:"
+          output_contains: "=>"
 
   - name: examples_json_full_catalog
     description: JSON output includes full topics catalog
@@ -32,6 +32,18 @@ scenarios:
       - run: $WT_BIN --format json examples
         expect:
           output_contains: '"name":"create"'
+
+  - name: root_help_json
+    description: root help honors json output format
+    skip_shellenv: true
+    steps:
+      - run: $WT_BIN --format json
+        expect:
+          exit_code: 0
+          output_contains: '"ok":true'
+      - run: $WT_BIN --format json
+        expect:
+          output_contains: '"help"'
 
   - name: examples_rejects_topic_argument
     description: topic filtering is removed from examples command

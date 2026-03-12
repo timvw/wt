@@ -2,6 +2,13 @@ package main
 
 import "testing"
 
+func TestExamplesRejectsTopicArgument(t *testing.T) {
+	err := examplesCmd.Args(examplesCmd, []string{"create"})
+	if err == nil {
+		t.Fatal("expected examples command to reject topic arguments")
+	}
+}
+
 func TestSortedTopicsIncludesCreate(t *testing.T) {
 	topics := sortedTopics()
 	found := false
