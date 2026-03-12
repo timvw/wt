@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestExamplesRejectsTopicArgument(t *testing.T) {
 	err := examplesCmd.Args(examplesCmd, []string{"create"})
@@ -66,5 +69,41 @@ func TestRemoveExampleIncludesPathExample(t *testing.T) {
 	}
 	if topic.Examples[0].PathBasis == "" {
 		t.Fatal("expected remove example to define path basis")
+	}
+}
+
+func TestListExampleIncludesRawTextSample(t *testing.T) {
+	topic, ok := exampleCatalog["list"]
+	if !ok {
+		t.Fatal("expected list topic in catalog")
+	}
+	if len(topic.Examples) == 0 {
+		t.Fatal("expected list topic to contain examples")
+	}
+	if topic.Examples[0].TextExample == "" {
+		t.Fatal("expected list text example to define a raw text sample")
+	}
+}
+
+func TestRemoveJSONExampleIncludesSamplePayload(t *testing.T) {
+	topic, ok := exampleCatalog["remove"]
+	if !ok {
+		t.Fatal("expected remove topic in catalog")
+	}
+	if len(topic.Examples) < 2 {
+		t.Fatal("expected remove topic to contain json example")
+	}
+	if topic.Examples[1].JSONExample == "" {
+		t.Fatal("expected remove json example to define a sample payload")
+	}
+}
+
+func TestListTextExampleLooksRawStyle(t *testing.T) {
+	topic := exampleCatalog["list"]
+	if len(topic.Examples) == 0 {
+		t.Fatal("expected list examples")
+	}
+	if !strings.Contains(topic.Examples[0].TextExample, "[main]") {
+		t.Fatal("expected raw-style branch marker in list text example")
 	}
 }

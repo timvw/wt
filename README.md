@@ -282,6 +282,7 @@ wt examples
 
 # Each example includes outcome + path illustration based on config pattern
 # e.g. path example: $WORKTREE_ROOT/<repo>/<branch> -> (removed)
+# and concrete text/json output samples where relevant
 
 # JSON mode does not auto-navigate; use returned navigate_to
 wt --format json create add-auth-feature

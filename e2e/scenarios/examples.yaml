@@ -20,6 +20,12 @@ scenarios:
       - run: $WT_BIN examples
         expect:
           output_contains: "path example:"
+      - run: $WT_BIN examples
+        expect:
+          output_contains: "text example:"
+      - run: $WT_BIN examples
+        expect:
+          output_contains: "json example:"
 
   - name: examples_json_full_catalog
     description: JSON output includes full topics catalog
@@ -35,6 +41,12 @@ scenarios:
       - run: $WT_BIN --format json examples
         expect:
           output_contains: '"name":"create"'
+      - run: $WT_BIN --format json examples
+        expect:
+          output_contains: '"text_example"'
+      - run: $WT_BIN --format json examples
+        expect:
+          output_contains: '"json_example"'
 
   - name: root_help_json
     description: root help honors json output format

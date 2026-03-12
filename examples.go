@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -12,6 +13,8 @@ type usageExample struct {
 	Purpose       string   `json:"purpose"`
 	Outcome       string   `json:"outcome"`
 	ExitCode      string   `json:"exit_code"`
+	TextExample   string   `json:"text_example,omitempty"`
+	JSONExample   string   `json:"json_example,omitempty"`
 	PathExample   string   `json:"path_example,omitempty"`
 	PathBasis     string   `json:"path_basis,omitempty"`
 	Preconditions []string `json:"preconditions,omitempty"`
@@ -135,6 +138,7 @@ var exampleCatalog = map[string]exampleTopic{
 				Purpose:      "Inspect currently registered git worktrees.",
 				Outcome:      "Text table from git worktree list.",
 				ExitCode:     "0 on success.",
+				TextExample:  "$WORKTREE_ROOT/<repo>                                        a1b2c3d [main]\n$WORKTREE_ROOT/<repo>/feature-login                          d4e5f6a [feature-login]",
 				FollowUp:     []string{"wt remove <branch>", "wt cleanup"},
 				FailureModes: []string{"Non-git directory: command fails."},
 			},
@@ -143,6 +147,7 @@ var exampleCatalog = map[string]exampleTopic{
 				Purpose:     "Structured worktree inventory for scripts and assistants.",
 				Outcome:     "JSON envelope containing data.worktrees parsed from git porcelain output.",
 				ExitCode:    "0 on success.",
+				JSONExample: `{"ok":true,"command":"wt list","data":{"worktrees":[{"path":"$WORKTREE_ROOT/<repo>","branch":"main","head":"a1b2c3d"},{"path":"$WORKTREE_ROOT/<repo>/feature-login","branch":"feature-login","head":"d4e5f6a"}]}}`,
 				SideEffects: []string{"No side effects; read-only command."},
 			},
 		},
@@ -167,6 +172,7 @@ var exampleCatalog = map[string]exampleTopic{
 				Purpose:      "Machine-readable removal flow.",
 				Outcome:      "JSON envelope with removed path and navigate_to target.",
 				ExitCode:     "0 on success; non-zero on failure.",
+				JSONExample:  `{"ok":true,"command":"wt remove","data":{"status":"removed","branch":"old-branch","path":"$WORKTREE_ROOT/<repo>/old-branch","navigate_to":"<main-worktree-path>"}}`,
 				FailureModes: []string{"JSON mode requires explicit branch argument; no interactive selector."},
 				SideEffects:  []string{"No auto-navigation marker in stdout."},
 			},
@@ -342,6 +348,15 @@ func renderExamplesText(topics []exampleTopic) {
 			if ex.PathBasis != "" {
 				fmt.Printf("    path basis: %s\n", ex.PathBasis)
 			}
+			if ex.TextExample != "" {
+				fmt.Println("    text example:")
+				for _, line := range splitLines(ex.TextExample) {
+					fmt.Printf("      %s\n", line)
+				}
+			}
+			if ex.JSONExample != "" {
+				fmt.Printf("    json example: %s\n", ex.JSONExample)
+			}
 			if len(ex.FailureModes) > 0 {
 				fmt.Printf("    common failure: %s\n", ex.FailureModes[0])
 			}
@@ -354,6 +369,13 @@ func renderExamplesText(topics []exampleTopic) {
 			fmt.Println()
 		}
 	}
+}
+
+func splitLines(input string) []string {
+	if input == "" {
+		return nil
+	}
+	return strings.Split(input, "\n")
 }
 
 var examplesCmd = &cobra.Command{
