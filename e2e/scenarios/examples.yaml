@@ -26,6 +26,24 @@ scenarios:
       - run: $WT_BIN examples
         expect:
           output_contains: "json example:"
+      - run: $WT_BIN examples
+        expect:
+          output_contains: "global:"
+      - run: $WT_BIN examples
+        expect:
+          output_contains: "sibling-repo:"
+      - run: $WT_BIN examples
+        expect:
+          output_contains: "parent-branches:"
+      - run: $WT_BIN examples
+        expect:
+          output_contains: "parent-worktrees:"
+      - run: $WT_BIN examples
+        expect:
+          output_contains: "<repo-main-parent>"
+      - run: $WT_BIN examples
+        expect:
+          output_contains: "custom pattern:"
 
   - name: examples_json_full_catalog
     description: JSON output includes full topics catalog
@@ -47,6 +65,24 @@ scenarios:
       - run: $WT_BIN --format json examples
         expect:
           output_contains: '"json_example"'
+      - run: $WT_BIN --format json examples
+        expect:
+          output_contains: '"path_example":"global:'
+      - run: $WT_BIN --format json examples
+        expect:
+          output_contains: 'sibling-repo:'
+      - run: $WT_BIN --format json examples
+        expect:
+          output_contains: 'parent-branches:'
+      - run: $WT_BIN --format json examples
+        expect:
+          output_contains: 'parent-worktrees:'
+      - run: $WT_BIN --format json examples
+        expect:
+          output_contains: '"path_basis":"<repo-main-parent> is the parent directory containing <repo-main-parent>/<repo>"'
+      - run: $WT_BIN --format json examples
+        expect:
+          output_contains: 'custom pattern:'
 
   - name: root_help_json
     description: root help honors json output format

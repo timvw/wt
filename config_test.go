@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -402,4 +406,141 @@ strategy = "global"
 			t.Errorf("worktreeStrategy = %q, want sibling-repo", worktreeStrategy)
 		}
 	})
+}
+
+func TestConfigShowPatternParityBetweenTextAndJSON_Config(t *testing.T) {
+	origRoot := worktreeRoot
+	origStrategy := worktreeStrategy
+	origPattern := worktreePattern
+	origSeparator := worktreeSeparator
+	origConfigFilePath := configFilePath
+	origConfigFileFound := configFileFound
+	origConfigSources := configSources
+	origOutputFormat := outputFormat
+
+	t.Cleanup(func() {
+		worktreeRoot = origRoot
+		worktreeStrategy = origStrategy
+		worktreePattern = origPattern
+		worktreeSeparator = origSeparator
+		configFilePath = origConfigFilePath
+		configFileFound = origConfigFileFound
+		configSources = origConfigSources
+		outputFormat = origOutputFormat
+	})
+
+	runConfigShow := func(t *testing.T, format string) string {
+		t.Helper()
+
+		origStdout := os.Stdout
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("failed to create pipe: %v", err)
+		}
+		os.Stdout = w
+		defer func() {
+			os.Stdout = origStdout
+		}()
+
+		outputFormat = format
+		if err := configShowCmd.RunE(configShowCmd, nil); err != nil {
+			t.Fatalf("config show failed for format %s: %v", format, err)
+		}
+
+		if err := w.Close(); err != nil {
+			t.Fatalf("failed to close write pipe: %v", err)
+		}
+
+		var buf bytes.Buffer
+		if _, err := io.Copy(&buf, r); err != nil {
+			t.Fatalf("failed to read command output: %v", err)
+		}
+
+		return buf.String()
+	}
+
+	tests := []struct {
+		name          string
+		strategy      string
+		workPattern   string
+		patternSource string
+		expected      string
+	}{
+		{
+			name:          "strategy default pattern",
+			strategy:      "global",
+			workPattern:   "",
+			patternSource: "strategy default",
+			expected:      "{.worktreeRoot}/{.repo.Name}/{.branch}",
+		},
+		{
+			name:          "explicit configured pattern",
+			strategy:      "global",
+			workPattern:   "{.worktreeRoot}/custom/{.branch}",
+			patternSource: "config file",
+			expected:      "{.worktreeRoot}/custom/{.branch}",
+		},
+		{
+			name:          "custom strategy without explicit pattern",
+			strategy:      "custom",
+			workPattern:   "",
+			patternSource: "default",
+			expected:      "(none)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			worktreeRoot = "/tmp/worktrees"
+			worktreeStrategy = tt.strategy
+			worktreePattern = tt.workPattern
+			worktreeSeparator = "-"
+			configFilePath = "/tmp/config.toml"
+			configFileFound = true
+			configSources = configSource{
+				Root:      "config file",
+				Strategy:  "config file",
+				Pattern:   tt.patternSource,
+				Separator: "default",
+			}
+
+			textOut := runConfigShow(t, "text")
+			jsonOut := runConfigShow(t, "json")
+
+			textPatternRe := regexp.MustCompile(`(?m)^\s*pattern\s*=\s*(.*?)\s+\(`)
+			textMatch := textPatternRe.FindStringSubmatch(textOut)
+			if len(textMatch) != 2 {
+				t.Fatalf("failed to parse pattern from text output: %q", textOut)
+			}
+			textPattern := textMatch[1]
+
+			var payload struct {
+				Data struct {
+					Effective struct {
+						Pattern struct {
+							Value string `json:"value"`
+						} `json:"pattern"`
+					} `json:"effective"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal([]byte(jsonOut), &payload); err != nil {
+				t.Fatalf("failed to parse json output: %v\noutput=%q", err, jsonOut)
+			}
+
+			if payload.Data.Effective.Pattern.Value != textPattern {
+				t.Fatalf("pattern mismatch between text and json: text=%q json=%q", textPattern, payload.Data.Effective.Pattern.Value)
+			}
+
+			expectedPattern := configShowPatternValue()
+			if expectedPattern != tt.expected {
+				t.Fatalf("resolved test expectation mismatch: got=%q want=%q", expectedPattern, tt.expected)
+			}
+			if textPattern != expectedPattern {
+				t.Fatalf("text output pattern should use resolved value: got=%q want=%q", textPattern, expectedPattern)
+			}
+			if payload.Data.Effective.Pattern.Value != expectedPattern {
+				t.Fatalf("json output pattern should use resolved value: got=%q want=%q", payload.Data.Effective.Pattern.Value, expectedPattern)
+			}
+		})
+	}
 }

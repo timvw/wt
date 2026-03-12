@@ -1727,13 +1727,7 @@ var configShowCmd = &cobra.Command{
 	Use:   "show",
 	Short: "Show effective configuration with sources",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		pattern, err := resolveWorktreePattern()
-		if err != nil {
-			pattern = worktreePattern
-			if pattern == "" {
-				pattern = "(none)"
-			}
-		}
+		pattern := configShowPatternValue()
 
 		configStatus := "not found"
 		if configFileFound {
@@ -1741,10 +1735,6 @@ var configShowCmd = &cobra.Command{
 		}
 
 		if isJSONOutput() {
-			resolvedPattern := pattern
-			if worktreePattern != "" {
-				resolvedPattern = worktreePattern
-			}
 			return emitJSONSuccess(cmd, map[string]any{
 				"config_file": map[string]string{
 					"path":   configFilePath,
@@ -1753,7 +1743,7 @@ var configShowCmd = &cobra.Command{
 				"effective": map[string]any{
 					"root":      map[string]string{"value": worktreeRoot, "source": configSources.Root},
 					"strategy":  map[string]string{"value": worktreeStrategy, "source": configSources.Strategy},
-					"pattern":   map[string]string{"value": resolvedPattern, "source": configSources.Pattern},
+					"pattern":   map[string]string{"value": pattern, "source": configSources.Pattern},
 					"separator": map[string]string{"value": worktreeSeparator, "source": configSources.Separator},
 				},
 			})
@@ -1763,14 +1753,19 @@ var configShowCmd = &cobra.Command{
 		fmt.Printf("Effective configuration:\n")
 		fmt.Printf("  %-10s = %-40s (%s)\n", "root", worktreeRoot, configSources.Root)
 		fmt.Printf("  %-10s = %-40s (%s)\n", "strategy", worktreeStrategy, configSources.Strategy)
-		if worktreePattern != "" {
-			fmt.Printf("  %-10s = %-40s (%s)\n", "pattern", worktreePattern, configSources.Pattern)
-		} else {
-			fmt.Printf("  %-10s = %-40s (%s)\n", "pattern", pattern, configSources.Pattern)
-		}
+		fmt.Printf("  %-10s = %-40s (%s)\n", "pattern", pattern, configSources.Pattern)
 		fmt.Printf("  %-10s = %-40s (%s)\n", "separator", fmt.Sprintf("%q", worktreeSeparator), configSources.Separator)
 		return nil
 	},
+}
+
+func configShowPatternValue() string {
+	pattern, err := resolveWorktreePattern()
+	if err == nil {
+		return pattern
+	}
+
+	return "(none)"
 }
 
 var configPathCmd = &cobra.Command{

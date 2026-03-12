@@ -68,9 +68,9 @@ var exampleCatalog = map[string]exampleTopic{
 				Purpose:       "Create a new branch from default base (main/master) and create worktree.",
 				Outcome:       "New branch exists, worktree directory is created, branch checked out there.",
 				ExitCode:      "0 on success; non-zero if base is missing or branch/path conflicts.",
-				TextExample:   "✓ Worktree created at: $WORKTREE_ROOT/<repo>/my-feature\nwt navigating to: $WORKTREE_ROOT/<repo>/my-feature",
-				PathExample:   "$WORKTREE_ROOT/<repo>/my-feature (created)",
-				PathBasis:     "Derived from active pattern in wt info; this example assumes default global strategy.",
+				TextExample:   "✓ Worktree created at: $WORKTREE_ROOT/<repo>/my-feature\nwt navigating to: $WORKTREE_ROOT/<repo>/my-feature\nPath outcomes by strategy (static):\n  global: $WORKTREE_ROOT/<repo>/my-feature\n  sibling-repo: <repo-main-parent>/<repo>-my-feature\n  parent-branches: <repo-main-parent>/my-feature\n  parent-worktrees: <repo-main-parent>/<repo>.worktrees/my-feature\n  custom pattern: $WORKTREE_ROOT/custom/<repo>/my-feature",
+				PathExample:   "global: $WORKTREE_ROOT/<repo>/my-feature\nsibling-repo: <repo-main-parent>/<repo>-my-feature\nparent-branches: <repo-main-parent>/my-feature\nparent-worktrees: <repo-main-parent>/<repo>.worktrees/my-feature\ncustom pattern: $WORKTREE_ROOT/custom/<repo>/my-feature",
+				PathBasis:     "Static placeholders for one branch name across strategies. <repo-main-parent> is the parent directory that contains the main checkout at <repo-main-parent>/<repo>.",
 				Preconditions: []string{"Repository has main or master (or use explicit base argument)."},
 				SideEffects:   []string{"Runs configured post_create/post_checkout hooks.", "Text mode + shellenv may auto-navigate."},
 				FailureModes:  []string{"Base branch missing: use wt create my-feature <base>.", "Worktree path conflict: inspect existing worktrees with wt list."},
@@ -81,7 +81,7 @@ var exampleCatalog = map[string]exampleTopic{
 				Purpose:      "Automation-friendly branch/worktree creation.",
 				Outcome:      "JSON envelope with status, branch, base, path, and navigate_to.",
 				ExitCode:     "0 on success; non-zero on failure.",
-				JSONExample:  `{"ok":true,"command":"wt create","data":{"status":"created","branch":"my-feature","base":"main","path":"$WORKTREE_ROOT/<repo>/my-feature","navigate_to":"$WORKTREE_ROOT/<repo>/my-feature"}}`,
+				JSONExample:  `{"ok":true,"command":"wt create","data":{"status":"created","branch":"my-feature","base":"main","strategy":"global","pattern":"{.worktreeRoot}/{.repo.Name}/{.branch}","path":"$WORKTREE_ROOT/<repo>/my-feature","navigate_to":"$WORKTREE_ROOT/<repo>/my-feature","path_basis":"<repo-main-parent> is the parent directory containing <repo-main-parent>/<repo>","path_outcomes_by_strategy":{"global":"$WORKTREE_ROOT/<repo>/my-feature","sibling-repo":"<repo-main-parent>/<repo>-my-feature","parent-branches":"<repo-main-parent>/my-feature","parent-worktrees":"<repo-main-parent>/<repo>.worktrees/my-feature","custom pattern":"$WORKTREE_ROOT/custom/<repo>/my-feature"}}}`,
 				SideEffects:  []string{"No auto-navigation marker in output.", "stdout remains machine-readable JSON."},
 				FailureModes: []string{"Same branch already has worktree: status may be exists; parse returned path."},
 			},
@@ -169,9 +169,9 @@ var exampleCatalog = map[string]exampleTopic{
 				Purpose:       "Delete worktree for branch and clean up directory bookkeeping.",
 				Outcome:       "Branch worktree path is removed; shell wrapper may navigate back to main worktree in text mode.",
 				ExitCode:      "0 on success; non-zero if branch has no worktree or removal fails.",
-				TextExample:   "✓ Removed worktree: $WORKTREE_ROOT/<repo>/old-branch\nwt navigating to: <main-worktree-path>",
-				PathExample:   "$WORKTREE_ROOT/<repo>/old-branch -> (removed)",
-				PathBasis:     "Derived from active pattern in wt info; this example assumes default global strategy.",
+				TextExample:   "✓ Removed worktree: $WORKTREE_ROOT/<repo>/old-branch\nwt navigating to: <main-worktree-path>\nPath outcomes by strategy (static):\n  global: $WORKTREE_ROOT/<repo>/old-branch -> (removed)\n  sibling-repo: <repo-main-parent>/<repo>-old-branch -> (removed)\n  parent-branches: <repo-main-parent>/old-branch -> (removed)\n  parent-worktrees: <repo-main-parent>/<repo>.worktrees/old-branch -> (removed)\n  custom pattern: $WORKTREE_ROOT/custom/<repo>/old-branch -> (removed)",
+				PathExample:   "global: $WORKTREE_ROOT/<repo>/old-branch -> (removed)\nsibling-repo: <repo-main-parent>/<repo>-old-branch -> (removed)\nparent-branches: <repo-main-parent>/old-branch -> (removed)\nparent-worktrees: <repo-main-parent>/<repo>.worktrees/old-branch -> (removed)\ncustom pattern: $WORKTREE_ROOT/custom/<repo>/old-branch -> (removed)",
+				PathBasis:     "Static placeholders for one branch name across strategies. <repo-main-parent> is the parent directory that contains the main checkout at <repo-main-parent>/<repo>.",
 				Preconditions: []string{"Target branch currently has a worktree."},
 				FailureModes:  []string{"Dirty worktree requires --force.", "No matching worktree for branch."},
 				FollowUp:      []string{"wt list"},
@@ -181,7 +181,7 @@ var exampleCatalog = map[string]exampleTopic{
 				Purpose:      "Machine-readable removal flow.",
 				Outcome:      "JSON envelope with removed path and navigate_to target.",
 				ExitCode:     "0 on success; non-zero on failure.",
-				JSONExample:  `{"ok":true,"command":"wt remove","data":{"status":"removed","branch":"old-branch","path":"$WORKTREE_ROOT/<repo>/old-branch","navigate_to":"<main-worktree-path>"}}`,
+				JSONExample:  `{"ok":true,"command":"wt remove","data":{"status":"removed","branch":"old-branch","strategy":"global","path":"$WORKTREE_ROOT/<repo>/old-branch","navigate_to":"<main-worktree-path>","path_basis":"<repo-main-parent> is the parent directory containing <repo-main-parent>/<repo>","path_outcomes_by_strategy":{"global":"$WORKTREE_ROOT/<repo>/old-branch","sibling-repo":"<repo-main-parent>/<repo>-old-branch","parent-branches":"<repo-main-parent>/old-branch","parent-worktrees":"<repo-main-parent>/<repo>.worktrees/old-branch","custom pattern":"$WORKTREE_ROOT/custom/<repo>/old-branch"}}}`,
 				FailureModes: []string{"JSON mode requires explicit branch argument; no interactive selector."},
 				SideEffects:  []string{"No auto-navigation marker in stdout."},
 			},
@@ -222,9 +222,9 @@ var exampleCatalog = map[string]exampleTopic{
 				Purpose:       "Move managed worktrees to paths derived from current configuration.",
 				Outcome:       "Worktrees are moved where possible; non-empty target paths are skipped.",
 				ExitCode:      "0 when migration operation completes; non-zero on fatal errors.",
-				TextExample:   "Migrating worktree: $WORKTREE_ROOT_OLD/<repo>/<branch>\n  -> $WORKTREE_ROOT_NEW/<repo>/<branch>\nMigration complete.",
-				PathExample:   "$WORKTREE_ROOT_OLD/<repo>/<branch> -> $WORKTREE_ROOT_NEW/<repo>/<branch>",
-				PathBasis:     "Source and destination paths are computed from old/new active pattern and variables.",
+				TextExample:   "Migrating worktree: $WORKTREE_ROOT_OLD/<repo>/<branch>\n  -> $WORKTREE_ROOT_NEW/<repo>/<branch>\nPath outcomes by strategy switch (static):\n  global -> sibling-repo: $WORKTREE_ROOT_OLD/<repo>/<branch> -> <repo-main-parent>/<repo>-<branch>\n  global -> parent-branches: $WORKTREE_ROOT_OLD/<repo>/<branch> -> <repo-main-parent>/<branch>\n  global -> parent-worktrees: $WORKTREE_ROOT_OLD/<repo>/<branch> -> <repo-main-parent>/<repo>.worktrees/<branch>\n  sibling-repo -> global: <repo-main-parent>/<repo>-<branch> -> $WORKTREE_ROOT_NEW/<repo>/<branch>\n  global -> custom pattern: $WORKTREE_ROOT_OLD/<repo>/<branch> -> $WORKTREE_ROOT_NEW/custom/<repo>/<branch>\nMigration complete.",
+				PathExample:   "global -> sibling-repo: $WORKTREE_ROOT_OLD/<repo>/<branch> -> <repo-main-parent>/<repo>-<branch>\nglobal -> parent-branches: $WORKTREE_ROOT_OLD/<repo>/<branch> -> <repo-main-parent>/<branch>\nglobal -> parent-worktrees: $WORKTREE_ROOT_OLD/<repo>/<branch> -> <repo-main-parent>/<repo>.worktrees/<branch>\nsibling-repo -> global: <repo-main-parent>/<repo>-<branch> -> $WORKTREE_ROOT_NEW/<repo>/<branch>\nglobal -> custom pattern: $WORKTREE_ROOT_OLD/<repo>/<branch> -> $WORKTREE_ROOT_NEW/custom/<repo>/<branch>",
+				PathBasis:     "Static source/destination placeholders compare strategy switches for the same branch. <repo-main-parent> is the parent directory that contains the main checkout at <repo-main-parent>/<repo>.",
 				Preconditions: []string{"Set desired strategy/pattern first (wt config show / env vars)."},
 				FailureModes:  []string{"Target path already exists and is non-empty.", "Filesystem move/rename failures."},
 				FollowUp:      []string{"wt list", "wt info"},
@@ -237,6 +237,17 @@ var exampleCatalog = map[string]exampleTopic{
 				TextExample: "Migrating worktree with --force: $WORKTREE_ROOT_OLD/<repo>/<branch>\n  -> $WORKTREE_ROOT_NEW/<repo>/<branch>\nMigration complete.",
 				SideEffects: []string{"May overwrite data at target worktree locations."},
 				Notes:       []string{"Use with caution; verify destination layout before running."},
+			},
+			{
+				Command:     "wt --format json migrate --force",
+				Purpose:     "Track migration results in automation without shell parsing.",
+				Outcome:     "JSON envelope reports total, migrated, skipped, and failures.",
+				ExitCode:    "0 when migration completes; non-zero on fatal errors.",
+				JSONExample: `{"ok":true,"command":"wt migrate","data":{"force":true,"total":4,"migrated":4,"skipped":0,"failed":0,"path_basis":"<repo-main-parent> is the parent directory containing <repo-main-parent>/<repo>","path_outcomes_by_strategy":[{"branch":"feature-a","from_strategy":"global","to_strategy":"sibling-repo","from":"$WORKTREE_ROOT_OLD/<repo>/feature-a","to":"<repo-main-parent>/<repo>-feature-a"},{"branch":"feature-a","from_strategy":"global","to_strategy":"parent-branches","from":"$WORKTREE_ROOT_OLD/<repo>/feature-a","to":"<repo-main-parent>/feature-a"},{"branch":"feature-a","from_strategy":"global","to_strategy":"parent-worktrees","from":"$WORKTREE_ROOT_OLD/<repo>/feature-a","to":"<repo-main-parent>/<repo>.worktrees/feature-a"},{"branch":"feature-a","from_strategy":"global","to_strategy":"custom pattern","from":"$WORKTREE_ROOT_OLD/<repo>/feature-a","to":"$WORKTREE_ROOT_NEW/custom/<repo>/feature-a"}]}}`,
+				SideEffects: []string{"No auto-navigation marker in stdout when using JSON mode."},
+				FailureModes: []string{
+					"Target path conflicts may still be reported as skipped/failed entries.",
+				},
 			},
 		},
 	},
@@ -359,9 +370,7 @@ func renderExamplesText(topics []exampleTopic) {
 			fmt.Printf("  %s\n", ex.Command)
 			fmt.Printf("    => %s\n", ex.Outcome)
 			fmt.Printf("    exit: %s\n", ex.ExitCode)
-			if len(ex.Preconditions) > 0 {
-				fmt.Printf("    preconditions: %s\n", ex.Preconditions[0])
-			}
+			printListSection("preconditions", ex.Preconditions)
 			if ex.PathExample != "" {
 				fmt.Printf("    path example: %s\n", ex.PathExample)
 			}
@@ -377,15 +386,9 @@ func renderExamplesText(topics []exampleTopic) {
 			if ex.JSONExample != "" {
 				fmt.Printf("    json example: %s\n", ex.JSONExample)
 			}
-			if len(ex.FailureModes) > 0 {
-				fmt.Printf("    common failure: %s\n", ex.FailureModes[0])
-			}
-			if len(ex.FollowUp) > 0 {
-				fmt.Printf("    follow-up: %s\n", ex.FollowUp[0])
-			}
-			if len(ex.Notes) > 0 {
-				fmt.Printf("    note: %s\n", ex.Notes[0])
-			}
+			printListSection("common failures", ex.FailureModes)
+			printListSection("follow-up", ex.FollowUp)
+			printListSection("notes", ex.Notes)
 			fmt.Println()
 		}
 	}
