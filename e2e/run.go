@@ -569,6 +569,10 @@ func generatePowerShellScript(wtBinary string, scenario Scenario, verbose, showO
 			needsOutput := step.Expect != nil && (step.Expect.OutputContains != "" || step.Expect.OutputNotContains != "")
 			expectsNonZero := step.Expect != nil && step.Expect.ExitCode != nil && *step.Expect.ExitCode != 0
 
+			if needsOutput {
+				sb.WriteString("$__output = ''\n")
+			}
+
 			if expectsNonZero {
 				// Handle expected non-zero exit codes
 				sb.WriteString("$__exit_code = 0\n")
@@ -580,6 +584,9 @@ func generatePowerShellScript(wtBinary string, scenario Scenario, verbose, showO
 				}
 				sb.WriteString("  $__exit_code = $LASTEXITCODE\n")
 				sb.WriteString("} catch {\n")
+				if needsOutput {
+					sb.WriteString("  $__output = ($_ | Out-String)\n")
+				}
 				sb.WriteString("  $__exit_code = 1\n")
 				sb.WriteString("}\n")
 			} else if needsOutput {
@@ -611,11 +618,13 @@ func generatePowerShellScript(wtBinary string, scenario Scenario, verbose, showO
 				}
 				if step.Expect.OutputContains != "" {
 					contains := strings.ReplaceAll(step.Expect.OutputContains, "'", "''")
+					sb.WriteString("if ($null -eq $__output) { $__output = '' }\n")
 					sb.WriteString(fmt.Sprintf("if (-not $__output.Contains('%s')) { throw \"Output missing expected substring\" }\n",
 						contains))
 				}
 				if step.Expect.OutputNotContains != "" {
 					notContains := strings.ReplaceAll(step.Expect.OutputNotContains, "'", "''")
+					sb.WriteString("if ($null -eq $__output) { $__output = '' }\n")
 					sb.WriteString(fmt.Sprintf("if ($__output.Contains('%s')) { throw \"Output should not contain expected substring\" }\n",
 						notContains))
 				}
