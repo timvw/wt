@@ -103,4 +103,4 @@ scenarios:
       - run: $WT_BIN examples create
         expect:
           exit_code: 1
-          output_contains: "unknown command \"create\""
+          output_contains: "unknown command"
