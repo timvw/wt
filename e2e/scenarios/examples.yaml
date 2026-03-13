@@ -79,7 +79,7 @@ scenarios:
           output_contains: 'parent-worktrees:'
       - run: $WT_BIN --format json examples
         expect:
-          output_contains: '"path_basis":"<repo-main-parent> is the parent directory containing <repo-main-parent>/<repo>"'
+          output_contains: '"path_basis":"Static placeholders for one branch name across strategies.'
       - run: $WT_BIN --format json examples
         expect:
           output_contains: 'custom pattern:'
@@ -103,4 +103,4 @@ scenarios:
       - run: $WT_BIN examples create
         expect:
           exit_code: 1
-          output_contains: "accepts 0 arg(s), received 1"
+          output_contains: "unknown command \"create\""
