@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -386,4 +388,65 @@ func TestDryRun(t *testing.T) {
 			t.Error("Dry run should not modify file")
 		}
 	})
+}
+
+func TestInitJSONOutput(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping init JSON integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	repoDir := filepath.Join(tmpDir, "test-repo")
+	setupTestRepo(t, repoDir)
+	wtBinary := buildWtBinary(t, tmpDir)
+
+	homeDir := filepath.Join(tmpDir, "home")
+	if err := os.MkdirAll(homeDir, 0o755); err != nil {
+		t.Fatalf("failed to create HOME dir: %v", err)
+	}
+
+	cmd := exec.Command(wtBinary, "--format", "json", "init", "bash", "--dry-run")
+	cmd.Dir = repoDir
+	cmd.Env = append(os.Environ(), "HOME="+homeDir)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("wt init --format json --dry-run failed: %v\nOutput: %s", err, out)
+	}
+
+	var payload struct {
+		OK      bool   `json:"ok"`
+		Command string `json:"command"`
+		Data    struct {
+			Status     string `json:"status"`
+			Operation  string `json:"operation"`
+			Shell      string `json:"shell"`
+			ConfigPath string `json:"config_path"`
+			DryRun     bool   `json:"dry_run"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("failed to parse init json output: %v\noutput=%q", err, out)
+	}
+	if !payload.OK {
+		t.Fatalf("expected ok=true in init json output: %s", out)
+	}
+	if payload.Command != "wt init" {
+		t.Fatalf("expected command wt init, got %q", payload.Command)
+	}
+	if payload.Data.Operation != "install" {
+		t.Fatalf("expected operation install, got %q", payload.Data.Operation)
+	}
+	if payload.Data.Status != "planned" {
+		t.Fatalf("expected status planned for dry-run, got %q", payload.Data.Status)
+	}
+	if payload.Data.Shell != "bash" {
+		t.Fatalf("expected shell bash, got %q", payload.Data.Shell)
+	}
+	if !payload.Data.DryRun {
+		t.Fatal("expected dry_run=true")
+	}
+	if payload.Data.ConfigPath == "" {
+		t.Fatal("expected config_path to be populated")
+	}
 }

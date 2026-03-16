@@ -16,6 +16,18 @@ scenarios:
           output_contains: "migrate: Migrate existing worktrees to configured paths"
       - run: $WT_BIN examples
         expect:
+          output_contains: "prune: Remove stale worktree administrative files"
+      - run: $WT_BIN examples
+        expect:
+          output_contains: "shellenv: Output shell wrapper for auto-navigation and completion"
+      - run: $WT_BIN examples
+        expect:
+          output_contains: "init: Initialize shell integration"
+      - run: $WT_BIN examples
+        expect:
+          output_contains: "examples: Show detailed command examples and outcomes"
+      - run: $WT_BIN examples
+        expect:
           output_contains: "=>"
       - run: $WT_BIN examples
         expect:
@@ -83,6 +95,18 @@ scenarios:
       - run: $WT_BIN --format json examples
         expect:
           output_contains: 'custom pattern:'
+      - run: $WT_BIN --format json examples
+        expect:
+          output_contains: '"name":"prune"'
+      - run: $WT_BIN --format json examples
+        expect:
+          output_contains: '"name":"shellenv"'
+      - run: $WT_BIN --format json examples
+        expect:
+          output_contains: '"name":"init"'
+      - run: $WT_BIN --format json examples
+        expect:
+          output_contains: '"name":"examples"'
 
   - name: root_help_json
     description: root help honors json output format

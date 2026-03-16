@@ -64,7 +64,7 @@ Examples:
 			return err
 		}
 
-		return applyMigratePlan(plan)
+		return applyMigratePlan(cmd, plan)
 	},
 }
 
@@ -304,12 +304,30 @@ func detectTargetState(target string) (targetState, error) {
 	return targetDirNonEmpty, nil
 }
 
-func applyMigratePlan(plan []migrateItem) error {
+func applyMigratePlan(cmd *cobra.Command, plan []migrateItem) error {
+	jsonMode := isJSONOutput()
 	moveCount := 0
 	skipCount := 0
 	failCount := 0
+	results := make([]map[string]any, 0, len(plan))
 	var primaryItems []migrateItem
 	var secondaryItems []migrateItem
+
+	record := func(item migrateItem, status, reason string) {
+		result := map[string]any{
+			"branch":  item.Branch,
+			"from":    item.From,
+			"status":  status,
+			"primary": item.Primary,
+		}
+		if item.To != "" {
+			result["to"] = item.To
+		}
+		if reason != "" {
+			result["reason"] = reason
+		}
+		results = append(results, result)
+	}
 
 	for _, item := range plan {
 		if item.Primary {
@@ -322,46 +340,83 @@ func applyMigratePlan(plan []migrateItem) error {
 	for _, item := range primaryItems {
 		switch item.Action {
 		case migrateActionSkip:
-			fmt.Printf("Skipped primary checkout: %s\n", item.Reason)
+			if !jsonMode {
+				fmt.Printf("Skipped primary checkout: %s\n", item.Reason)
+			}
 			skipCount++
+			record(item, "skipped", item.Reason)
 		case migrateActionMove, migrateActionMoveForce:
 			force := item.Action == migrateActionMoveForce
 			if err := movePrimaryCheckout(item.From, item.To, force); err != nil {
-				fmt.Printf("Failed primary checkout: %v\n", err)
+				if !jsonMode {
+					fmt.Printf("Failed primary checkout: %v\n", err)
+				}
 				failCount++
+				record(item, "failed", err.Error())
 				continue
 			}
-			fmt.Printf("Moved primary checkout: %s -> %s\n", item.From, item.To)
+			if !jsonMode {
+				fmt.Printf("Moved primary checkout: %s -> %s\n", item.From, item.To)
+			}
 			moveCount++
+			record(item, "moved", item.Reason)
 		}
 	}
 
 	for _, item := range secondaryItems {
 		switch item.Action {
 		case migrateActionSkip:
-			fmt.Printf("Skipped %s: %s\n", item.Branch, item.Reason)
+			if !jsonMode {
+				fmt.Printf("Skipped %s: %s\n", item.Branch, item.Reason)
+			}
 			skipCount++
+			record(item, "skipped", item.Reason)
 			continue
 		case migrateActionMove, migrateActionMoveForce:
 			force := item.Action == migrateActionMoveForce
 			if err := prepareMigrateTarget(item.To, force); err != nil {
-				fmt.Printf("Failed %s: %v\n", item.Branch, err)
+				if !jsonMode {
+					fmt.Printf("Failed %s: %v\n", item.Branch, err)
+				}
 				failCount++
+				record(item, "failed", err.Error())
 				continue
 			}
 
 			cmd := exec.Command("git", "worktree", "move", item.From, item.To)
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
+			if !jsonMode {
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+			}
 			if err := cmd.Run(); err != nil {
-				fmt.Printf("Failed %s: %v\n", item.Branch, err)
+				if !jsonMode {
+					fmt.Printf("Failed %s: %v\n", item.Branch, err)
+				}
 				failCount++
+				record(item, "failed", err.Error())
 				continue
 			}
 
-			fmt.Printf("Moved %s: %s -> %s\n", item.Branch, item.From, item.To)
+			if !jsonMode {
+				fmt.Printf("Moved %s: %s -> %s\n", item.Branch, item.From, item.To)
+			}
 			moveCount++
+			record(item, "moved", item.Reason)
 		}
+	}
+
+	if jsonMode {
+		if failCount == 0 {
+			return emitJSONSuccess(cmd, map[string]any{
+				"force":    migrateForce,
+				"total":    len(plan),
+				"migrated": moveCount,
+				"skipped":  skipCount,
+				"failed":   failCount,
+				"results":  results,
+			})
+		}
+		return fmt.Errorf("migration completed with %d failures", failCount)
 	}
 
 	fmt.Printf("\nMigration complete: %d moved, %d skipped, %d failed\n", moveCount, skipCount, failCount)

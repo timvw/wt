@@ -84,6 +84,32 @@ func TestSortedTopicsIncludesMigrate(t *testing.T) {
 	}
 }
 
+func TestExamplesCoverAllTopLevelCommands(t *testing.T) {
+	expectedTopics := []string{
+		"checkout",
+		"create",
+		"pr",
+		"mr",
+		"list",
+		"remove",
+		"cleanup",
+		"migrate",
+		"prune",
+		"shellenv",
+		"init",
+		"info",
+		"config",
+		"examples",
+		"version",
+	}
+
+	for _, topicName := range expectedTopics {
+		if _, ok := exampleCatalog[topicName]; !ok {
+			t.Fatalf("expected examples catalog to include topic %q", topicName)
+		}
+	}
+}
+
 func TestCreateExamplesIncludeOutcomeAndFailureModes(t *testing.T) {
 	topic, ok := exampleCatalog["create"]
 	if !ok {
@@ -204,7 +230,7 @@ func TestCreateRemoveMigrateStrategyExamplesAppearInTextAndJSONSamples(t *testin
 	}{
 		{topicName: "create", textNeedle: "Path outcomes by strategy (static):", jsonNeedle: "\"path_outcomes_by_strategy\"", pathNeedle: "parent-branches", basisNeedle: "Static placeholders"},
 		{topicName: "remove", textNeedle: "Path outcomes by strategy (static):", jsonNeedle: "\"path_outcomes_by_strategy\"", pathNeedle: "parent-branches", basisNeedle: "Static placeholders"},
-		{topicName: "migrate", textNeedle: "Path outcomes by strategy switch (static):", jsonNeedle: "\"path_outcomes_by_strategy\"", pathNeedle: "global -> parent-branches", basisNeedle: "<repo-main-parent>"},
+		{topicName: "migrate", textNeedle: "Path outcomes by strategy switch (static):", jsonNeedle: "\"results\"", pathNeedle: "global -> parent-branches", basisNeedle: "<repo-main-parent>"},
 	}
 
 	for _, tc := range tests {

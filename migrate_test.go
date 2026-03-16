@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -233,5 +234,64 @@ func TestMigrateForceReplacesNonEmptyTarget(t *testing.T) {
 	}
 	if _, err := os.Stat(conflictFile); !os.IsNotExist(err) {
 		t.Fatalf("expected conflict file to be removed by forced migration, got err: %v", err)
+	}
+}
+
+func TestMigrateJSONOutput(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping migrate integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	repoDir := filepath.Join(tmpDir, "test-repo")
+	worktreeRoot := filepath.Join(tmpDir, "worktrees")
+	legacyRoot := filepath.Join(tmpDir, "legacy")
+
+	setupTestRepo(t, repoDir)
+	wtBinary := buildWtBinary(t, tmpDir)
+
+	branch := "migrate-json"
+	runGitCommand(t, repoDir, "branch", branch)
+
+	oldPath := filepath.Join(legacyRoot, branch)
+	if err := os.MkdirAll(legacyRoot, 0o755); err != nil {
+		t.Fatalf("Failed to create legacy root: %v", err)
+	}
+	runGitCommand(t, repoDir, "worktree", "add", oldPath, branch)
+
+	applyCmd := exec.Command(wtBinary, "--format", "json", "migrate")
+	applyCmd.Dir = repoDir
+	applyCmd.Env = append(os.Environ(), "WORKTREE_ROOT="+worktreeRoot)
+	applyOutput, applyErr := applyCmd.CombinedOutput()
+	if applyErr != nil {
+		t.Fatalf("migrate json failed: %v\nOutput: %s", applyErr, applyOutput)
+	}
+
+	var payload struct {
+		OK      bool   `json:"ok"`
+		Command string `json:"command"`
+		Data    struct {
+			Force    bool `json:"force"`
+			Total    int  `json:"total"`
+			Migrated int  `json:"migrated"`
+			Skipped  int  `json:"skipped"`
+			Failed   int  `json:"failed"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(applyOutput, &payload); err != nil {
+		t.Fatalf("failed to parse migrate json output: %v\noutput=%q", err, applyOutput)
+	}
+	if !payload.OK {
+		t.Fatalf("expected ok=true in migrate json output, got false: %s", applyOutput)
+	}
+	if payload.Command != "wt migrate" {
+		t.Fatalf("expected command wt migrate, got %q", payload.Command)
+	}
+	if payload.Data.Total == 0 {
+		t.Fatalf("expected migrate json total > 0, got %d", payload.Data.Total)
+	}
+	if payload.Data.Migrated == 0 {
+		t.Fatalf("expected migrate json migrated > 0, got %d", payload.Data.Migrated)
 	}
 }

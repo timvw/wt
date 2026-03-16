@@ -43,39 +43,65 @@ Examples:
   wt init --dry-run    # Preview changes without modifying files
   wt init --uninstall  # Remove wt configuration from shell`,
 	Args: cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		shell := detectShell(args)
 		if shell == "" {
-			fmt.Fprintln(os.Stderr, "Error: could not detect shell. Please specify: wt init bash|zsh|powershell")
-			os.Exit(1)
+			return fmt.Errorf("could not detect shell. Please specify: wt init bash|zsh|powershell")
 		}
 
 		// PowerShell init is only supported on Windows because wt shellenv
 		// only outputs PowerShell code when running on Windows
 		if shell == "powershell" && runtime.GOOS != "windows" {
-			fmt.Fprintln(os.Stderr, "Error: PowerShell shell integration is only supported on Windows.")
-			fmt.Fprintln(os.Stderr, "On macOS/Linux, use: wt init bash  or  wt init zsh")
-			os.Exit(1)
+			return fmt.Errorf("PowerShell shell integration is only supported on Windows. On macOS/Linux, use: wt init bash or wt init zsh")
 		}
 
 		configPath := getShellConfigPath(shell)
 		if configPath == "" {
-			fmt.Fprintf(os.Stderr, "Error: could not determine config file for %s\n", shell)
-			os.Exit(1)
+			return fmt.Errorf("could not determine config file for %s", shell)
+		}
+
+		operation := "install"
+		status := "installed"
+		if initDryRun {
+			status = "planned"
 		}
 
 		if initUninstall {
-			if err := removeShellConfig(configPath, shell, initDryRun); err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
+			operation = "uninstall"
+			status = "removed"
+			if initDryRun {
+				status = "planned"
 			}
-			return
+			if err := removeShellConfig(configPath, shell, initDryRun); err != nil {
+				return err
+			}
+			if isJSONOutput() {
+				return emitJSONSuccess(cmd, map[string]any{
+					"status":      status,
+					"operation":   operation,
+					"shell":       shell,
+					"config_path": configPath,
+					"dry_run":     initDryRun,
+				})
+			}
+			return nil
 		}
 
 		if err := installShellConfig(configPath, shell, initDryRun, initNoPrompt); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+			return err
 		}
+
+		if isJSONOutput() {
+			return emitJSONSuccess(cmd, map[string]any{
+				"status":      status,
+				"operation":   operation,
+				"shell":       shell,
+				"config_path": configPath,
+				"dry_run":     initDryRun,
+			})
+		}
+
+		return nil
 	},
 }
 
@@ -191,6 +217,7 @@ func successPrefix() string {
 
 // installShellConfig adds or updates shell configuration
 func installShellConfig(configPath, shell string, dryRun, noPrompt bool) error {
+	jsonMode := isJSONOutput()
 	content := getShellConfigContent(shell)
 	if content == "" {
 		return fmt.Errorf("unsupported shell: %s", shell)
@@ -214,26 +241,32 @@ func installShellConfig(configPath, shell string, dryRun, noPrompt bool) error {
 			newContent := existingStr[:startIdx] + content + existingStr[endIdx:]
 
 			if dryRun {
-				fmt.Printf("Would update %s (already configured, updating)\n\n", configPath)
-				fmt.Println("New configuration block:")
-				fmt.Println(content)
+				if !jsonMode {
+					fmt.Printf("Would update %s (already configured, updating)\n\n", configPath)
+					fmt.Println("New configuration block:")
+					fmt.Println(content)
+				}
 				return nil
 			}
 
 			if err := os.WriteFile(configPath, []byte(newContent), 0644); err != nil {
 				return fmt.Errorf("failed to write %s: %v", configPath, err)
 			}
-			fmt.Printf("%s Updated wt configuration in %s\n", successPrefix(), configPath)
+			if !jsonMode {
+				fmt.Printf("%s Updated wt configuration in %s\n", successPrefix(), configPath)
+			}
 			return nil
 		}
 	}
 
 	// Append new configuration
 	if dryRun {
-		fmt.Printf("Would append to %s:\n\n", configPath)
-		fmt.Println(content)
-		fmt.Println()
-		fmt.Println("To apply, run: wt init")
+		if !jsonMode {
+			fmt.Printf("Would append to %s:\n\n", configPath)
+			fmt.Println(content)
+			fmt.Println()
+			fmt.Println("To apply, run: wt init")
+		}
 		return nil
 	}
 
@@ -260,29 +293,35 @@ func installShellConfig(configPath, shell string, dryRun, noPrompt bool) error {
 		return fmt.Errorf("failed to write config: %v", err)
 	}
 
-	fmt.Printf("%s Added wt shell integration to %s\n", successPrefix(), configPath)
-	if !noPrompt {
-		fmt.Println()
-		fmt.Println("To activate, run:")
-		switch shell {
-		case "bash":
-			fmt.Printf("  source %s\n", configPath)
-		case "zsh":
-			fmt.Printf("  source %s\n", configPath)
-		case "powershell":
-			fmt.Println("  . $PROFILE")
+	if !jsonMode {
+		fmt.Printf("%s Added wt shell integration to %s\n", successPrefix(), configPath)
+		if !noPrompt {
+			fmt.Println()
+			fmt.Println("To activate, run:")
+			switch shell {
+			case "bash":
+				fmt.Printf("  source %s\n", configPath)
+			case "zsh":
+				fmt.Printf("  source %s\n", configPath)
+			case "powershell":
+				fmt.Println("  . $PROFILE")
+			}
+			fmt.Println()
+			fmt.Println("Or start a new shell session.")
 		}
-		fmt.Println()
-		fmt.Println("Or start a new shell session.")
 	}
 	return nil
 }
 
 // removeShellConfig removes the wt configuration block from shell config
 func removeShellConfig(configPath, shell string, dryRun bool) error {
+	_ = shell
+	jsonMode := isJSONOutput()
 	existing, err := os.ReadFile(configPath)
 	if os.IsNotExist(err) {
-		fmt.Println("No configuration found to remove.")
+		if !jsonMode {
+			fmt.Println("No configuration found to remove.")
+		}
 		return nil
 	}
 	if err != nil {
@@ -292,7 +331,9 @@ func removeShellConfig(configPath, shell string, dryRun bool) error {
 	existingStr := string(existing)
 
 	if !strings.Contains(existingStr, markerStart) {
-		fmt.Println("No wt configuration found in", configPath)
+		if !jsonMode {
+			fmt.Println("No wt configuration found in", configPath)
+		}
 		return nil
 	}
 
@@ -318,7 +359,9 @@ func removeShellConfig(configPath, shell string, dryRun bool) error {
 	newContent := before + after
 
 	if dryRun {
-		fmt.Printf("Would remove wt configuration from %s\n", configPath)
+		if !jsonMode {
+			fmt.Printf("Would remove wt configuration from %s\n", configPath)
+		}
 		return nil
 	}
 
@@ -326,6 +369,8 @@ func removeShellConfig(configPath, shell string, dryRun bool) error {
 		return fmt.Errorf("failed to write %s: %v", configPath, err)
 	}
 
-	fmt.Printf("%s Removed wt configuration from %s\n", successPrefix(), configPath)
+	if !jsonMode {
+		fmt.Printf("%s Removed wt configuration from %s\n", successPrefix(), configPath)
+	}
 	return nil
 }
