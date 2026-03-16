@@ -1953,7 +1953,7 @@ if [ -n "$BASH_VERSION" ]; then
             checkout|co|create)
                 local branches remotes
                 remotes=$(git remote 2>/dev/null | paste -sd'|' -)
-                branches=$(git branch -a --format='%(refname:short)' 2>/dev/null | grep -v 'HEAD' | sed -E "s|^($remotes)/||" | sort -u)
+                branches=$(git branch -a --format='%(refname:short)' 2>/dev/null | grep -v 'HEAD' | sed -E "s#^($remotes)/##" | sort -u)
                 COMPREPLY=( $(compgen -W "$branches" -- "$cur") )
                 return 0
                 ;;
@@ -2005,7 +2005,7 @@ if [ -n "$ZSH_VERSION" ]; then
                 checkout|co|create)
                     local remotes
                     remotes=$(git remote 2>/dev/null | paste -sd'|' -)
-                    branches=(${(f)"$(git branch -a --format='%(refname:short)' 2>/dev/null | grep -v 'HEAD' | sed -E "s|^($remotes)/||" | sort -u)"})
+                    branches=(${(f)"$(git branch -a --format='%(refname:short)' 2>/dev/null | grep -v 'HEAD' | sed -E "s#^($remotes)/##" | sort -u)"})
                     _describe 'branch' branches
                     ;;
                 remove|rm)
