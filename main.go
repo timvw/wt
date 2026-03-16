@@ -1864,8 +1864,15 @@ Register-ArgumentCompleter -CommandName wt -ScriptBlock {
         }
     } elseif ($position -eq 1) {
         $subCommand = $commandAst.CommandElements[1].Value
-        if ($subCommand -in @('checkout', 'co', 'remove', 'rm')) {
-            # Complete branch names from worktree list
+        if ($subCommand -in @('checkout', 'co', 'create')) {
+            # Complete branch names from all local and remote branches
+            $remotes = (git remote 2>$null) -join '|'
+            $branches = git branch -a --format='%(refname:short)' 2>$null | Where-Object { $_ -notmatch 'HEAD' } | ForEach-Object { $_ -replace "^($remotes)/", '' } | Sort-Object -Unique
+            $branches | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+                [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+            }
+        } elseif ($subCommand -in @('remove', 'rm')) {
+            # Complete branch names from existing worktrees
             $branches = git worktree list 2>$null | Select-Object -Skip 1 | ForEach-Object {
                 if ($_ -match '\[([^\]]+)\]') { $matches[1] }
             }
@@ -1941,9 +1948,16 @@ if [ -n "$BASH_VERSION" ]; then
             return 0
         fi
 
-        # Complete branch names for checkout/remove/rm
+        # Complete branch names for checkout/co/create and worktree branches for remove/rm
         case "$prev" in
-            checkout|co|remove|rm)
+            checkout|co|create)
+                local branches remotes
+                remotes=$(git remote 2>/dev/null | paste -sd'|' -)
+                branches=$(git branch -a --format='%(refname:short)' 2>/dev/null | grep -v 'HEAD' | sed -E "s|^($remotes)/||" | sort -u)
+                COMPREPLY=( $(compgen -W "$branches" -- "$cur") )
+                return 0
+                ;;
+            remove|rm)
                 local branches
                 branches=$(git worktree list 2>/dev/null | tail -n +2 | sed -n 's/.*\[\([^]]*\)\].*/\1/p')
                 COMPREPLY=( $(compgen -W "$branches" -- "$cur") )
@@ -1988,7 +2002,13 @@ if [ -n "$ZSH_VERSION" ]; then
             _describe 'command' commands
         elif (( CURRENT == 3 )); then
             case "$words[2]" in
-                checkout|co|remove|rm)
+                checkout|co|create)
+                    local remotes
+                    remotes=$(git remote 2>/dev/null | paste -sd'|' -)
+                    branches=(${(f)"$(git branch -a --format='%(refname:short)' 2>/dev/null | grep -v 'HEAD' | sed -E "s|^($remotes)/||" | sort -u)"})
+                    _describe 'branch' branches
+                    ;;
+                remove|rm)
                     branches=(${(f)"$(git worktree list 2>/dev/null | tail -n +2 | sed -n 's/.*\[\([^]]*\)\].*/\1/p')"})
                     _describe 'branch' branches
                     ;;
