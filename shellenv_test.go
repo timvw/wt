@@ -109,6 +109,58 @@ func TestShellenvZshCompdefError(t *testing.T) {
 	}
 }
 
+// TestShellenvCompletionCheckoutUsesAllBranches verifies that tab completion
+// for checkout/co/create completes from all branches (not just existing worktrees).
+func TestShellenvCompletionCheckoutUsesAllBranches(t *testing.T) {
+	cmd := exec.Command("go", "run", ".", "shellenv")
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("Failed to run wt shellenv: %v", err)
+	}
+	shellenv := string(output)
+
+	// Bash: checkout/co/create should use git branch -a, not git worktree list
+	if !strings.Contains(shellenv, `checkout|co|create)`) {
+		t.Error("Bash completion should handle checkout, co, and create together")
+	}
+
+	// Zsh: same grouping
+	if !strings.Contains(shellenv, `checkout|co|create)`) {
+		t.Error("Zsh completion should handle checkout, co, and create together")
+	}
+
+	// Should use git branch -a for checkout/co/create completions
+	if !strings.Contains(shellenv, `git branch -a --format='%(refname:short)'`) {
+		t.Error("Completion for checkout/co/create should use 'git branch -a' to list all branches")
+	}
+
+	// Should dynamically get remote names for prefix stripping
+	if !strings.Contains(shellenv, `git remote`) {
+		t.Error("Completion should query 'git remote' to strip remote prefixes dynamically")
+	}
+}
+
+// TestShellenvCompletionRemoveUsesWorktreeList verifies that tab completion
+// for remove/rm only completes from existing worktrees (not all branches).
+func TestShellenvCompletionRemoveUsesWorktreeList(t *testing.T) {
+	cmd := exec.Command("go", "run", ".", "shellenv")
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("Failed to run wt shellenv: %v", err)
+	}
+	shellenv := string(output)
+
+	// Bash: remove/rm should still use git worktree list
+	if !strings.Contains(shellenv, `remove|rm)`) {
+		t.Error("Bash completion should handle remove and rm together")
+	}
+
+	// The worktree list pattern should still be present (for remove/rm)
+	if !strings.Contains(shellenv, `git worktree list 2>/dev/null | tail -n +2`) {
+		t.Error("Completion for remove/rm should use 'git worktree list' to list existing worktrees")
+	}
+}
+
 // TestShellenvBypassesWrapperForShellenv ensures `wt shellenv` itself does not
 // go through the PTY/script wrapper. If it does, process substitution like
 // `source <(wt shellenv)` can include CR bytes and break zsh parsing when a
