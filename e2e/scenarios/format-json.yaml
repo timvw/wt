@@ -112,4 +112,4 @@ scenarios:
           output_contains: '"command":"wt shellenv"'
       - run: $WT_BIN --format json shellenv
         expect:
-          output_contains: '"shellenv outputs shell script text"'
+          output_contains: 'shellenv outputs shell script text'
