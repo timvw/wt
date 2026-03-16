@@ -119,21 +119,21 @@ jobs:
           file bin/*
 
       - name: Upload Linux binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wt-linux-amd64
           path: bin/wt-linux-amd64
           retention-days: 1
 
       - name: Upload macOS ARM64 binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wt-darwin-arm64
           path: bin/wt-darwin-arm64
           retention-days: 1
 
       - name: Upload Windows binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wt-windows-amd64
           path: bin/wt-windows-amd64.exe
@@ -203,7 +203,7 @@ jobs:
           sudo apt-get install -y zsh
 
       - name: Download binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ matrix.binary }}
           path: bin
