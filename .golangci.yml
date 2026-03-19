@@ -1,25 +1,27 @@
+version: "2"
+
 run:
   timeout: 5m
-  go: '1.23'
 
 linters:
+  default: none
   enable:
-    - gofmt
     - govet
     - errcheck
     - staticcheck
     - unused
-    - gosimple
     - ineffassign
     - typecheck
+  settings:
+    errcheck:
+      check-blank: false
+      check-type-assertions: false
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
 
-linters-settings:
-  errcheck:
-    check-blank: false
-    check-type-assertions: false
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
+formatters:
+  enable:
+    - gofmt
