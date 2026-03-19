@@ -535,7 +535,7 @@ func isDirEmpty(path string) (bool, error) {
 	case err != nil:
 		return false, err
 	}
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 
 	_, err = dir.Readdirnames(1)
 	if err == io.EOF {

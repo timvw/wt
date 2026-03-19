@@ -348,7 +348,7 @@ func generatePosixScript(wtBinary, shell string, scenario Scenario, verbose, sho
 
 	// Header
 	sb.WriteString("set -e\n")
-	sb.WriteString(fmt.Sprintf("export WT_BIN='%s'\n", wtBinary))
+	fmt.Fprintf(&sb, "export WT_BIN='%s'\n", wtBinary)
 	sb.WriteString("TEST_DIR=$(mktemp -d)\n")
 	sb.WriteString("REPO_DIR=\"$TEST_DIR/test-repo\"\n")
 	sb.WriteString("REPO_NAME=\"test-repo\"\n")
@@ -362,13 +362,13 @@ func generatePosixScript(wtBinary, shell string, scenario Scenario, verbose, sho
 	sb.WriteString("git add README.md\n")
 	sb.WriteString("git commit -m 'initial' --quiet\n")
 	sb.WriteString("git branch -M main\n")
-	sb.WriteString(fmt.Sprintf("export PATH=\"%s:$PATH\"\n", filepath.Dir(wtBinary)))
+	fmt.Fprintf(&sb, "export PATH=\"%s:$PATH\"\n", filepath.Dir(wtBinary))
 
 	// Setup steps
 	for _, setup := range scenario.Setup {
 		if setup.CreateBranch != "" {
-			sb.WriteString(fmt.Sprintf("git checkout -b '%s' --quiet\n", setup.CreateBranch))
-			sb.WriteString(fmt.Sprintf("git commit --allow-empty -m 'commit on %s' --quiet\n", setup.CreateBranch))
+			fmt.Fprintf(&sb, "git checkout -b '%s' --quiet\n", setup.CreateBranch)
+			fmt.Fprintf(&sb, "git commit --allow-empty -m 'commit on %s' --quiet\n", setup.CreateBranch)
 			sb.WriteString("git checkout main --quiet\n")
 		}
 		if setup.CreateFile != nil {

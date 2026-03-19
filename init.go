@@ -280,7 +280,7 @@ func installShellConfig(configPath, shell string, dryRun, noPrompt bool) error {
 	if err != nil {
 		return fmt.Errorf("failed to open %s: %v", configPath, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Add newline before if file doesn't end with one
 	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
