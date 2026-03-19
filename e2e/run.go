@@ -372,16 +372,16 @@ func generatePosixScript(wtBinary, shell string, scenario Scenario, verbose, sho
 			sb.WriteString("git checkout main --quiet\n")
 		}
 		if setup.CreateFile != nil {
-			sb.WriteString(fmt.Sprintf("echo '%s' > '%s'\n", setup.CreateFile.Content, setup.CreateFile.Path))
+			fmt.Fprintf(&sb, "echo '%s' > '%s'\n", setup.CreateFile.Content, setup.CreateFile.Path)
 		}
 		if setup.GitAdd != "" {
-			sb.WriteString(fmt.Sprintf("git add '%s'\n", setup.GitAdd))
+			fmt.Fprintf(&sb, "git add '%s'\n", setup.GitAdd)
 		}
 		if setup.GitCommit != "" {
-			sb.WriteString(fmt.Sprintf("git commit -m '%s' --quiet\n", setup.GitCommit))
+			fmt.Fprintf(&sb, "git commit -m '%s' --quiet\n", setup.GitCommit)
 		}
 		if setup.GitCheckout != "" {
-			sb.WriteString(fmt.Sprintf("git checkout '%s' --quiet\n", setup.GitCheckout))
+			fmt.Fprintf(&sb, "git checkout '%s' --quiet\n", setup.GitCheckout)
 		}
 	}
 
@@ -395,7 +395,7 @@ func generatePosixScript(wtBinary, shell string, scenario Scenario, verbose, sho
 		if step.Cd != "" {
 			cd := step.Cd
 			cd = strings.ReplaceAll(cd, "$REPO_DIR", "\"$REPO_DIR\"")
-			sb.WriteString(fmt.Sprintf("cd %s\n", cd))
+			fmt.Fprintf(&sb, "cd %s\n", cd)
 		}
 		if step.Run != "" {
 			// Set step-level environment variables
@@ -406,7 +406,7 @@ func generatePosixScript(wtBinary, shell string, scenario Scenario, verbose, sho
 				}
 				sort.Strings(keys)
 				for _, k := range keys {
-					sb.WriteString(fmt.Sprintf("export %s='%s'\n", k, step.Env[k]))
+					fmt.Fprintf(&sb, "export %s='%s'\n", k, step.Env[k])
 				}
 			}
 
@@ -418,45 +418,45 @@ func generatePosixScript(wtBinary, shell string, scenario Scenario, verbose, sho
 				// Disable set -e for commands that expect non-zero exit
 				sb.WriteString("set +e\n")
 				if needsOutput {
-					sb.WriteString(fmt.Sprintf("__output=$(%s 2>&1)\n", runCmd))
+					fmt.Fprintf(&sb, "__output=$(%s 2>&1)\n", runCmd)
 				} else {
-					sb.WriteString(fmt.Sprintf("%s\n", runCmd))
+					fmt.Fprintf(&sb, "%s\n", runCmd)
 				}
 				sb.WriteString("__exit_code=$?\n")
 				sb.WriteString("set -e\n")
 			} else {
 				// Normal execution with set -e active
 				if needsOutput {
-					sb.WriteString(fmt.Sprintf("__output=$(%s 2>&1) || __exit_code=$?\n", runCmd))
+					fmt.Fprintf(&sb, "__output=$(%s 2>&1) || __exit_code=$?\n", runCmd)
 					sb.WriteString("__exit_code=${__exit_code:-0}\n")
 				} else {
-					sb.WriteString(fmt.Sprintf("%s || __exit_code=$?\n", runCmd))
+					fmt.Fprintf(&sb, "%s || __exit_code=$?\n", runCmd)
 					sb.WriteString("__exit_code=${__exit_code:-0}\n")
 				}
 			}
 
 			if step.Expect != nil {
 				if step.Expect.ExitCode != nil {
-					sb.WriteString(fmt.Sprintf("[ \"$__exit_code\" -eq %d ] || { echo \"Expected exit code %d, got $__exit_code\"; exit 1; }\n",
-						*step.Expect.ExitCode, *step.Expect.ExitCode))
+					fmt.Fprintf(&sb, "[ \"$__exit_code\" -eq %d ] || { echo \"Expected exit code %d, got $__exit_code\"; exit 1; }\n",
+						*step.Expect.ExitCode, *step.Expect.ExitCode)
 				}
 				if step.Expect.CwdEndsWith != "" {
-					sb.WriteString(fmt.Sprintf("case \"$(pwd)\" in *%s) ;; *) echo \"CWD $(pwd) doesn't end with %s\"; exit 1;; esac\n",
-						step.Expect.CwdEndsWith, step.Expect.CwdEndsWith))
+					fmt.Fprintf(&sb, "case \"$(pwd)\" in *%s) ;; *) echo \"CWD $(pwd) doesn't end with %s\"; exit 1;; esac\n",
+						step.Expect.CwdEndsWith, step.Expect.CwdEndsWith)
 				}
 				if step.Expect.Branch != "" {
-					sb.WriteString(fmt.Sprintf("[ \"$(git branch --show-current)\" = '%s' ] || { echo \"Expected branch %s\"; exit 1; }\n",
-						step.Expect.Branch, step.Expect.Branch))
+					fmt.Fprintf(&sb, "[ \"$(git branch --show-current)\" = '%s' ] || { echo \"Expected branch %s\"; exit 1; }\n",
+						step.Expect.Branch, step.Expect.Branch)
 				}
 				if step.Expect.OutputContains != "" {
 					contains := strings.ReplaceAll(step.Expect.OutputContains, "'", "'\\''")
-					sb.WriteString(fmt.Sprintf("echo \"$__output\" | grep -F -q -- '%s' || { echo \"Output missing expected substring\"; exit 1; }\n",
-						contains))
+					fmt.Fprintf(&sb, "echo \"$__output\" | grep -F -q -- '%s' || { echo \"Output missing expected substring\"; exit 1; }\n",
+						contains)
 				}
 				if step.Expect.OutputNotContains != "" {
 					notContains := strings.ReplaceAll(step.Expect.OutputNotContains, "'", "'\\''")
-					sb.WriteString(fmt.Sprintf("echo \"$__output\" | grep -F -q -- '%s' && { echo \"Output should not contain expected substring\"; exit 1; } || true\n",
-						notContains))
+					fmt.Fprintf(&sb, "echo \"$__output\" | grep -F -q -- '%s' && { echo \"Output should not contain expected substring\"; exit 1; } || true\n",
+						notContains)
 				}
 			}
 		}
@@ -489,7 +489,7 @@ func generatePowerShellScript(wtBinary string, scenario Scenario, verbose, showO
 
 	// Header
 	sb.WriteString("$ErrorActionPreference = 'Stop'\n")
-	sb.WriteString(fmt.Sprintf("$env:WT_BIN = '%s'\n", wtBinary))
+	fmt.Fprintf(&sb, "$env:WT_BIN = '%s'\n", wtBinary)
 	sb.WriteString("$__tmpBase = [System.IO.Path]::GetTempPath()\n")
 	sb.WriteString("if (-not $__tmpBase) { $__tmpBase = $env:TEMP }\n")
 	sb.WriteString("if (-not $__tmpBase) { $__tmpBase = $env:TMP }\n")
@@ -506,26 +506,26 @@ func generatePowerShellScript(wtBinary string, scenario Scenario, verbose, showO
 	sb.WriteString("git add 'README.md'\n")
 	sb.WriteString("git commit -m 'initial' --quiet\n")
 	sb.WriteString("git branch -M main\n")
-	sb.WriteString(fmt.Sprintf("$env:PATH = '%s;' + $env:PATH\n", filepath.Dir(wtBinary)))
+	fmt.Fprintf(&sb, "$env:PATH = '%s;' + $env:PATH\n", filepath.Dir(wtBinary))
 
 	// Setup steps
 	for _, setup := range scenario.Setup {
 		if setup.CreateBranch != "" {
-			sb.WriteString(fmt.Sprintf("git checkout -b '%s' --quiet\n", setup.CreateBranch))
-			sb.WriteString(fmt.Sprintf("git commit --allow-empty -m 'commit on %s' --quiet\n", setup.CreateBranch))
+			fmt.Fprintf(&sb, "git checkout -b '%s' --quiet\n", setup.CreateBranch)
+			fmt.Fprintf(&sb, "git commit --allow-empty -m 'commit on %s' --quiet\n", setup.CreateBranch)
 			sb.WriteString("git checkout main --quiet\n")
 		}
 		if setup.CreateFile != nil {
-			sb.WriteString(fmt.Sprintf("Set-Content -Path '%s' -Value '%s'\n", setup.CreateFile.Path, setup.CreateFile.Content))
+			fmt.Fprintf(&sb, "Set-Content -Path '%s' -Value '%s'\n", setup.CreateFile.Path, setup.CreateFile.Content)
 		}
 		if setup.GitAdd != "" {
-			sb.WriteString(fmt.Sprintf("git add '%s'\n", setup.GitAdd))
+			fmt.Fprintf(&sb, "git add '%s'\n", setup.GitAdd)
 		}
 		if setup.GitCommit != "" {
-			sb.WriteString(fmt.Sprintf("git commit -m '%s' --quiet\n", setup.GitCommit))
+			fmt.Fprintf(&sb, "git commit -m '%s' --quiet\n", setup.GitCommit)
 		}
 		if setup.GitCheckout != "" {
-			sb.WriteString(fmt.Sprintf("git checkout '%s' --quiet\n", setup.GitCheckout))
+			fmt.Fprintf(&sb, "git checkout '%s' --quiet\n", setup.GitCheckout)
 		}
 	}
 
@@ -540,7 +540,7 @@ func generatePowerShellScript(wtBinary string, scenario Scenario, verbose, showO
 		if step.Cd != "" {
 			cd := step.Cd
 			cd = strings.ReplaceAll(cd, "$REPO_DIR", "$RepoDir")
-			sb.WriteString(fmt.Sprintf("Set-Location %s\n", cd))
+			fmt.Fprintf(&sb, "Set-Location %s\n", cd)
 		}
 		if step.Run != "" {
 			// Set step-level environment variables
@@ -551,7 +551,7 @@ func generatePowerShellScript(wtBinary string, scenario Scenario, verbose, showO
 				}
 				sort.Strings(keys)
 				for _, k := range keys {
-					sb.WriteString(fmt.Sprintf("$env:%s = '%s'\n", k, step.Env[k]))
+					fmt.Fprintf(&sb, "$env:%s = '%s'\n", k, step.Env[k])
 				}
 			}
 
@@ -578,9 +578,9 @@ func generatePowerShellScript(wtBinary string, scenario Scenario, verbose, showO
 				sb.WriteString("$__exit_code = 0\n")
 				sb.WriteString("try {\n")
 				if needsOutput {
-					sb.WriteString(fmt.Sprintf("  $__output = %s 2>&1 | Out-String\n", runCmd))
+					fmt.Fprintf(&sb, "  $__output = %s 2>&1 | Out-String\n", runCmd)
 				} else {
-					sb.WriteString(fmt.Sprintf("  %s\n", runCmd))
+					fmt.Fprintf(&sb, "  %s\n", runCmd)
 				}
 				sb.WriteString("  $__exit_code = $LASTEXITCODE\n")
 				sb.WriteString("} catch {\n")
@@ -591,42 +591,42 @@ func generatePowerShellScript(wtBinary string, scenario Scenario, verbose, showO
 				sb.WriteString("}\n")
 			} else if needsOutput {
 				// Capture output (runs in pipeline context)
-				sb.WriteString(fmt.Sprintf("$__output = %s 2>&1 | Out-String\n", runCmd))
+				fmt.Fprintf(&sb, "$__output = %s 2>&1 | Out-String\n", runCmd)
 				sb.WriteString("$__exit_code = $LASTEXITCODE\n")
 			} else {
 				// Run directly to allow auto-cd to work
-				sb.WriteString(fmt.Sprintf("%s\n", runCmd))
+				fmt.Fprintf(&sb, "%s\n", runCmd)
 				sb.WriteString("$__exit_code = $LASTEXITCODE\n")
 			}
 
 			if step.Expect != nil {
 				if step.Expect.ExitCode != nil {
-					sb.WriteString(fmt.Sprintf("if ($__exit_code -ne %d) { throw \"Expected exit code %d, got $__exit_code\" }\n",
-						*step.Expect.ExitCode, *step.Expect.ExitCode))
+					fmt.Fprintf(&sb, "if ($__exit_code -ne %d) { throw \"Expected exit code %d, got $__exit_code\" }\n",
+						*step.Expect.ExitCode, *step.Expect.ExitCode)
 				}
 				if step.Expect.CwdEndsWith != "" {
 					// Handle both forward and back slashes for cross-platform compatibility
 					suffix := step.Expect.CwdEndsWith
 					sb.WriteString("$__cwd = (Get-Location).Path.Replace('\\', '/')\n")
-					sb.WriteString(fmt.Sprintf("if (-not $__cwd.EndsWith('%s')) { throw \"CWD $__cwd doesn't end with %s\" }\n",
-						suffix, suffix))
+					fmt.Fprintf(&sb, "if (-not $__cwd.EndsWith('%s')) { throw \"CWD $__cwd doesn't end with %s\" }\n",
+						suffix, suffix)
 				}
 				if step.Expect.Branch != "" {
 					sb.WriteString("$__branch = git branch --show-current\n")
-					sb.WriteString(fmt.Sprintf("if ($__branch -ne '%s') { throw \"Expected branch %s, got $__branch\" }\n",
-						step.Expect.Branch, step.Expect.Branch))
+					fmt.Fprintf(&sb, "if ($__branch -ne '%s') { throw \"Expected branch %s, got $__branch\" }\n",
+						step.Expect.Branch, step.Expect.Branch)
 				}
 				if step.Expect.OutputContains != "" {
 					contains := strings.ReplaceAll(step.Expect.OutputContains, "'", "''")
 					sb.WriteString("if ($null -eq $__output) { $__output = '' }\n")
-					sb.WriteString(fmt.Sprintf("if (-not $__output.Contains('%s')) { throw \"Output missing expected substring\" }\n",
-						contains))
+					fmt.Fprintf(&sb, "if (-not $__output.Contains('%s')) { throw \"Output missing expected substring\" }\n",
+						contains)
 				}
 				if step.Expect.OutputNotContains != "" {
 					notContains := strings.ReplaceAll(step.Expect.OutputNotContains, "'", "''")
 					sb.WriteString("if ($null -eq $__output) { $__output = '' }\n")
-					sb.WriteString(fmt.Sprintf("if ($__output.Contains('%s')) { throw \"Output should not contain expected substring\" }\n",
-						notContains))
+					fmt.Fprintf(&sb, "if ($__output.Contains('%s')) { throw \"Output should not contain expected substring\" }\n",
+						notContains)
 				}
 			}
 		}
