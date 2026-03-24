@@ -388,6 +388,39 @@ func branchExists(branch string) bool {
 	return cmd.Run() == nil
 }
 
+// matchRemoteBranch parses git ls-remote --heads output and returns the
+// correctly-cased branch name if a case-insensitive match is found.
+// Returns the original branch name if no match is found.
+func matchRemoteBranch(branch string, lsRemoteOutput string) string {
+	lowerBranch := strings.ToLower(branch)
+	for _, line := range strings.Split(lsRemoteOutput, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		ref := strings.TrimPrefix(parts[1], "refs/heads/")
+		if strings.ToLower(ref) == lowerBranch {
+			return ref
+		}
+	}
+	return branch
+}
+
+// resolveRemoteBranchCase calls git ls-remote and resolves the branch name
+// using case-insensitive matching. Returns the remote's casing if found.
+func resolveRemoteBranchCase(branch string) string {
+	cmd := exec.Command("git", "ls-remote", "--heads", "origin")
+	output, err := cmd.Output()
+	if err != nil {
+		return branch
+	}
+	return matchRemoteBranch(branch, string(output))
+}
+
 func buildWorktreePath(info repoInfo, branch string) (string, error) {
 	rendered, err := renderWorktreePath(info, branch)
 	if err != nil {
@@ -867,6 +900,14 @@ var checkoutCmd = &cobra.Command{
 		} else {
 			branch = args[0]
 		}
+
+		// Resolve case-insensitive match against remote branches
+		resolved := resolveRemoteBranchCase(branch)
+		if resolved != branch {
+			fmt.Fprintf(os.Stderr, "Note: using remote branch name %q (you typed %q)\n", resolved, branch)
+			branch = resolved
+		}
+
 		info, err := getRepoInfo()
 		if err != nil {
 			return err
@@ -942,6 +983,13 @@ var createCmd = &cobra.Command{
 		base := getDefaultBase()
 		if len(args) > 1 {
 			base = args[1]
+		}
+
+		// Resolve case-insensitive match against remote branches
+		resolved := resolveRemoteBranchCase(branch)
+		if resolved != branch {
+			fmt.Fprintf(os.Stderr, "Note: using remote branch name %q (you typed %q)\n", resolved, branch)
+			branch = resolved
 		}
 
 		info, err := getRepoInfo()

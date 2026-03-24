@@ -1451,6 +1451,73 @@ func TestRunHooksEnvVarsAvailable(t *testing.T) {
 	}
 }
 
+func TestMatchRemoteBranch(t *testing.T) {
+	lsRemoteOutput := `abc123	refs/heads/main
+def456	refs/heads/Feature/add-logging
+ghi789	refs/heads/Feature/add-logging-v2
+jkl012	refs/heads/Bugfix/fixLogin
+mno345	refs/heads/develop
+`
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "Exact match returns as-is",
+			input: "Feature/add-logging",
+			want:  "Feature/add-logging",
+		},
+		{
+			name:  "Lowercase input matches uppercase remote",
+			input: "feature/add-logging",
+			want:  "Feature/add-logging",
+		},
+		{
+			name:  "All uppercase input matches mixed-case remote",
+			input: "FEATURE/ADD-LOGGING",
+			want:  "Feature/add-logging",
+		},
+		{
+			name:  "Case mismatch in middle of name",
+			input: "bugfix/fixlogin",
+			want:  "Bugfix/fixLogin",
+		},
+		{
+			name:  "No match returns original",
+			input: "nonexistent-branch",
+			want:  "nonexistent-branch",
+		},
+		{
+			name:  "Exact match for main",
+			input: "main",
+			want:  "main",
+		},
+		{
+			name:  "Partial name should not match",
+			input: "Feature/add",
+			want:  "Feature/add",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := matchRemoteBranch(tt.input, lsRemoteOutput)
+			if got != tt.want {
+				t.Errorf("matchRemoteBranch(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatchRemoteBranchEmptyOutput(t *testing.T) {
+	got := matchRemoteBranch("feature/foo", "")
+	if got != "feature/foo" {
+		t.Errorf("matchRemoteBranch with empty output = %q, want %q", got, "feature/foo")
+	}
+}
+
 func TestRunHooksMultiplePostContinueOnFailure(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping in short mode")
