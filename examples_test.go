@@ -160,10 +160,10 @@ func TestRemoveJSONExampleIncludesSamplePayload(t *testing.T) {
 	if !ok {
 		t.Fatal("expected remove topic in catalog")
 	}
-	if len(topic.Examples) < 2 {
+	if len(topic.Examples) < 3 {
 		t.Fatal("expected remove topic to contain json example")
 	}
-	if topic.Examples[1].JSONExample == "" {
+	if topic.Examples[2].JSONExample == "" {
 		t.Fatal("expected remove json example to define a sample payload")
 	}
 }
