@@ -1,0 +1,60 @@
+# E2E tests for `wt status` command
+name: status
+description: Test worktree status dashboard
+
+scenarios:
+  - name: status_shows_main
+    description: Status shows at least the main worktree
+    steps:
+      - run: wt status
+        expect:
+          exit_code: 0
+
+  - name: status_shows_worktree_branch
+    description: Status shows branch name for a checked-out worktree
+    setup:
+      - create_branch: status-branch
+    steps:
+      - run: wt checkout status-branch
+        expect:
+          exit_code: 0
+      - run: wt status
+        expect:
+          exit_code: 0
+          output_contains: status-branch
+
+  - name: status_json_output
+    description: Status outputs valid JSON with --format json
+    skip_shellenv: true
+    steps:
+      - run: $WT_BIN status --format json
+        expect:
+          exit_code: 0
+          output_contains: '"ok":true'
+      - run: $WT_BIN status --format json
+        expect:
+          output_contains: '"worktrees"'
+
+  - name: status_shows_clean_state
+    description: Status shows clean state for unmodified worktree
+    steps:
+      - run: wt status
+        expect:
+          exit_code: 0
+          output_contains: clean
+
+  - name: status_shows_dirty_state
+    description: Status shows dirty state when worktree has uncommitted changes
+    setup:
+      - create_branch: dirty-branch
+    steps:
+      - run: wt checkout dirty-branch
+        expect:
+          exit_code: 0
+      - run: touch new-file.txt
+        expect:
+          exit_code: 0
+      - run: wt status
+        expect:
+          exit_code: 0
+          output_contains: dirty
