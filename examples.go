@@ -49,6 +49,14 @@ var exampleCatalog = map[string]exampleTopic{
 				Preconditions: []string{"Run inside a git repository."},
 			},
 			{
+				Command:     "wt checkout",
+				Purpose:     "Interactive: fuzzy-search from available branches to checkout.",
+				Outcome:     "Presents a filterable list of branches; selecting one creates or reuses its worktree.",
+				ExitCode:    "0 on success; non-zero if selection is cancelled or checkout fails.",
+				SideEffects: []string{"In text mode with shellenv, wrapper may auto-navigate to target path."},
+				Notes:       []string{"Type to filter results with fuzzy matching."},
+			},
+			{
 				Command:     "wt --format json checkout feature-branch",
 				Purpose:     "Machine-readable checkout flow for automation.",
 				Outcome:     "JSON envelope describing whether worktree was created or already existed, including navigate_to path.",
@@ -175,6 +183,14 @@ var exampleCatalog = map[string]exampleTopic{
 				Preconditions: []string{"Target branch currently has a worktree."},
 				FailureModes:  []string{"Dirty worktree requires --force.", "No matching worktree for branch."},
 				FollowUp:      []string{"wt list"},
+			},
+			{
+				Command:     "wt remove",
+				Purpose:     "Interactive: fuzzy-search from available worktrees to remove.",
+				Outcome:     "Presents a filterable list of worktrees; selecting one removes it.",
+				ExitCode:    "0 on success; non-zero if selection is cancelled or removal fails.",
+				SideEffects: []string{"Shell wrapper may navigate back to main worktree in text mode."},
+				Notes:       []string{"Type to filter results with fuzzy matching."},
 			},
 			{
 				Command:      "wt --format json remove old-branch",

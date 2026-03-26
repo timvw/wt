@@ -16,7 +16,7 @@ Inspired by [haacked/dotfiles/tree-me](https://github.com/haacked/dotfiles/blob/
 
 - Configurable worktree strategies: `global`, `sibling-repo`, `parent-branches`, and more
 - Simple commands for common worktree operations
-- **Interactive selection menus** for checkout, remove, pr, and mr commands
+- **Interactive selection menus** with fuzzy matching for checkout, remove, pr, and mr commands
 - GitHub PR support via `wt pr` command (uses `gh` CLI) — checks out the PR's actual branch name
 - GitLab MR support via `wt mr` command (uses `glab` CLI) — checks out the MR's actual branch name
 - **Pre/post command hooks** — run custom scripts (e.g. copy `.env`, install deps) on create/checkout/remove
@@ -42,7 +42,7 @@ See [docs/installation.md](docs/installation.md) for all platforms (Scoop, WinGe
 ```bash
 # Checkout existing branch in new worktree
 wt co feature-branch
-wt co                             # interactive: select from available branches
+wt co                             # interactive: fuzzy-search from available branches
 
 # Create new branch in worktree (defaults to main/master as base)
 wt create my-feature
@@ -55,12 +55,12 @@ wt create my-feature develop      # specify base branch
 # Checkout GitHub PR (requires gh CLI)
 wt pr 123                                          # looks up branch for PR #123
 wt pr https://github.com/org/repo/pull/123         # GitHub PR URL
-wt pr                                              # interactive: select from open PRs
+wt pr                                              # interactive: fuzzy-search from open PRs
 
 # Checkout GitLab MR (requires glab CLI)
 wt mr 123                                          # looks up branch for MR !123
 wt mr https://gitlab.com/org/repo/-/merge_requests/123  # GitLab MR URL
-wt mr                                              # interactive: select from open MRs
+wt mr                                              # interactive: fuzzy-search from open MRs
 ```
 
 ### List & Remove
@@ -70,7 +70,7 @@ wt mr                                              # interactive: select from op
 ```bash
 wt ls                             # list all worktrees
 wt rm old-branch                  # remove a worktree
-wt rm                             # interactive: select worktree to remove
+wt rm                             # interactive: fuzzy-search worktree to remove
 ```
 
 ### Maintenance & Misc
@@ -102,7 +102,7 @@ wt config path                    # print the config file path
 
 ![wt interactive](docs/wt-interactive.gif)
 
-When you run `wt co`, `wt rm`, `wt pr`, or `wt mr` without arguments, you'll get an interactive selection menu.
+When you run `wt co`, `wt rm`, `wt pr`, or `wt mr` without arguments, you'll get an interactive selection menu. Typing filters the results with fuzzy matching, so you can quickly find the branch or worktree you're looking for.
 
 ### JSON Output (`--format json`)
 
