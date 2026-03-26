@@ -74,8 +74,9 @@ Use --format json for machine-readable output.`,
 			return emitJSONSuccess(cmd, map[string]any{"worktrees": statuses})
 		}
 
+		useColor := isColorEnabled()
 		for _, st := range statuses {
-			fmt.Println(formatStatusLine(st))
+			fmt.Println(formatStatusLineColor(st, useColor))
 		}
 		return nil
 	},
@@ -112,8 +113,14 @@ func isDirtyStatus(porcelainOutput string) bool {
 	return strings.TrimSpace(porcelainOutput) != ""
 }
 
-// formatStatusLine formats a single worktree status entry as a human-readable line.
+// formatStatusLine formats a single worktree status entry as a human-readable line (no color).
 func formatStatusLine(st worktreeStatus) string {
+	return formatStatusLineColor(st, false)
+}
+
+// formatStatusLineColor formats a single worktree status entry as a human-readable line.
+// When color is true, ANSI escape codes are added for visual distinction.
+func formatStatusLineColor(st worktreeStatus, color bool) string {
 	marker := " "
 	if st.Current {
 		marker = "*"
@@ -129,7 +136,38 @@ func formatStatusLine(st worktreeStatus) string {
 		tracking = "no upstream"
 	}
 
-	return fmt.Sprintf("%s %-14s %-30s %-7s %s", marker, st.Branch, st.Path, state, tracking)
+	if !color {
+		return fmt.Sprintf("%s %-14s %-30s %-7s %s", marker, st.Branch, st.Path, state, tracking)
+	}
+
+	// Apply colors
+	if st.Current {
+		marker = colorize("*", ansiBold+";"+ansiCyanRaw)
+	}
+
+	branch := colorize(st.Branch, ansiBold)
+
+	if st.Dirty {
+		state = colorize("dirty", ansiRed)
+	} else {
+		state = colorize("clean", ansiGreen)
+	}
+
+	if !st.HasUpstream {
+		tracking = colorize("no upstream", ansiDim)
+	} else {
+		aheadStr := fmt.Sprintf("↑%d", st.Ahead)
+		behindStr := fmt.Sprintf("↓%d", st.Behind)
+		if st.Ahead > 0 {
+			aheadStr = colorize(aheadStr, ansiYellow)
+		}
+		if st.Behind > 0 {
+			behindStr = colorize(behindStr, ansiYellow)
+		}
+		tracking = aheadStr + " " + behindStr
+	}
+
+	return fmt.Sprintf("%s %-14s %-30s %-7s %s", marker, branch, st.Path, state, tracking)
 }
 
 // gitStatusPorcelain runs git status --porcelain in the given directory.
