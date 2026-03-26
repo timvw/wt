@@ -43,11 +43,6 @@ var configShowCmd = &cobra.Command{
 			configStatus = "found"
 		}
 
-		repoConfigStatus := "not found"
-		if configRepoFound {
-			repoConfigStatus = "found"
-		}
-
 		if isJSONOutput() {
 			data := map[string]any{
 				"config_file": map[string]string{
@@ -61,18 +56,18 @@ var configShowCmd = &cobra.Command{
 					"separator": map[string]string{"value": worktreeSeparator, "source": configSources.Separator},
 				},
 			}
-			if configRepoPath != "" {
+			if configRepoFound {
 				data["repo_config"] = map[string]string{
 					"path":   configRepoPath,
-					"status": repoConfigStatus,
+					"status": "found",
 				}
 			}
 			return emitJSONSuccess(cmd, data)
 		}
 
 		fmt.Printf("Config file: %s (%s)\n", configFilePath, configStatus)
-		if configRepoPath != "" {
-			fmt.Printf("Repo config: %s (%s)\n", configRepoPath, repoConfigStatus)
+		if configRepoFound {
+			fmt.Printf("Repo config: %s (found)\n", configRepoPath)
 		}
 		fmt.Println()
 		fmt.Printf("Effective configuration:\n")
