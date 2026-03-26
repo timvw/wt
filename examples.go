@@ -396,10 +396,10 @@ var exampleCatalog = map[string]exampleTopic{
 		Examples: []usageExample{
 			{
 				Command:      "wt config show",
-				Purpose:      "Inspect effective config values and their sources.",
-				Outcome:      "Shows config file path/status and resolved settings.",
+				Purpose:      "Inspect effective config values and their sources, including per-repo .wt.toml overrides.",
+				Outcome:      "Shows global config file path/status, repo-level .wt.toml (if present), and resolved settings.",
 				ExitCode:     "0 on success.",
-				TextExample:  "Config file: ~/.config/wt/config.toml (found)\nEffective configuration:\n  root = \"$WORKTREE_ROOT\" (env WORKTREE_ROOT)",
+				TextExample:  "Config file: ~/.config/wt/config.toml (found)\nRepo config: /path/to/repo/.wt.toml (found)\nEffective configuration:\n  root = \"$WORKTREE_ROOT\" (env WORKTREE_ROOT)",
 				SideEffects:  []string{"Read-only command."},
 				FailureModes: []string{"Malformed config file may produce parse errors."},
 			},

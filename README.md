@@ -22,6 +22,7 @@ Inspired by [haacked/dotfiles/tree-me](https://github.com/haacked/dotfiles/blob/
 - **Pre/post command hooks** — run custom scripts (e.g. copy `.env`, install deps) on create/checkout/remove
 - **Stale worktree detection** — find worktrees with deleted remote branches or inactive commits (`wt cleanup --stale`)
 - **Color-coded status output** — green (clean), red (dirty), yellow (ahead/behind), bold cyan (current); respects `NO_COLOR=1` and auto-strips colors when piped
+- **Per-repo `.wt.toml` config** — override global settings (strategy, hooks, etc.) on a per-repository basis
 - Shell integration with auto-cd functionality
 - Tab completion for Bash and Zsh
 
@@ -91,9 +92,10 @@ wt --help                         # show help
 
 ```bash
 wt info                           # show active strategy, pattern, variables
-wt config show                    # show effective config with sources
+wt config show                    # show effective config with sources (global + repo .wt.toml)
 wt config init                    # create a default config file
 wt config path                    # print the config file path
+# Place a .wt.toml in a repo root to override global config for that repo
 ```
 
 ### Interactive Selection
@@ -120,7 +122,7 @@ In `json` mode, shell integration does **not** auto-navigate. For commands that 
 
 | Topic | Description |
 | --- | --- |
-| [Configuration](docs/configuration.md) | Config file, strategies, patterns, separator, hooks |
+| [Configuration](docs/configuration.md) | Config file, strategies, patterns, separator, hooks, per-repo `.wt.toml` |
 | [Examples](docs/examples.md) | Claude Code + tmux, multi-repo workflows, environment variables |
 | [Installation](docs/installation.md) | All platforms, shell integration, building from source |
 | [Development](docs/development.md) | Building, testing, running from source |
