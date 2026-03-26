@@ -35,8 +35,10 @@ var removeCmd = &cobra.Command{
 			}
 
 			prompt := promptui.Select{
-				Label: "Select worktree to remove",
-				Items: branches,
+				Label:             "Select worktree to remove",
+				Items:             branches,
+				Searcher:          fuzzySearcher(branches),
+				StartInSearchMode: true,
 			}
 			_, result, err := prompt.Run()
 			if err != nil {

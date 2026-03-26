@@ -41,8 +41,10 @@ Examples:
 			}
 
 			prompt := promptui.Select{
-				Label: "Select Pull Request",
-				Items: labels,
+				Label:             "Select Pull Request",
+				Items:             labels,
+				Searcher:          fuzzySearcher(labels),
+				StartInSearchMode: true,
 			}
 			idx, _, err := prompt.Run()
 			if err != nil {
@@ -88,8 +90,10 @@ Examples:
 			}
 
 			prompt := promptui.Select{
-				Label: "Select Merge Request",
-				Items: labels,
+				Label:             "Select Merge Request",
+				Items:             labels,
+				Searcher:          fuzzySearcher(labels),
+				StartInSearchMode: true,
 			}
 			idx, _, err := prompt.Run()
 			if err != nil {

@@ -31,8 +31,10 @@ var checkoutCmd = &cobra.Command{
 			}
 
 			prompt := promptui.Select{
-				Label: "Select branch to checkout",
-				Items: branches,
+				Label:             "Select branch to checkout",
+				Items:             branches,
+				Searcher:          fuzzySearcher(branches),
+				StartInSearchMode: true,
 			}
 			_, result, err := prompt.Run()
 			if err != nil {
