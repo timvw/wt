@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN npm install -g @anthropic-ai/claude-code
 
 # Install wt
-ARG WT_VERSION=0.1.25
+ARG WT_VERSION=0.1.28
 ARG TARGETARCH
 RUN curl -fsSL "https://github.com/timvw/wt/releases/download/v${WT_VERSION}/wt_${WT_VERSION}_linux_${TARGETARCH}.tar.gz" \
     | tar -xz -C /usr/local/bin wt
