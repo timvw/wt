@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -404,6 +405,246 @@ strategy = "global"
 
 		if worktreeStrategy != "sibling-repo" {
 			t.Errorf("worktreeStrategy = %q, want sibling-repo", worktreeStrategy)
+		}
+	})
+}
+
+func TestLoadWorktreeConfigRepoConfig(t *testing.T) {
+	// Save original state
+	origRoot := worktreeRoot
+	origStrategy := worktreeStrategy
+	origPattern := worktreePattern
+	origSeparator := worktreeSeparator
+	origConfigFlag := configFlag
+	origConfigFilePath := configFilePath
+	origConfigFileFound := configFileFound
+	origConfigSources := configSources
+	origHooks := worktreeHooks
+	origRepoPath := configRepoPath
+	origRepoFound := configRepoFound
+	origGitRepoRootFn := gitRepoRootFn
+	origEnvRoot := os.Getenv("WORKTREE_ROOT")
+	origEnvStrategy := os.Getenv("WORKTREE_STRATEGY")
+	origEnvPattern := os.Getenv("WORKTREE_PATTERN")
+	origEnvSeparator, envSepSet := os.LookupEnv("WORKTREE_SEPARATOR")
+	origEnvConfig := os.Getenv("WT_CONFIG")
+
+	t.Cleanup(func() {
+		worktreeRoot = origRoot
+		worktreeStrategy = origStrategy
+		worktreePattern = origPattern
+		worktreeSeparator = origSeparator
+		configFlag = origConfigFlag
+		configFilePath = origConfigFilePath
+		configFileFound = origConfigFileFound
+		configSources = origConfigSources
+		worktreeHooks = origHooks
+		configRepoPath = origRepoPath
+		configRepoFound = origRepoFound
+		gitRepoRootFn = origGitRepoRootFn
+		os.Setenv("WORKTREE_ROOT", origEnvRoot)
+		os.Setenv("WORKTREE_STRATEGY", origEnvStrategy)
+		os.Setenv("WORKTREE_PATTERN", origEnvPattern)
+		if envSepSet {
+			os.Setenv("WORKTREE_SEPARATOR", origEnvSeparator)
+		} else {
+			os.Unsetenv("WORKTREE_SEPARATOR")
+		}
+		os.Setenv("WT_CONFIG", origEnvConfig)
+	})
+
+	clearEnv := func() {
+		os.Setenv("WORKTREE_ROOT", "")
+		os.Setenv("WORKTREE_STRATEGY", "")
+		os.Setenv("WORKTREE_PATTERN", "")
+		os.Unsetenv("WORKTREE_SEPARATOR")
+		os.Setenv("WT_CONFIG", "/nonexistent/config.toml")
+		configFlag = ""
+	}
+
+	t.Run("repo config overrides global config", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		// Create global config
+		globalCfg := filepath.Join(tmpDir, "global.toml")
+		if err := os.WriteFile(globalCfg, []byte(`strategy = "global"
+separator = "/"
+`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		// Create repo config
+		repoDir := filepath.Join(tmpDir, "repo")
+		if err := os.MkdirAll(repoDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repoDir, ".wt.toml"), []byte(`strategy = "sibling-repo"
+separator = "-"
+`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		clearEnv()
+		os.Setenv("WT_CONFIG", globalCfg)
+		gitRepoRootFn = func() (string, error) { return repoDir, nil }
+
+		loadWorktreeConfig()
+
+		if worktreeStrategy != "sibling-repo" {
+			t.Errorf("worktreeStrategy = %q, want sibling-repo", worktreeStrategy)
+		}
+		if worktreeSeparator != "-" {
+			t.Errorf("worktreeSeparator = %q, want \"-\"", worktreeSeparator)
+		}
+		if configSources.Strategy != "repo config" {
+			t.Errorf("configSources.Strategy = %q, want 'repo config'", configSources.Strategy)
+		}
+		if configSources.Separator != "repo config" {
+			t.Errorf("configSources.Separator = %q, want 'repo config'", configSources.Separator)
+		}
+		if !configRepoFound {
+			t.Error("configRepoFound should be true")
+		}
+		if configRepoPath != filepath.Join(repoDir, ".wt.toml") {
+			t.Errorf("configRepoPath = %q, want %q", configRepoPath, filepath.Join(repoDir, ".wt.toml"))
+		}
+	})
+
+	t.Run("env vars override repo config", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		// Create repo config
+		repoDir := filepath.Join(tmpDir, "repo")
+		if err := os.MkdirAll(repoDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repoDir, ".wt.toml"), []byte(`strategy = "sibling-repo"
+separator = "-"
+`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		clearEnv()
+		os.Setenv("WORKTREE_STRATEGY", "parent-branches")
+		gitRepoRootFn = func() (string, error) { return repoDir, nil }
+
+		loadWorktreeConfig()
+
+		if worktreeStrategy != "parent-branches" {
+			t.Errorf("worktreeStrategy = %q, want parent-branches", worktreeStrategy)
+		}
+		if configSources.Strategy != "env: WORKTREE_STRATEGY" {
+			t.Errorf("configSources.Strategy = %q, want 'env: WORKTREE_STRATEGY'", configSources.Strategy)
+		}
+		// separator should still come from repo config
+		if worktreeSeparator != "-" {
+			t.Errorf("worktreeSeparator = %q, want \"-\"", worktreeSeparator)
+		}
+	})
+
+	t.Run("missing repo config is fine", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		repoDir := filepath.Join(tmpDir, "repo")
+		if err := os.MkdirAll(repoDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		clearEnv()
+		gitRepoRootFn = func() (string, error) { return repoDir, nil }
+
+		loadWorktreeConfig()
+
+		if configRepoFound {
+			t.Error("configRepoFound should be false when .wt.toml doesn't exist")
+		}
+		if worktreeStrategy != "global" {
+			t.Errorf("worktreeStrategy = %q, want global (default)", worktreeStrategy)
+		}
+	})
+
+	t.Run("not in git repo is fine", func(t *testing.T) {
+		clearEnv()
+		gitRepoRootFn = func() (string, error) { return "", fmt.Errorf("not in a git repo") }
+
+		loadWorktreeConfig()
+
+		if configRepoFound {
+			t.Error("configRepoFound should be false when not in a git repo")
+		}
+		if configRepoPath != "" {
+			t.Errorf("configRepoPath = %q, want empty", configRepoPath)
+		}
+	})
+
+	t.Run("repo config does not support root", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		repoDir := filepath.Join(tmpDir, "repo")
+		if err := os.MkdirAll(repoDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repoDir, ".wt.toml"), []byte(`root = "/some/path"
+strategy = "sibling-repo"
+`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		clearEnv()
+		gitRepoRootFn = func() (string, error) { return repoDir, nil }
+
+		loadWorktreeConfig()
+
+		home, _ := os.UserHomeDir()
+		expectedRoot := filepath.Join(home, "dev", "worktrees")
+		if worktreeRoot != expectedRoot {
+			t.Errorf("worktreeRoot = %q, want %q (root should be ignored from repo config)", worktreeRoot, expectedRoot)
+		}
+		if configSources.Root != "default" {
+			t.Errorf("configSources.Root = %q, want 'default' (root should be ignored from repo config)", configSources.Root)
+		}
+		// But strategy should still be loaded
+		if worktreeStrategy != "sibling-repo" {
+			t.Errorf("worktreeStrategy = %q, want sibling-repo", worktreeStrategy)
+		}
+	})
+
+	t.Run("repo hooks override global hooks", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		// Create global config with hooks
+		globalCfg := filepath.Join(tmpDir, "global.toml")
+		if err := os.WriteFile(globalCfg, []byte(`strategy = "global"
+
+[hooks]
+post_create = ["make build"]
+pre_remove = ["echo removing"]
+`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		// Create repo config with hooks
+		repoDir := filepath.Join(tmpDir, "repo")
+		if err := os.MkdirAll(repoDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repoDir, ".wt.toml"), []byte(`[hooks]
+post_create = ["npm install"]
+`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		clearEnv()
+		os.Setenv("WT_CONFIG", globalCfg)
+		gitRepoRootFn = func() (string, error) { return repoDir, nil }
+
+		loadWorktreeConfig()
+
+		if len(worktreeHooks.PostCreate) != 1 || worktreeHooks.PostCreate[0] != "npm install" {
+			t.Errorf("worktreeHooks.PostCreate = %v, want [npm install]", worktreeHooks.PostCreate)
+		}
+		// pre_remove from global should be kept since repo didn't override it
+		if len(worktreeHooks.PreRemove) != 1 || worktreeHooks.PreRemove[0] != "echo removing" {
+			t.Errorf("worktreeHooks.PreRemove = %v, want [echo removing] (from global config)", worktreeHooks.PreRemove)
 		}
 	})
 }

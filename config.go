@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -47,6 +48,12 @@ var configFilePath string
 // configFileFound indicates whether the config file was found during loading.
 var configFileFound bool
 
+// configRepoPath is the resolved path to the repo-level .wt.toml (set during loading).
+var configRepoPath string
+
+// configRepoFound indicates whether a repo-level .wt.toml was found during loading.
+var configRepoFound bool
+
 // configSources tracks the origin of each resolved value.
 var configSources configSource
 
@@ -55,6 +62,20 @@ var worktreeHooks Hooks
 
 // configFlag is the --config flag value (set by cobra).
 var configFlag string
+
+// gitRepoRootFn returns the git repository root directory.
+// It is a variable so tests can inject a fake implementation.
+var gitRepoRootFn = defaultGitRepoRoot
+
+// defaultGitRepoRoot uses git rev-parse to find the repo root.
+func defaultGitRepoRoot() (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
+}
 
 // defaultConfigTemplate is the content written by `wt config init`.
 const defaultConfigTemplate = `# wt configuration file
@@ -172,7 +193,66 @@ func loadWorktreeConfig() {
 		}
 	}
 
-	// 3. Environment variables override config file
+	// 3. Load repo-level .wt.toml (overrides global config, but NOT root)
+	configRepoPath = ""
+	configRepoFound = false
+
+	if repoRoot, err := gitRepoRootFn(); err == nil {
+		repoConfigPath := filepath.Join(repoRoot, ".wt.toml")
+		configRepoPath = repoConfigPath
+		if _, err := os.Stat(repoConfigPath); err == nil {
+			configRepoFound = true
+			var repoCfg Config
+			if _, err := toml.DecodeFile(repoConfigPath, &repoCfg); err == nil {
+				// root is intentionally NOT loaded from repo config
+				if repoCfg.Strategy != "" {
+					worktreeStrategy = strings.ToLower(strings.TrimSpace(repoCfg.Strategy))
+					configSources.Strategy = "repo config"
+				}
+				if repoCfg.Pattern != "" {
+					worktreePattern = strings.TrimSpace(repoCfg.Pattern)
+					configSources.Pattern = "repo config"
+				}
+				if repoCfg.Separator != "" {
+					worktreeSeparator = repoCfg.Separator
+					configSources.Separator = "repo config"
+				}
+				// Merge hooks: repo hooks override per-hook type, unset hooks keep global values
+				if len(repoCfg.Hooks.PreCreate) > 0 {
+					worktreeHooks.PreCreate = repoCfg.Hooks.PreCreate
+				}
+				if len(repoCfg.Hooks.PostCreate) > 0 {
+					worktreeHooks.PostCreate = repoCfg.Hooks.PostCreate
+				}
+				if len(repoCfg.Hooks.PreCheckout) > 0 {
+					worktreeHooks.PreCheckout = repoCfg.Hooks.PreCheckout
+				}
+				if len(repoCfg.Hooks.PostCheckout) > 0 {
+					worktreeHooks.PostCheckout = repoCfg.Hooks.PostCheckout
+				}
+				if len(repoCfg.Hooks.PreRemove) > 0 {
+					worktreeHooks.PreRemove = repoCfg.Hooks.PreRemove
+				}
+				if len(repoCfg.Hooks.PostRemove) > 0 {
+					worktreeHooks.PostRemove = repoCfg.Hooks.PostRemove
+				}
+				if len(repoCfg.Hooks.PrePR) > 0 {
+					worktreeHooks.PrePR = repoCfg.Hooks.PrePR
+				}
+				if len(repoCfg.Hooks.PostPR) > 0 {
+					worktreeHooks.PostPR = repoCfg.Hooks.PostPR
+				}
+				if len(repoCfg.Hooks.PreMR) > 0 {
+					worktreeHooks.PreMR = repoCfg.Hooks.PreMR
+				}
+				if len(repoCfg.Hooks.PostMR) > 0 {
+					worktreeHooks.PostMR = repoCfg.Hooks.PostMR
+				}
+			}
+		}
+	}
+
+	// 4. Environment variables override config file and repo config
 	if v := os.Getenv("WORKTREE_ROOT"); v != "" {
 		worktreeRoot = v
 		configSources.Root = "env: WORKTREE_ROOT"

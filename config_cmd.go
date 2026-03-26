@@ -43,8 +43,13 @@ var configShowCmd = &cobra.Command{
 			configStatus = "found"
 		}
 
+		repoConfigStatus := "not found"
+		if configRepoFound {
+			repoConfigStatus = "found"
+		}
+
 		if isJSONOutput() {
-			return emitJSONSuccess(cmd, map[string]any{
+			data := map[string]any{
 				"config_file": map[string]string{
 					"path":   configFilePath,
 					"status": configStatus,
@@ -55,10 +60,21 @@ var configShowCmd = &cobra.Command{
 					"pattern":   map[string]string{"value": pattern, "source": configSources.Pattern},
 					"separator": map[string]string{"value": worktreeSeparator, "source": configSources.Separator},
 				},
-			})
+			}
+			if configRepoPath != "" {
+				data["repo_config"] = map[string]string{
+					"path":   configRepoPath,
+					"status": repoConfigStatus,
+				}
+			}
+			return emitJSONSuccess(cmd, data)
 		}
 
-		fmt.Printf("Config file: %s (%s)\n\n", configFilePath, configStatus)
+		fmt.Printf("Config file: %s (%s)\n", configFilePath, configStatus)
+		if configRepoPath != "" {
+			fmt.Printf("Repo config: %s (%s)\n", configRepoPath, repoConfigStatus)
+		}
+		fmt.Println()
 		fmt.Printf("Effective configuration:\n")
 		fmt.Printf("  %-10s = %-40s (%s)\n", "root", worktreeRoot, configSources.Root)
 		fmt.Printf("  %-10s = %-40s (%s)\n", "strategy", worktreeStrategy, configSources.Strategy)

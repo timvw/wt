@@ -24,6 +24,11 @@ var infoCmd = &cobra.Command{
 			configStatus = "found"
 		}
 
+		repoConfigStatus := "not found"
+		if configRepoFound {
+			repoConfigStatus = "found"
+		}
+
 		hooks := map[string][]string{
 			"pre_create":    worktreeHooks.PreCreate,
 			"post_create":   worktreeHooks.PostCreate,
@@ -38,15 +43,20 @@ var infoCmd = &cobra.Command{
 		}
 
 		if jsonMode {
+			configData := map[string]string{
+				"path":      configFilePath,
+				"status":    configStatus,
+				"strategy":  worktreeStrategy,
+				"pattern":   pattern,
+				"root":      worktreeRoot,
+				"separator": worktreeSeparator,
+			}
+			if configRepoPath != "" {
+				configData["repo_config_path"] = configRepoPath
+				configData["repo_config_status"] = repoConfigStatus
+			}
 			return emitJSONSuccess(cmd, map[string]any{
-				"config": map[string]string{
-					"path":      configFilePath,
-					"status":    configStatus,
-					"strategy":  worktreeStrategy,
-					"pattern":   pattern,
-					"root":      worktreeRoot,
-					"separator": worktreeSeparator,
-				},
+				"config": configData,
 				"strategies": []map[string]string{
 					{"name": "global", "pattern": "{.worktreeRoot}/{.repo.Name}/{.branch}"},
 					{"name": "sibling-repo", "pattern": "{.repo.Main}/../{.repo.Name}-{.branch}"},
@@ -61,7 +71,12 @@ var infoCmd = &cobra.Command{
 			})
 		}
 
-		fmt.Printf(`Config:    %s (%s)
+		repoLine := ""
+		if configRepoPath != "" {
+			repoLine = fmt.Sprintf("\nRepo cfg:  %s (%s)", configRepoPath, repoConfigStatus)
+		}
+
+		fmt.Printf(`Config:    %s (%s)%s
 
 Strategy:  %s
 Pattern:   %s
@@ -82,7 +97,7 @@ Note: The separator setting controls how "/" and "\" in value variables are repl
       Default "/" preserves slashes (nested dirs). Set to "-" or "_" for flat paths.
       Path variables ({.repo.Main}, {.worktreeRoot}) are never transformed.
 Note: {.env.VARNAME} accesses the environment variable VARNAME (e.g. {.env.HOME}).
-`, configFilePath, configStatus, worktreeStrategy, pattern, worktreeRoot, worktreeSeparator)
+`, configFilePath, configStatus, repoLine, worktreeStrategy, pattern, worktreeRoot, worktreeSeparator)
 
 		// Show configured hooks
 		hookNames := []struct {
