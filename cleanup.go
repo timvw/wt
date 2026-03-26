@@ -10,9 +10,18 @@ import (
 )
 
 var (
-	cleanupDryRun bool
-	cleanupForce  bool
+	cleanupDryRun    bool
+	cleanupForce     bool
+	cleanupStale     bool
+	cleanupStaleDays int
 )
+
+// cleanupCandidate represents a worktree flagged for cleanup with a reason.
+type cleanupCandidate struct {
+	Branch string `json:"branch"`
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+}
 
 var cleanupCmd = &cobra.Command{
 	Use:   "cleanup",
@@ -22,10 +31,15 @@ var cleanupCmd = &cobra.Command{
 This command finds all worktrees whose branches have been merged into main/master,
 and removes them. Use --dry-run to preview what would be removed.
 
+With --stale, also detect worktrees whose remote branch was deleted or whose
+last commit is older than --stale-days (default 30).
+
 Examples:
   wt cleanup              # Interactive confirmation for each worktree
   wt cleanup --dry-run    # Preview what would be removed
-  wt cleanup --force      # Remove all without confirmation`,
+  wt cleanup --force      # Remove all without confirmation
+  wt cleanup --stale      # Also detect stale worktrees
+  wt cleanup --stale --stale-days 14  # Custom staleness threshold`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		base := getDefaultBase()
 		jsonMode := isJSONOutput()
@@ -48,19 +62,90 @@ Examples:
 			mergedSet[b] = true
 		}
 
-		// Find worktrees that are for merged branches
-		var toRemove []string
+		// Build list of candidates with reasons
+		var candidates []cleanupCandidate
+
+		// Find worktrees for merged branches
 		for _, branch := range worktreeBranches {
 			if mergedSet[branch] {
-				toRemove = append(toRemove, branch)
+				if path, exists := worktreeExists(branch); exists {
+					candidates = append(candidates, cleanupCandidate{
+						Branch: branch,
+						Path:   path,
+						Reason: "merged",
+					})
+				}
 			}
 		}
 
-		if len(toRemove) == 0 {
+		// If --stale, also find stale worktrees
+		if cleanupStale {
+			// Build set of already-flagged branches to avoid duplicates
+			flagged := make(map[string]bool)
+			for _, c := range candidates {
+				flagged[c.Branch] = true
+			}
+
+			// Get ls-remote output once for all branches
+			lsRemoteCmd := exec.Command("git", "ls-remote", "--heads", "origin")
+			lsRemoteOutput, lsRemoteErr := lsRemoteCmd.Output()
+			lsRemoteStr := ""
+			if lsRemoteErr == nil {
+				lsRemoteStr = string(lsRemoteOutput)
+			}
+
+			for _, branch := range worktreeBranches {
+				if flagged[branch] {
+					continue
+				}
+				path, exists := worktreeExists(branch)
+				if !exists {
+					continue
+				}
+
+				// Check if remote branch is deleted
+				remoteDeleted := false
+				if lsRemoteErr == nil {
+					remoteDeleted = isRemoteBranchDeletedFromOutput(branch, lsRemoteStr)
+				}
+
+				// Get last commit time
+				lastCommitTime, commitErr := getLastCommitTime(path)
+				if commitErr != nil {
+					// Can't determine age, only flag if remote is deleted
+					if remoteDeleted {
+						stale, reason := classifyStaleWorktree(branch, remoteDeleted, lastCommitTime, cleanupStaleDays, base)
+						if stale {
+							candidates = append(candidates, cleanupCandidate{
+								Branch: branch,
+								Path:   path,
+								Reason: reason,
+							})
+						}
+					}
+					continue
+				}
+
+				stale, reason := classifyStaleWorktree(branch, remoteDeleted, lastCommitTime, cleanupStaleDays, base)
+				if stale {
+					candidates = append(candidates, cleanupCandidate{
+						Branch: branch,
+						Path:   path,
+						Reason: reason,
+					})
+				}
+			}
+		}
+
+		if len(candidates) == 0 {
 			if jsonMode {
 				return emitJSONSuccess(cmd, map[string]any{"removed": 0, "skipped": 0, "base": base, "worktrees": []string{}})
 			}
-			fmt.Println("No worktrees found for merged branches")
+			if cleanupStale {
+				fmt.Println("No worktrees found for merged or stale branches")
+			} else {
+				fmt.Println("No worktrees found for merged branches")
+			}
 			return nil
 		}
 
@@ -71,19 +156,19 @@ Examples:
 		// Dry run mode - just show what would be removed
 		if cleanupDryRun {
 			if jsonMode {
-				planned := make([]map[string]string, 0, len(toRemove))
-				for _, branch := range toRemove {
-					if path, exists := worktreeExists(branch); exists {
-						planned = append(planned, map[string]string{"branch": branch, "path": path})
-					}
+				planned := make([]map[string]string, 0, len(candidates))
+				for _, c := range candidates {
+					planned = append(planned, map[string]string{
+						"branch": c.Branch,
+						"path":   c.Path,
+						"reason": c.Reason,
+					})
 				}
 				return emitJSONSuccess(cmd, map[string]any{"dry_run": true, "base": base, "worktrees": planned})
 			}
-			fmt.Printf("Would remove %d worktree(s) for merged branches:\n", len(toRemove))
-			for _, branch := range toRemove {
-				if path, exists := worktreeExists(branch); exists {
-					fmt.Printf("  - %s (%s)\n", branch, path)
-				}
+			fmt.Printf("Would remove %d worktree(s):\n", len(candidates))
+			for _, c := range candidates {
+				fmt.Printf("  - %s (%s) [%s]\n", c.Branch, c.Path, c.Reason)
 			}
 			return nil
 		}
@@ -92,8 +177,8 @@ Examples:
 		removed := 0
 		skipped := 0
 
-		for _, branch := range toRemove {
-			existingPath, exists := worktreeExists(branch)
+		for _, c := range candidates {
+			existingPath, exists := worktreeExists(c.Branch)
 			if !exists {
 				continue
 			}
@@ -101,12 +186,12 @@ Examples:
 			// If not force mode, ask for confirmation
 			if !cleanupForce {
 				prompt := promptui.Prompt{
-					Label:     fmt.Sprintf("Remove worktree for merged branch '%s'", branch),
+					Label:     fmt.Sprintf("Remove worktree for %s branch '%s'", c.Reason, c.Branch),
 					IsConfirm: true,
 				}
 				_, err := prompt.Run()
 				if err != nil {
-					fmt.Printf("  Skipped: %s\n", branch)
+					fmt.Printf("  Skipped: %s\n", c.Branch)
 					skipped++
 					continue
 				}
@@ -123,7 +208,7 @@ Examples:
 					skipped++
 					continue
 				}
-				fmt.Printf("  Failed to remove %s: %v\n", branch, err)
+				fmt.Printf("  Failed to remove %s: %v\n", c.Branch, err)
 				continue
 			}
 
@@ -131,11 +216,11 @@ Examples:
 				if jsonMode {
 					continue
 				}
-				fmt.Printf("  Warning: failed to cleanup path for %s: %v\n", branch, err)
+				fmt.Printf("  Warning: failed to cleanup path for %s: %v\n", c.Branch, err)
 			}
 
 			if !jsonMode {
-				fmt.Printf("✓ Removed worktree: %s\n", branch)
+				fmt.Printf("✓ Removed worktree: %s [%s]\n", c.Branch, c.Reason)
 			}
 			removed++
 		}
