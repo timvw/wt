@@ -2,7 +2,7 @@
 #
 # Record wt demo GIFs using shellwright (MCP over HTTP).
 # Usage: ./record.sh [gif-name]
-#   gif-name: quickstart | multi-repo | hooks | interactive | all (default: all)
+#   gif-name: quickstart | multi-repo | hooks | interactive | status | all (default: all)
 #
 # Prerequisites:
 #   - shellwright running: npx -y @dwmkerr/shellwright --http --cols 90 --rows 18 --font-size 20
@@ -223,18 +223,18 @@ record_interactive() {
 
   record_start
 
-  # Run wt co without args — should show interactive picker
+  # Run wt co without args — should show interactive picker with fuzzy search
   type_cmd "wt co"
   sleep 0.3
   enter
   pause 2
 
-  # Arrow down twice, then select
-  send "\\x1b[B"  # arrow down
-  sleep 0.5
-  send "\\x1b[B"  # arrow down
-  sleep 0.5
-  enter  # select
+  # Type to fuzzy-filter branches (narrows the list to matching branches)
+  type_cmd "auth"
+  pause 2
+
+  # Select the matched branch
+  enter
   pause 2
 
   # Show where we are
@@ -242,6 +242,34 @@ record_interactive() {
   pause 2
 
   record_stop "wt-interactive"
+  shell_stop
+}
+
+record_status() {
+  echo "=== Recording: status ==="
+  shell_start "\"-e\",\"WORKTREE_ROOT=/home/demo/worktrees\",\"wt-demo\",\"bash\",\"--norc\",\"--noprofile\""
+  send "cd ~/src/main-app && export PS1='~/main-app \$ ' && clear\\r"
+  sleep 1
+
+  # Set up worktrees with different states
+  send "wt co feat/auth\\r"
+  sleep 2
+  send "echo 'wip' > todo.txt\\r"  # make feat/auth dirty
+  sleep 0.5
+  send "wt co feat/dashboard\\r"
+  sleep 2
+  send "wt default\\r"
+  sleep 2
+  send "clear\\r"
+  sleep 1
+
+  record_start
+
+  # Show color-coded status dashboard
+  type_and_run "wt status"
+  pause 4
+
+  record_stop "wt-status"
   shell_stop
 }
 
@@ -271,12 +299,14 @@ case "$target" in
   multi-repo)   record_multi_repo ;;
   hooks)        record_hooks ;;
   interactive)  record_interactive ;;
+  status)       record_status ;;
   strategies)   record_strategies ;;
   all)
     record_quickstart
     record_multi_repo
     record_hooks
     record_interactive
+    record_status
     ;;
   *) echo "Unknown target: $target"; exit 1 ;;
 esac

@@ -98,6 +98,16 @@ wt config path                    # print the config file path
 # Place a .wt.toml in a repo root to override global config for that repo
 ```
 
+### Status Dashboard
+
+![wt status](docs/wt-status.gif)
+
+```bash
+wt status                         # color-coded overview of all worktrees
+```
+
+Shows dirty/clean state, ahead/behind counts, and highlights the current worktree. Colors are automatically stripped when piping; set `NO_COLOR=1` to disable.
+
 ### Interactive Selection
 
 ![wt interactive](docs/wt-interactive.gif)

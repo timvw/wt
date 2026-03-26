@@ -1,4 +1,4 @@
-Output "../wt-interactive.gif"
+Output "../wt-status.gif"
 
 Set Theme "Dracula"
 Set FontSize 16
@@ -14,22 +14,27 @@ Sleep 3s
 Type "cd src/main-app"
 Enter
 Sleep 1s
+# Create worktrees and make one dirty
+Type "wt co feat/auth"
+Enter
+Sleep 3s
+Type "echo 'wip' > todo.txt"
+Enter
+Sleep 1s
+Type "wt co feat/dashboard"
+Enter
+Sleep 3s
+Type "wt default"
+Enter
+Sleep 3s
 Type "clear"
 Enter
 Sleep 1s
 Show
 
-# Interactive branch selection with fuzzy search
-Type "wt co"
+# Show color-coded status dashboard
+Type "wt status"
 Enter
-Sleep 3s
-
-# Type to fuzzy-filter branches (narrows the list)
-Type "auth"
-Sleep 2s
-
-# Select the matched branch
-Enter
-Sleep 5s
+Sleep 6s
 
 Sleep 5s
