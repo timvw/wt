@@ -1,0 +1,13 @@
+# E2E tests for `wt default` command
+name: default
+description: Test navigating to the main worktree
+
+scenarios:
+  - name: default_navigates_to_main
+    description: Default command outputs CD marker for the main worktree
+    skip_shellenv: true
+    steps:
+      - run: $WT_BIN default
+        expect:
+          exit_code: 0
+          output_contains: "wt navigating to:"
