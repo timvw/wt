@@ -51,6 +51,44 @@ scenarios:
         expect:
           output_contains: "HOOK_RAN"
 
+  - name: checkout_hooks_run_on_existing_worktree
+    description: Pre/post checkout hooks execute even when worktree already exists
+    skip_os: [windows]
+    skip_shellenv: true
+    setup:
+      - create_branch: existing-co-branch
+    steps:
+      # First checkout creates the worktree (no hook config yet)
+      - run: $WT_BIN checkout existing-co-branch
+        expect:
+          exit_code: 0
+      - cd: $REPO_DIR
+      # Second checkout with hooks configured — hooks should still run
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_checkout = ["touch $WT_PATH/.existing-hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN checkout existing-co-branch
+        expect:
+          exit_code: 0
+          output_contains: "already exists"
+      - run: test -f "$WORKTREE_ROOT/test-repo/existing-co-branch/.existing-hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
+        expect:
+          output_contains: "HOOK_RAN"
+
+  - name: pre_checkout_hook_aborts_existing_worktree
+    description: Pre-checkout hook failure prevents checkout of existing worktree
+    skip_os: [windows]
+    skip_shellenv: true
+    setup:
+      - create_branch: abort-co-branch
+    steps:
+      # First checkout creates the worktree
+      - run: $WT_BIN checkout abort-co-branch
+        expect:
+          exit_code: 0
+      - cd: $REPO_DIR
+      # Second checkout with failing pre_checkout hook — should abort
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_checkout = ["false"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN checkout abort-co-branch
+        expect:
+          exit_code: 1
+
   - name: pre_remove_hook_runs
     description: Pre-remove hook executes before worktree removal
     skip_os: [windows]

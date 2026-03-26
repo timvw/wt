@@ -98,7 +98,7 @@ Hooks let you run custom commands before or after `wt` operations. Define them i
 | `pre_pr` / `post_pr` | Before/after `wt pr` |
 | `pre_mr` / `post_mr` | Before/after `wt mr` |
 
-Hooks only run when a **new worktree is actually created** (or removed). If a worktree already exists, the early-return path skips hooks entirely.
+Checkout hooks (`pre_checkout` / `post_checkout`) run both when a new worktree is created **and** when checking out an existing worktree. Create and remove hooks run only when a worktree is actually created or removed.
 
 **Environment variables** available in hook commands:
 

@@ -915,6 +915,16 @@ var checkoutCmd = &cobra.Command{
 
 		// Check if worktree already exists
 		if existingPath, exists := worktreeExists(branch); exists {
+			hookEnv := buildHookEnv(info, branch, existingPath)
+
+			// Run pre-checkout hooks
+			if err := runHooks("pre_checkout", getHooks("pre_checkout"), hookEnv); err != nil {
+				return fmt.Errorf("pre-checkout hook failed: %w", err)
+			}
+
+			// Run post-checkout hooks (warn only)
+			_ = runHooks("post_checkout", getHooks("post_checkout"), hookEnv)
+
 			if isJSONOutput() {
 				return emitJSONSuccess(cmd, map[string]any{
 					"status":      "exists",
