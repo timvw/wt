@@ -20,6 +20,7 @@ Inspired by [haacked/dotfiles/tree-me](https://github.com/haacked/dotfiles/blob/
 - GitHub PR support via `wt pr` command (uses `gh` CLI) — checks out the PR's actual branch name
 - GitLab MR support via `wt mr` command (uses `glab` CLI) — checks out the MR's actual branch name
 - **Pre/post command hooks** — run custom scripts (e.g. copy `.env`, install deps) on create/checkout/remove
+- **Stale worktree detection** — find worktrees with deleted remote branches or inactive commits (`wt cleanup --stale`)
 - Shell integration with auto-cd functionality
 - Tab completion for Bash and Zsh
 
@@ -75,6 +76,8 @@ wt rm                             # interactive: select worktree to remove
 ```bash
 wt migrate                        # migrate worktrees to configured paths
 wt migrate --force                # force when target path exists
+wt cleanup --stale                # detect stale worktrees (deleted remotes, inactive commits)
+wt cleanup --stale --stale-days 7 # custom inactivity threshold (default: 30 days)
 wt prune                          # clean up stale worktree admin files
 wt version                        # show version
 wt examples                       # show practical examples
