@@ -73,7 +73,7 @@ function wt {
 Register-ArgumentCompleter -CommandName wt -ScriptBlock {
     param($commandName, $wordToComplete, $commandAst, $fakeBoundParameters)
 
-    $commands = @('checkout', 'co', 'create', 'pr', 'mr', 'list', 'ls', 'remove', 'rm', 'cleanup', 'migrate', 'prune', 'help', 'shellenv', 'init', 'info', 'config', 'examples', 'version')
+    $commands = @('checkout', 'co', 'create', 'default', 'pr', 'mr', 'list', 'ls', 'remove', 'rm', 'status', 'cleanup', 'migrate', 'prune', 'help', 'shellenv', 'init', 'info', 'config', 'examples', 'version')
 
     # Get the position in the command line
     $position = $commandAst.CommandElements.Count - 1
@@ -161,7 +161,7 @@ if [ -n "$BASH_VERSION" ]; then
         COMPREPLY=()
         cur="${COMP_WORDS[COMP_CWORD]}"
         prev="${COMP_WORDS[COMP_CWORD-1]}"
-        commands="checkout co create pr mr list ls remove rm cleanup migrate prune help shellenv init info config examples version"
+        commands="checkout co create default pr mr list ls remove rm status cleanup migrate prune help shellenv init info config examples version"
 
         # Complete commands if first argument
         if [ $COMP_CWORD -eq 1 ]; then
@@ -201,6 +201,7 @@ if [ -n "$ZSH_VERSION" ]; then
             'checkout:Checkout existing branch in new worktree'
             'co:Checkout existing branch in new worktree'
             'create:Create new branch in worktree'
+            'default:Navigate to the main worktree'
             'pr:Checkout GitHub PR in worktree'
             'mr:Checkout GitLab MR in worktree'
             'list:List all worktrees'
@@ -216,6 +217,7 @@ if [ -n "$ZSH_VERSION" ]; then
             'info:Show worktree location configuration'
             'config:Manage wt configuration'
             'examples:Show practical command examples'
+            'status:Show status dashboard of all worktrees'
             'version:Show version information'
         )
 
