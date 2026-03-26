@@ -52,6 +52,10 @@ error_symbol = "[❯](bold red)"\n\
 # Bake starship init into .bashrc so it activates even with bare bash
 RUN printf 'eval "$(starship init bash)"\neval "$(wt shellenv)"\n' > .bashrc
 
+# Install mock gh CLI for PR demo (placed before real gh in PATH)
+COPY --chown=demo:demo mock-gh.sh /home/demo/.local/bin/gh
+ENV PATH="/home/demo/.local/bin:$PATH"
+
 # Create main-app repo with branches and .env
 RUN mkdir -p src/main-app && cd src/main-app && git init && \
     echo "APP_SECRET=s3cret" > .env && \
@@ -61,6 +65,10 @@ RUN mkdir -p src/main-app && cd src/main-app && git init && \
     git checkout -b feat/dashboard && git commit --allow-empty -m "add dashboard" && \
     git checkout -b fix/login-bug && git commit --allow-empty -m "fix login" && \
     git checkout main
+
+# Create a bare clone as fake "origin" so git fetch works in PR demo
+RUN git clone --bare src/main-app src/main-app.git && \
+    cd src/main-app && git remote add origin /home/demo/src/main-app.git
 
 # Create shared-lib repo with branches
 RUN mkdir -p src/shared-lib && cd src/shared-lib && git init && \

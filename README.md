@@ -51,6 +51,8 @@ wt create my-feature develop      # specify base branch
 
 ### PRs & MRs
 
+![wt pr](docs/wt-pr.gif)
+
 ```bash
 # Checkout GitHub PR (requires gh CLI)
 wt pr 123                                          # looks up branch for PR #123
