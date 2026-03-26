@@ -21,6 +21,7 @@ Inspired by [haacked/dotfiles/tree-me](https://github.com/haacked/dotfiles/blob/
 - GitLab MR support via `wt mr` command (uses `glab` CLI) — checks out the MR's actual branch name
 - **Pre/post command hooks** — run custom scripts (e.g. copy `.env`, install deps) on create/checkout/remove
 - **Stale worktree detection** — find worktrees with deleted remote branches or inactive commits (`wt cleanup --stale`)
+- **Color-coded status output** — green (clean), red (dirty), yellow (ahead/behind), bold cyan (current); respects `NO_COLOR=1` and auto-strips colors when piped
 - Shell integration with auto-cd functionality
 - Tab completion for Bash and Zsh
 

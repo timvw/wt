@@ -448,16 +448,17 @@ var exampleCatalog = map[string]exampleTopic{
 	},
 	"status": {
 		Name:        "status",
-		Description: "Show status dashboard of all worktrees",
+		Description: "Show color-coded status dashboard of all worktrees",
 		Examples: []usageExample{
 			{
 				Command:     "wt status",
-				Purpose:     "Show a dashboard of all worktrees with dirty/clean state and ahead/behind counts.",
-				Outcome:     "Human-readable table with branch, path, state, and tracking info for each worktree.",
+				Purpose:     "Show a color-coded dashboard of all worktrees with dirty/clean state and ahead/behind counts.",
+				Outcome:     "Human-readable table with branch, path, state, and tracking info for each worktree. Output is color-coded: green for clean worktrees, red for dirty worktrees, yellow for ahead/behind upstream, and bold cyan for the current worktree marker (*).",
 				ExitCode:    "0 on success; non-zero if not in a git repository.",
 				TextExample: "  main           /path/to/main              clean   ↑0 ↓0\n* feat/foo       /path/to/worktree          dirty   ↑2 ↓1",
 				SideEffects: []string{"Read-only command."},
 				FollowUp:    []string{"wt list", "wt cleanup"},
+				Notes:       []string{"Colors are automatically stripped when output is piped to another command.", "Set NO_COLOR=1 to disable colors in interactive terminals."},
 			},
 			{
 				Command:     "wt --format json status",
