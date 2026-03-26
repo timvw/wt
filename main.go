@@ -98,6 +98,7 @@ func init() {
 	rootCmd.AddCommand(examplesCmd)
 	rootCmd.AddCommand(defaultCmd)
 	rootCmd.AddCommand(statusCmd)
+	statusCmd.Flags().BoolVar(&statusCI, "ci", false, "Show CI/CD pipeline status for each branch (requires gh or glab CLI)")
 	removeCmd.Flags().BoolVarP(&removeForce, "force", "f", false, "Force removal even if worktree has modifications")
 	cleanupCmd.Flags().BoolVar(&cleanupDryRun, "dry-run", false, "Preview what would be removed without making changes")
 	cleanupCmd.Flags().BoolVarP(&cleanupForce, "force", "f", false, "Remove all merged worktrees without confirmation")

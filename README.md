@@ -22,6 +22,7 @@ Inspired by [haacked/dotfiles/tree-me](https://github.com/haacked/dotfiles/blob/
 - **Pre/post command hooks** — run custom scripts on create/checkout/remove (e.g. [launch AI assistants](docs/examples.md#ai-assistants-and-editors), [share build caches](docs/examples.md#shared-build-cache-across-worktrees), [assign dev server ports](docs/examples.md#deterministic-dev-server-port-per-worktree), [copy `.env`](docs/examples.md#copy-env-to-new-worktrees))
 - **Stale worktree detection** — find worktrees with deleted remote branches or inactive commits (`wt cleanup --stale`)
 - **Color-coded status output** — green (clean), red (dirty), yellow (ahead/behind), bold cyan (current); respects `NO_COLOR=1` and auto-strips colors when piped
+- **CI/CD status integration** — `wt status --ci` shows pipeline status (✓/✗/●) per branch via `gh` or `glab` CLI
 - **Per-repo `.wt.toml` config** — override global settings (strategy, hooks, etc.) on a per-repository basis
 - Shell integration with auto-cd functionality
 - Tab completion for Bash and Zsh
@@ -106,9 +107,10 @@ wt config path                    # print the config file path
 
 ```bash
 wt status                         # color-coded overview of all worktrees
+wt status --ci                    # include CI/CD pipeline status (requires gh or glab)
 ```
 
-Shows dirty/clean state, ahead/behind counts, and highlights the current worktree. Colors are automatically stripped when piping; set `NO_COLOR=1` to disable.
+Shows dirty/clean state, ahead/behind counts, and highlights the current worktree. With `--ci`, each branch shows ✓ (pass), ✗ (fail), or ● (pending) for its latest CI pipeline. Colors are automatically stripped when piping; set `NO_COLOR=1` to disable.
 
 ### Interactive Selection
 

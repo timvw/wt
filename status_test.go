@@ -238,6 +238,136 @@ func TestFormatStatusLine(t *testing.T) {
 	}
 }
 
+func TestFormatCIColor(t *testing.T) {
+	tests := []struct {
+		ci   string
+		want string
+	}{
+		{"pass", "✓ CI"},
+		{"fail", "✗ CI"},
+		{"pending", "● CI"},
+		{"unknown", "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.ci, func(t *testing.T) {
+			got := formatCIColor(tt.ci)
+			// Strip ANSI codes for content check
+			stripped := stripAnsi(got)
+			if stripped != tt.want {
+				t.Errorf("formatCIColor(%q) stripped = %q, want %q", tt.ci, stripped, tt.want)
+			}
+		})
+	}
+}
+
+func stripAnsi(s string) string {
+	result := s
+	for {
+		start := strings.Index(result, "\033[")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(result[start:], "m")
+		if end == -1 {
+			break
+		}
+		result = result[:start] + result[start+end+1:]
+	}
+	return result
+}
+
+func TestNormalizeGitHubState(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"success", "pass"},
+		{"failure", "fail"},
+		{"error", "fail"},
+		{"pending", "pending"},
+		{"", ""},
+		{"unknown", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := normalizeGitHubState(tt.input); got != tt.want {
+				t.Errorf("normalizeGitHubState(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeGitHubCheckRuns(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"success", "pass"},
+		{"success,success", "pass"},
+		{"failure", "fail"},
+		{"success,failure", "fail"},
+		{"timed_out", "fail"},
+		{"cancelled", "fail"},
+		{"", "pending"},
+		{"null", "pending"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := normalizeGitHubCheckRuns(tt.input); got != tt.want {
+				t.Errorf("normalizeGitHubCheckRuns(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeGitLabState(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{`{"status":"success"}`, "pass"},
+		{`{"status":"failed"}`, "fail"},
+		{`{"status":"running"}`, "pending"},
+		{`{"status":"pending"}`, "pending"},
+		{`{"status":"canceled"}`, ""},
+		{`{"status":"skipped"}`, ""},
+		{`invalid json`, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := normalizeGitLabState(tt.input); got != tt.want {
+				t.Errorf("normalizeGitLabState(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatStatusLineWithCI(t *testing.T) {
+	st := worktreeStatus{
+		Path:        "/path/to/worktree",
+		Branch:      "feat/foo",
+		Dirty:       false,
+		Current:     false,
+		HasUpstream: true,
+		CI:          "pass",
+	}
+	got := formatStatusLine(st)
+	if !strings.Contains(got, "pass") {
+		t.Errorf("formatStatusLine() = %q, expected it to contain CI status 'pass'", got)
+	}
+
+	// Without CI
+	st.CI = ""
+	got = formatStatusLine(st)
+	if strings.Contains(got, "pass") || strings.Contains(got, "fail") || strings.Contains(got, "pending") {
+		t.Errorf("formatStatusLine() = %q, should not contain CI status when empty", got)
+	}
+}
+
 func TestStatusJSONOutput(t *testing.T) {
 	original := outputFormat
 	t.Cleanup(func() { outputFormat = original })

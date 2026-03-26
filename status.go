@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,7 +20,10 @@ type worktreeStatus struct {
 	Behind      int    `json:"behind"`
 	Current     bool   `json:"current"`
 	HasUpstream bool   `json:"has_upstream"`
+	CI          string `json:"ci,omitempty"`
 }
+
+var statusCI bool
 
 var statusCmd = &cobra.Command{
 	Use:   "status",
@@ -28,6 +32,9 @@ var statusCmd = &cobra.Command{
 
 For each worktree, shows: path, branch, dirty/clean state, and
 ahead/behind counts relative to upstream.
+
+Use --ci to include CI/CD pipeline status for each branch
+(requires gh CLI for GitHub or glab CLI for GitLab).
 
 Use --format json for machine-readable output.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -68,6 +75,14 @@ Use --format json for machine-readable output.`,
 			}
 
 			statuses = append(statuses, st)
+		}
+
+		// Fetch CI status if requested
+		if statusCI {
+			ciStatuses := getCIStatuses(statuses)
+			for i, ci := range ciStatuses {
+				statuses[i].CI = ci
+			}
 		}
 
 		if isJSONOutput() {
@@ -136,8 +151,13 @@ func formatStatusLineColor(st worktreeStatus, color bool) string {
 		tracking = "no upstream"
 	}
 
+	ci := ""
+	if st.CI != "" {
+		ci = " " + st.CI
+	}
+
 	if !color {
-		return fmt.Sprintf("%s %-14s %-30s %-7s %s", marker, st.Branch, st.Path, state, tracking)
+		return fmt.Sprintf("%s %-14s %-30s %-7s %s%s", marker, st.Branch, st.Path, state, tracking, ci)
 	}
 
 	// Apply colors
@@ -167,7 +187,25 @@ func formatStatusLineColor(st worktreeStatus, color bool) string {
 		tracking = aheadStr + " " + behindStr
 	}
 
-	return fmt.Sprintf("%s %-14s %-30s %-7s %s", marker, branch, st.Path, state, tracking)
+	if st.CI != "" {
+		ci = " " + formatCIColor(st.CI)
+	}
+
+	return fmt.Sprintf("%s %-14s %-30s %-7s %s%s", marker, branch, st.Path, state, tracking, ci)
+}
+
+// formatCIColor applies color to a CI status string.
+func formatCIColor(ci string) string {
+	switch ci {
+	case "pass":
+		return colorize("✓ CI", ansiGreen)
+	case "fail":
+		return colorize("✗ CI", ansiRed)
+	case "pending":
+		return colorize("● CI", ansiYellow)
+	default:
+		return colorize(ci, ansiDim)
+	}
 }
 
 // gitStatusPorcelain runs git status --porcelain in the given directory.
@@ -188,4 +226,148 @@ func gitRevListAheadBehind(dir string) (string, error) {
 		return "", err
 	}
 	return string(output), nil
+}
+
+// getCIStatuses fetches CI check status for each worktree branch.
+// It detects whether the repo uses GitHub or GitLab and calls the
+// appropriate CLI tool. Returns a slice parallel to statuses.
+func getCIStatuses(statuses []worktreeStatus) []string {
+	results := make([]string, len(statuses))
+
+	remoteType := detectCIRemoteType()
+	if remoteType == RemoteUnknown {
+		return results
+	}
+
+	for i, st := range statuses {
+		if st.Branch == "" {
+			continue
+		}
+		results[i] = fetchCIStatus(st.Branch, remoteType)
+	}
+	return results
+}
+
+// detectCIRemoteType checks if gh or glab CLI is available and
+// whether the remote points to GitHub or GitLab.
+func detectCIRemoteType() RemoteType {
+	cmd := exec.Command("git", "remote", "get-url", "origin")
+	output, err := cmd.Output()
+	if err != nil {
+		return RemoteUnknown
+	}
+	url := strings.TrimSpace(string(output))
+
+	if strings.Contains(url, "github.com") {
+		if _, err := exec.LookPath("gh"); err == nil {
+			return RemoteGitHub
+		}
+	}
+	if strings.Contains(url, "gitlab") {
+		if _, err := exec.LookPath("glab"); err == nil {
+			return RemoteGitLab
+		}
+	}
+	return RemoteUnknown
+}
+
+// fetchCIStatus returns the CI status for a single branch.
+// Returns "pass", "fail", "pending", or "" if unavailable.
+func fetchCIStatus(branch string, remoteType RemoteType) string {
+	switch remoteType {
+	case RemoteGitHub:
+		return fetchGitHubCIStatus(branch)
+	case RemoteGitLab:
+		return fetchGitLabCIStatus(branch)
+	default:
+		return ""
+	}
+}
+
+// fetchGitHubCIStatus uses gh to get the combined check status for a branch.
+func fetchGitHubCIStatus(branch string) string {
+	cmd := exec.Command("gh", "api",
+		fmt.Sprintf("repos/{owner}/{repo}/commits/%s/status", branch),
+		"--jq", ".state")
+	output, err := cmd.Output()
+	if err != nil {
+		// Fall back to check runs (GitHub Actions uses check runs, not commit statuses)
+		return fetchGitHubCheckRuns(branch)
+	}
+	return normalizeGitHubState(strings.TrimSpace(string(output)))
+}
+
+// fetchGitHubCheckRuns uses gh to get check run conclusions for a branch.
+func fetchGitHubCheckRuns(branch string) string {
+	cmd := exec.Command("gh", "api",
+		fmt.Sprintf("repos/{owner}/{repo}/commits/%s/check-runs", branch),
+		"--jq", ".check_runs | map(.conclusion) | unique | join(\",\")")
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return normalizeGitHubCheckRuns(strings.TrimSpace(string(output)))
+}
+
+// normalizeGitHubState maps the GitHub combined status API state to our status.
+func normalizeGitHubState(state string) string {
+	switch state {
+	case "success":
+		return "pass"
+	case "failure", "error":
+		return "fail"
+	case "pending":
+		return "pending"
+	default:
+		return ""
+	}
+}
+
+// normalizeGitHubCheckRuns maps GitHub check run conclusions to our status.
+func normalizeGitHubCheckRuns(conclusions string) string {
+	if conclusions == "" {
+		return "pending"
+	}
+	for _, c := range strings.Split(conclusions, ",") {
+		switch c {
+		case "failure", "timed_out", "cancelled", "action_required":
+			return "fail"
+		case "null", "":
+			return "pending"
+		}
+	}
+	return "pass"
+}
+
+// fetchGitLabCIStatus uses glab to get the pipeline status for a branch.
+func fetchGitLabCIStatus(branch string) string {
+	cmd := exec.Command("glab", "ci", "status", "--branch", branch, "--output", "json")
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return normalizeGitLabState(strings.TrimSpace(string(output)))
+}
+
+// normalizeGitLabState maps glab ci status JSON output to our status.
+func normalizeGitLabState(jsonOutput string) string {
+	// glab ci status --output json returns {"status":"success",...}
+	var result struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(jsonOutput), &result); err != nil {
+		return ""
+	}
+	switch result.Status {
+	case "success":
+		return "pass"
+	case "failed":
+		return "fail"
+	case "running", "pending", "created", "waiting_for_resource", "preparing":
+		return "pending"
+	case "canceled", "skipped":
+		return ""
+	default:
+		return ""
+	}
 }
