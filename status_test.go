@@ -310,7 +310,7 @@ func TestNormalizeGitHubCheckRuns(t *testing.T) {
 		{"success,failure", "fail"},
 		{"timed_out", "fail"},
 		{"cancelled", "fail"},
-		{"", "pending"},
+		{"", ""},
 		{"null", "pending"},
 	}
 

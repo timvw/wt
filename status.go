@@ -284,15 +284,23 @@ func fetchCIStatus(branch string, remoteType RemoteType) string {
 	}
 }
 
-// fetchGitHubCIStatus uses gh to get the combined check status for a branch.
+// fetchGitHubCIStatus uses gh to get CI status for a branch.
+// Checks both the commit status API and the check runs API (GitHub Actions),
+// preferring check runs when the commit status API has no results.
 func fetchGitHubCIStatus(branch string) string {
+	// Try check runs first (GitHub Actions uses this)
+	checkResult := fetchGitHubCheckRuns(branch)
+	if checkResult != "" {
+		return checkResult
+	}
+
+	// Fall back to commit status API (older CI integrations)
 	cmd := exec.Command("gh", "api",
 		fmt.Sprintf("repos/{owner}/{repo}/commits/%s/status", branch),
 		"--jq", ".state")
 	output, err := cmd.Output()
 	if err != nil {
-		// Fall back to check runs (GitHub Actions uses check runs, not commit statuses)
-		return fetchGitHubCheckRuns(branch)
+		return ""
 	}
 	return normalizeGitHubState(strings.TrimSpace(string(output)))
 }
@@ -324,9 +332,10 @@ func normalizeGitHubState(state string) string {
 }
 
 // normalizeGitHubCheckRuns maps GitHub check run conclusions to our status.
+// Returns "" when there are no check runs at all.
 func normalizeGitHubCheckRuns(conclusions string) string {
 	if conclusions == "" {
-		return "pending"
+		return ""
 	}
 	for _, c := range strings.Split(conclusions, ",") {
 		switch c {
