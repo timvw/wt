@@ -101,6 +101,12 @@ wt config path                    # print the config file path
 # Place a .wt.toml in a repo root to override global config for that repo
 ```
 
+On case-insensitive filesystems such as the default macOS APFS setup, mixed-case branch
+prefixes can produce confusing worktree paths. For example, `Feature/foo` and
+`feature/bar` both need a first-level directory that macOS treats as the same name.
+Set `separator = "-"` to flatten branch paths (`Feature/foo` -> `Feature-foo`) and
+avoid that class of collision. See [Configuration](docs/configuration.md#case-insensitive-filesystems).
+
 ### Status Dashboard
 
 ![wt status](docs/wt-status.gif)

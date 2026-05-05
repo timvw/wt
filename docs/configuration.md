@@ -82,6 +82,49 @@ The `separator` setting controls how `/` and `\` characters in **value variables
 | `_` | `feat_foo` (flat) | Alternative flat layout |
 | `""` | `featfoo` | Compact (rarely used) |
 
+### Case-Insensitive Filesystems
+
+The default macOS APFS setup is case-insensitive. That means paths such as
+`Feature/foo` and `feature/bar` share the same first path component from the
+filesystem's point of view, even though Git branch names are case-sensitive.
+
+With the default separator, branch names with slashes become nested directories:
+
+```text
+Feature/make-it-work -> ~/dev/worktrees/repo/Feature/make-it-work
+feature/add-logging  -> ~/dev/worktrees/repo/feature/add-logging
+```
+
+On a case-insensitive filesystem, `Feature` and `feature` refer to the same
+directory. This can make `wt create`, `wt checkout`, `wt remove`, shell
+completion, and manual `git checkout` commands appear to disagree about the
+current branch or worktree path. When `wt` detects this before creating a
+worktree, it prints a warning with the colliding path component.
+
+If your repositories use mixed-case branch prefixes such as `Feature/...`, prefer
+a flat path layout:
+
+```toml
+separator = "-"
+```
+
+That maps branches to paths like:
+
+```text
+Feature/make-it-work -> ~/dev/worktrees/repo/Feature-make-it-work
+feature/add-logging  -> ~/dev/worktrees/repo/feature-add-logging
+```
+
+Changing `separator` affects newly created path calculations. Run `wt migrate`
+or recreate existing worktrees if you want current worktrees to use the new
+layout.
+
+This avoids collisions between unrelated branch prefixes such as `Feature/...`
+and `feature/...`. It does not make case-only branch names safe: `Feature/foo`
+and `feature/foo` still map to names that collide on a case-insensitive
+filesystem. Avoid case-only branch differences, or place the repository and
+worktree root on a case-sensitive filesystem.
+
 ## Hooks
 
 Hooks let you run custom commands before or after `wt` operations. Define them in the `[hooks]` section of your config file:

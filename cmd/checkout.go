@@ -92,6 +92,7 @@ var checkoutCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		warnIfCaseInsensitivePathCollision(path)
 
 		hookEnv := buildHookEnv(info, branch, path)
 

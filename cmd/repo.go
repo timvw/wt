@@ -222,22 +222,33 @@ func getPRNumber(input string) (string, error) {
 }
 
 func worktreeExists(branch string) (string, bool) {
-	cmd := exec.Command("git", "worktree", "list")
-	output, err := cmd.Output()
+	entries, err := getWorktreeListPorcelain()
 	if err != nil {
 		return "", false
 	}
 
-	lines := strings.Split(string(output), "\n")
-	searchPattern := fmt.Sprintf("[%s]", branch)
-	for _, line := range lines {
-		if strings.Contains(line, searchPattern) {
-			fields := strings.Fields(line)
-			if len(fields) > 0 {
-				return fields[0], true
+	return findWorktreeByBranch(entries, branch, filesystemCaseInsensitive(".") || filesystemCaseInsensitive(worktreeRoot))
+}
+
+func findWorktreeByBranch(entries []worktreeListEntry, branch string, caseInsensitive bool) (string, bool) {
+	if branch == "" {
+		return "", false
+	}
+
+	for _, entry := range entries {
+		if entry.Branch == branch {
+			return entry.Path, true
+		}
+	}
+
+	if caseInsensitive {
+		for _, entry := range entries {
+			if strings.EqualFold(entry.Branch, branch) {
+				return entry.Path, true
 			}
 		}
 	}
+
 	return "", false
 }
 

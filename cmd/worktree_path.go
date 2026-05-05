@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"text/template"
 )
@@ -119,6 +120,116 @@ func cleanupWorktreePath(worktreePath string) error {
 	}
 
 	return nil
+}
+
+func warnIfCaseInsensitivePathCollision(worktreePath string) {
+	if isJSONOutput() || !filesystemCaseInsensitive(worktreePath) {
+		return
+	}
+
+	if existingPath, ok := findCaseInsensitivePathCollision(worktreePath); ok {
+		fmt.Fprintf(os.Stderr, "Warning: worktree path %s collides with existing path %s on this case-insensitive filesystem. Consider setting separator = \"-\" in your wt config or avoiding case-only branch names.\n", worktreePath, existingPath)
+	}
+}
+
+func findCaseInsensitivePathCollision(path string) (string, bool) {
+	path = filepath.Clean(path)
+	volume := filepath.VolumeName(path)
+	rest := strings.TrimPrefix(path, volume)
+
+	current := volume
+	if filepath.IsAbs(path) {
+		current += string(os.PathSeparator)
+		rest = strings.TrimPrefix(rest, string(os.PathSeparator))
+	} else if current == "" {
+		current = "."
+	}
+
+	for _, part := range strings.Split(rest, string(os.PathSeparator)) {
+		if part == "" || part == "." {
+			continue
+		}
+
+		entries, err := os.ReadDir(current)
+		if err != nil {
+			return "", false
+		}
+
+		exactPath := filepath.Join(current, part)
+		foundExact := false
+		for _, entry := range entries {
+			name := entry.Name()
+			if name == part {
+				foundExact = true
+				break
+			}
+			if strings.EqualFold(name, part) {
+				return filepath.Join(current, name), true
+			}
+		}
+		if !foundExact {
+			return "", false
+		}
+
+		current = exactPath
+	}
+
+	return "", false
+}
+
+func filesystemCaseInsensitive(path string) bool {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		return false
+	}
+
+	dir := nearestExistingDir(path)
+	if dir == "" {
+		return runtime.GOOS == "windows"
+	}
+
+	file, err := os.CreateTemp(dir, ".wt-case-test-")
+	if err != nil {
+		return runtime.GOOS == "windows"
+	}
+	name := file.Name()
+	_ = file.Close()
+	defer func() { _ = os.Remove(name) }()
+
+	altName := filepath.Join(dir, strings.ToUpper(filepath.Base(name)))
+	if altName == name {
+		altName = filepath.Join(dir, strings.ToLower(filepath.Base(name)))
+	}
+	if altName == name {
+		return false
+	}
+
+	_, err = os.Stat(altName)
+	return err == nil
+}
+
+func nearestExistingDir(path string) string {
+	if path == "" {
+		path = "."
+	}
+
+	path = filepath.Clean(path)
+	if info, err := os.Stat(path); err == nil {
+		if info.IsDir() {
+			return path
+		}
+		return filepath.Dir(path)
+	}
+
+	for {
+		parent := filepath.Dir(path)
+		if parent == path {
+			return ""
+		}
+		if info, err := os.Stat(parent); err == nil && info.IsDir() {
+			return parent
+		}
+		path = parent
+	}
 }
 
 func resolveWorktreePattern() (string, error) {
