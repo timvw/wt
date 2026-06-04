@@ -280,7 +280,7 @@ func expandHome(path string) string {
 		if err != nil {
 			return path
 		}
-		return filepath.Join(home, path[1:])
+		path = filepath.Join(home, path[1:])
 	}
 	expanded := os.ExpandEnv(path)
 	if runtime.GOOS == "windows" {

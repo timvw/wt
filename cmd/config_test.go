@@ -136,6 +136,7 @@ func TestExpandHome(t *testing.T) {
 
 func TestExpandHomeEnvVars(t *testing.T) {
 	t.Setenv("WT_TEST_DIR", "/custom/path")
+	t.Setenv("WT_TEST_TEAM", "myteam")
 
 	tests := []struct {
 		name string
@@ -153,7 +154,15 @@ func TestExpandHomeEnvVars(t *testing.T) {
 			want: "/custom/path/worktrees",
 		},
 		{
-			name: "tilde takes precedence over env expansion",
+			name: "tilde with env var in rest of path",
+			path: "~/$WT_TEST_TEAM/worktrees",
+			want: func() string {
+				home, _ := os.UserHomeDir()
+				return filepath.Join(home, "myteam", "worktrees")
+			}(),
+		},
+		{
+			name: "tilde alone still works",
 			path: "~/worktrees",
 			want: func() string {
 				home, _ := os.UserHomeDir()
