@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 
 	"github.com/spf13/cobra"
@@ -112,7 +113,7 @@ Register-ArgumentCompleter -CommandName wt -ScriptBlock {
 		}
 
 		// Bash/Zsh integration for Unix systems
-		fmt.Print(`wt() {
+		os.Stdout.WriteString(`wt() {
     # Avoid wrapping shellenv generation itself through script(1)
     # to prevent control characters in process substitution output.
     if [ "$1" = "shellenv" ]; then
@@ -138,8 +139,13 @@ Register-ArgumentCompleter -CommandName wt -ScriptBlock {
         # macOS: script -q file command args
         script -q "$log_file" /bin/sh -c 'command wt "$@"' wt "$@"
     else
-        # Linux: script -q -c "command wt $*" "$log_file"
-        script -q -c "command wt $*" "$log_file"
+        # Linux: script -q -c "..." file — must pass command as single string,
+        # so we shell-quote each argument to preserve spaces and special chars.
+        local quoted_args=""
+        for arg in "$@"; do
+            quoted_args="$quoted_args $(printf '%q' "$arg")"
+        done
+        script -q -c "command wt$quoted_args" "$log_file"
     fi
     exit_code=$?
 

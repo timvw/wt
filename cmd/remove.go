@@ -71,16 +71,9 @@ var removeCmd = &cobra.Command{
 		// Find the main worktree path (for cd after removal)
 		var mainWorktreePath string
 		if inRemovedWorktree {
-			listCmd := exec.Command("git", "worktree", "list")
-			output, err := listCmd.Output()
-			if err == nil {
-				lines := strings.Split(string(output), "\n")
-				if len(lines) > 0 {
-					fields := strings.Fields(lines[0])
-					if len(fields) > 0 {
-						mainWorktreePath = fields[0]
-					}
-				}
+			entries, err := getWorktreeListPorcelain()
+			if err == nil && len(entries) > 0 {
+				mainWorktreePath = entries[0].Path
 			}
 		}
 

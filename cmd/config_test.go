@@ -117,6 +117,54 @@ func TestExpandHome(t *testing.T) {
 			path: "",
 			want: "",
 		},
+		{
+			name: "expands ~\\ backslash path",
+			path: `~\projects\worktrees`,
+			want: filepath.Join(home, `\projects\worktrees`),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := expandHome(tt.path)
+			if got != tt.want {
+				t.Errorf("expandHome(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExpandHomeEnvVars(t *testing.T) {
+	t.Setenv("WT_TEST_DIR", "/custom/path")
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "expands $VAR",
+			path: "$WT_TEST_DIR/worktrees",
+			want: "/custom/path/worktrees",
+		},
+		{
+			name: "expands ${VAR}",
+			path: "${WT_TEST_DIR}/worktrees",
+			want: "/custom/path/worktrees",
+		},
+		{
+			name: "tilde takes precedence over env expansion",
+			path: "~/worktrees",
+			want: func() string {
+				home, _ := os.UserHomeDir()
+				return filepath.Join(home, "worktrees")
+			}(),
+		},
+		{
+			name: "unset var expands to empty",
+			path: "$WT_NONEXISTENT_VAR/worktrees",
+			want: "/worktrees",
+		},
 	}
 
 	for _, tt := range tests {

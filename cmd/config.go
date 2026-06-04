@@ -110,11 +110,12 @@ const defaultConfigTemplate = `# wt configuration file
 #                              $WT_REPO_NAME, $WT_REPO_HOST, $WT_REPO_OWNER
 # Pre-hooks abort on failure; post-hooks warn only.
 # Set WT_HOOKS_DISABLED=1 to skip all hooks.
+# NOTE: Always quote path variables ("$WT_PATH") to handle spaces in paths.
 #
 # [hooks]
-# post_create = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]
-# post_checkout = ["cd $WT_PATH && npm install"]
-# pre_remove = ["echo Removing $WT_PATH"]
+# post_create = ["test -f \"$WT_MAIN/.env\" && cp \"$WT_MAIN/.env\" \"$WT_PATH/.env\" || true"]
+# post_checkout = ["cd \"$WT_PATH\" && npm install"]
+# pre_remove = ["echo \"Removing $WT_PATH\""]
 `
 
 // configDir returns the directory where wt config files are stored.
@@ -271,16 +272,17 @@ func loadWorktreeConfig() {
 	}
 }
 
-// expandHome replaces a leading ~ with the user's home directory.
+// expandHome replaces a leading ~ with the user's home directory
+// and expands environment variables ($HOME, ${HOME}, %USERPROFILE%).
 func expandHome(path string) string {
-	if strings.HasPrefix(path, "~/") || path == "~" {
+	if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, `~\`) || path == "~" {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return path
 		}
 		return filepath.Join(home, path[1:])
 	}
-	return path
+	return os.ExpandEnv(path)
 }
 
 // writeDefaultConfig creates a default config file at the given path.
