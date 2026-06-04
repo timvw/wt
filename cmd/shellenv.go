@@ -113,7 +113,7 @@ Register-ArgumentCompleter -CommandName wt -ScriptBlock {
 		}
 
 		// Bash/Zsh integration for Unix systems
-		os.Stdout.WriteString(`wt() {
+		_, _ = os.Stdout.WriteString(`wt() {
     # Avoid wrapping shellenv generation itself through script(1)
     # to prevent control characters in process substitution output.
     if [ "$1" = "shellenv" ]; then
