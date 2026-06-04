@@ -273,7 +273,7 @@ func loadWorktreeConfig() {
 }
 
 // expandHome replaces a leading ~ with the user's home directory
-// and expands environment variables ($HOME, ${HOME}, %USERPROFILE%).
+// and expands environment variables ($VAR, ${VAR}, and %VAR% on Windows).
 func expandHome(path string) string {
 	if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, `~\`) || path == "~" {
 		home, err := os.UserHomeDir()
@@ -282,7 +282,33 @@ func expandHome(path string) string {
 		}
 		return filepath.Join(home, path[1:])
 	}
-	return os.ExpandEnv(path)
+	expanded := os.ExpandEnv(path)
+	if runtime.GOOS == "windows" {
+		expanded = expandWindowsEnv(expanded)
+	}
+	return expanded
+}
+
+// expandWindowsEnv expands %VAR% style environment variables.
+func expandWindowsEnv(path string) string {
+	for {
+		start := strings.Index(path, "%")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(path[start+1:], "%")
+		if end == -1 {
+			break
+		}
+		end += start + 1
+		varName := path[start+1 : end]
+		if val, ok := os.LookupEnv(varName); ok {
+			path = path[:start] + val + path[end+1:]
+		} else {
+			path = path[:start] + path[end+1:]
+		}
+	}
+	return path
 }
 
 // writeDefaultConfig creates a default config file at the given path.

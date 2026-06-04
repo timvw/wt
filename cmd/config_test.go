@@ -177,6 +177,51 @@ func TestExpandHomeEnvVars(t *testing.T) {
 	}
 }
 
+func TestExpandWindowsEnv(t *testing.T) {
+	t.Setenv("WT_WIN_TEST", `C:\Users\TestUser`)
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "expands %VAR%",
+			path: `%WT_WIN_TEST%\worktrees`,
+			want: `C:\Users\TestUser\worktrees`,
+		},
+		{
+			name: "expands multiple %VAR%",
+			path: `%WT_WIN_TEST%\%WT_WIN_TEST%`,
+			want: `C:\Users\TestUser\C:\Users\TestUser`,
+		},
+		{
+			name: "unset %VAR% expands to empty",
+			path: `%WT_NONEXISTENT%\worktrees`,
+			want: `\worktrees`,
+		},
+		{
+			name: "no percent signs unchanged",
+			path: `C:\plain\path`,
+			want: `C:\plain\path`,
+		},
+		{
+			name: "single percent sign unchanged",
+			path: `50% done`,
+			want: `50% done`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := expandWindowsEnv(tt.path)
+			if got != tt.want {
+				t.Errorf("expandWindowsEnv(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWriteDefaultConfig(t *testing.T) {
 	t.Run("creates config file", func(t *testing.T) {
 		tmpDir := t.TempDir()
