@@ -22,6 +22,25 @@ winget install timvw.wt
 wt init  # Configure shell integration
 ```
 
+## Nix
+
+```bash
+# Run without installing
+nix run github:timvw/wt -- version
+
+# Install to your profile
+nix profile install github:timvw/wt
+wt init  # Configure shell integration
+```
+
+For NixOS or home-manager, add to your configuration:
+
+```nix
+environment.systemPackages = [ pkgs.wt ];  # NixOS
+# or
+home.packages = [ pkgs.wt ];              # home-manager
+```
+
 ## Linux Packages
 
 Download `.deb`, `.rpm`, or `.pkg.tar.zst` packages from the [releases page](https://github.com/timvw/wt/releases).
