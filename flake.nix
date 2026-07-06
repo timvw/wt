@@ -10,7 +10,10 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        version = "0.1.29";
+        # Release binaries are versioned by goreleaser from the git tag; the flake
+        # has no access to tags, so derive a self-describing version from the rev
+        # instead of hardcoding a semver that silently goes stale after each release.
+        version = self.shortRev or self.dirtyShortRev or "dev";
       in {
         packages = {
           wt = pkgs.buildGoModule {
@@ -19,21 +22,35 @@
 
             src = ./.;
 
+            # To refresh after go.mod changes: set this to pkgs.lib.fakeHash, run
+            # `nix build .#wt`, then copy the "got:" hash from the failure.
             vendorHash = "sha256-6FnhHVesWhG2AGY32YxgtHBUiGdJ7Kuuj4S/sqQBu0A=";
+
+            # The repo has a second `package main` (./e2e), an internal test
+            # orchestrator. Exclude it so only the `wt` binary is built/installed;
+            # unlike `subPackages`, this keeps the full test suite in check scope.
+            excludedPackages = [ "e2e" ];
+
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+
+            # wt shells out to `git` at runtime; put it on the binary's PATH so the
+            # package works even when git isn't otherwise installed. (Shell
+            # integration additionally needs script(1) in the *user's* shell — see
+            # docs/installation.md; a wrapper can't reach the interactive shell.)
+            postInstall = ''
+              wrapProgram $out/bin/wt \
+                --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.git ]}
+            '';
 
             nativeCheckInputs = with pkgs; [
               git
               bash
-              util-linux  # provides script(1), used by the wt shell function to allocate a PTY
+            ] ++ lib.optionals stdenv.isLinux [
+              # provides script(1) for the wt shell function's PTY allocation;
+              # Linux-only (util-linux is unavailable on Darwin, where script(1)
+              # ships with the base system).
+              util-linux
             ];
-
-            # TestRemoveCleansUpResidualWorktreeDirectory writes a bash wrapper script at
-            # runtime using #!/usr/bin/env bash, but /usr/bin/env is absent in the Nix
-            # sandbox.  Patch the shebang to an absolute path instead.
-            postPatch = ''
-              substituteInPlace cmd/remove_cleanup_test.go \
-                --replace-fail '#!/usr/bin/env bash' '#!${pkgs.bash}/bin/bash'
-            '';
 
             preCheck = ''
               export HOME=$(mktemp -d)

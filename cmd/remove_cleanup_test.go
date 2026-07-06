@@ -26,9 +26,16 @@ func TestRemoveCleansUpResidualWorktreeDirectory(t *testing.T) {
 		t.Fatalf("Failed to locate git binary: %v", err)
 	}
 
+	// Resolve bash from PATH rather than hardcoding /usr/bin/env, which is absent
+	// in sandboxed environments (e.g. the Nix build sandbox).
+	realBash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skipf("Skipping cleanup test: bash not available: %v", err)
+	}
+
 	fakeGitDir := t.TempDir()
 	fakeGitPath := filepath.Join(fakeGitDir, "git")
-	gitWrapper := fmt.Sprintf(`#!/usr/bin/env bash
+	gitWrapper := fmt.Sprintf(`#!%s
 set -e
 
 REAL_GIT=%q
@@ -40,7 +47,7 @@ if [ "$1" = "worktree" ] && [ "$2" = "remove" ]; then
   exit 0
 fi
 
-exec "$REAL_GIT" "$@"`, realGit)
+exec "$REAL_GIT" "$@"`, realBash, realGit)
 
 	if err := os.WriteFile(fakeGitPath, []byte(gitWrapper), 0o755); err != nil {
 		t.Fatalf("Failed to write fake git binary: %v", err)

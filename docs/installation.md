@@ -33,12 +33,34 @@ nix profile install github:timvw/wt
 wt init  # Configure shell integration
 ```
 
-For NixOS or home-manager, add to your configuration:
+The installed `wt` binary bundles `git` in its runtime path. The shell
+integration (`wt init`) runs in your interactive shell, however, and calls
+`git` (completions) and `script(1)` (PTY for interactive commands) directly, so
+make sure both are on your `PATH`: `git`, plus `util-linux` for `script(1)` on
+Linux (on macOS `script` ships with the base system).
+
+For NixOS or home-manager, add `wt` as a flake input and reference its package
+in your modules (it is not part of `nixpkgs`, so `pkgs.wt` will not resolve):
 
 ```nix
-environment.systemPackages = [ pkgs.wt ];  # NixOS
-# or
-home.packages = [ pkgs.wt ];              # home-manager
+# flake.nix
+{
+  inputs.wt.url = "github:timvw/wt";
+
+  outputs = { self, nixpkgs, wt, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ({ pkgs, ... }: {
+          # NixOS
+          environment.systemPackages = [ wt.packages.${pkgs.system}.default ];
+          # home-manager equivalent:
+          # home.packages = [ wt.packages.${pkgs.system}.default ];
+        })
+      ];
+    };
+  };
+}
 ```
 
 ## Linux Packages
