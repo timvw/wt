@@ -1,0 +1,5 @@
+# The Dockerfile builds via `nix build path:/src`, which ignores git anyway;
+# keep the build context small.
+.git
+result
+bin

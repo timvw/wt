@@ -139,6 +139,23 @@ jobs:
           path: bin/wt-windows-amd64.exe
           retention-days: 1
 
+  nix:
+    name: Nix Flake Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Build flake (runs sandboxed test suite)
+        run: nix build .#wt -L
+
+      - name: Smoke test
+        run: ./result/bin/wt version
+
   # Unified E2E tests using YAML scenarios
   e2e:
     name: E2E (${{ matrix.os }}, ${{ matrix.shell }})
