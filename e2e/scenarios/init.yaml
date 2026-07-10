@@ -36,7 +36,7 @@ scenarios:
   - name: init_powershell_dry_run
     description: Init shows what would be added to PowerShell profile
     skip_shellenv: true
-    skip_shells: [bash, zsh]
+    skip_shells: [bash, zsh, fish]
     steps:
       - run: $WT_BIN init powershell --dry-run
         expect:
@@ -46,7 +46,8 @@ scenarios:
   - name: init_creates_config
     description: Init creates shell config with markers
     skip_shellenv: true
-    skip_shells: [powershell, pwsh]
+    # steps use bash-only inline env syntax (HOME="..." cmd), so fish can't run them
+    skip_shells: [powershell, pwsh, fish]
     skip_os: [windows]
     steps:
       - run: |
@@ -60,7 +61,7 @@ scenarios:
   - name: init_idempotent
     description: Running init twice does not duplicate config
     skip_shellenv: true
-    skip_shells: [powershell, pwsh]
+    skip_shells: [powershell, pwsh, fish]
     skip_os: [windows]
     steps:
       - run: |
@@ -75,7 +76,7 @@ scenarios:
   - name: init_uninstall
     description: Init --uninstall removes the config
     skip_shellenv: true
-    skip_shells: [powershell, pwsh]
+    skip_shells: [powershell, pwsh, fish]
     skip_os: [windows]
     steps:
       - run: |
@@ -89,7 +90,7 @@ scenarios:
   - name: init_preserves_existing_content
     description: Init preserves existing shell config content
     skip_shellenv: true
-    skip_shells: [powershell, pwsh]
+    skip_shells: [powershell, pwsh, fish]
     skip_os: [windows]
     steps:
       - run: |

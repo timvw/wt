@@ -6,7 +6,7 @@ scenarios:
   - name: shellenv_produces_output
     description: shellenv command produces output
     skip_shellenv: true  # Run raw binary, don't source shellenv
-    skip_shells: [powershell, pwsh]  # Shell detection differs on Windows
+    skip_shells: [powershell, pwsh, fish]  # fish's wrapper uses "function wt", not "wt()"
     steps:
       - run: $WT_BIN shellenv
         expect:
@@ -24,7 +24,7 @@ scenarios:
   - name: shellenv_bash_specific
     description: shellenv contains bash-specific code
     skip_shellenv: true
-    skip_shells: [zsh, powershell, pwsh]
+    skip_shells: [zsh, fish, powershell, pwsh]
     steps:
       - run: $WT_BIN shellenv
         expect:
@@ -33,7 +33,7 @@ scenarios:
   - name: shellenv_zsh_specific
     description: shellenv contains zsh-specific code
     skip_shellenv: true
-    skip_shells: [bash, powershell, pwsh]
+    skip_shells: [bash, fish, powershell, pwsh]
     steps:
       - run: $WT_BIN shellenv
         expect:

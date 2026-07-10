@@ -209,6 +209,9 @@ func determineShells(shellsFlag string) []string {
 		if _, err := exec.LookPath("zsh"); err == nil {
 			shells = append(shells, "zsh")
 		}
+		if _, err := exec.LookPath("fish"); err == nil {
+			shells = append(shells, "fish")
+		}
 	}
 	return shells
 }
@@ -357,6 +360,9 @@ func runScenario(wtBinary, shell, fileName string, scenario Scenario, verbose, s
 }
 
 func generateScript(wtBinary, shell string, scenario Scenario, verbose, showOutput, keepTmp bool) string {
+	if shell == "fish" {
+		return generateFishScript(wtBinary, scenario, verbose, showOutput, keepTmp)
+	}
 	if shell == "powershell" || shell == "pwsh" {
 		return generatePowerShellScript(wtBinary, scenario, verbose, showOutput, keepTmp)
 	}
@@ -478,6 +484,151 @@ func generatePosixScript(wtBinary, shell string, scenario Scenario, verbose, sho
 				if step.Expect.OutputNotContains != "" {
 					notContains := strings.ReplaceAll(step.Expect.OutputNotContains, "'", "'\\''")
 					fmt.Fprintf(&sb, "echo \"$__output\" | grep -F -q -- '%s' && { echo \"Output should not contain expected substring\"; exit 1; } || true\n",
+						notContains)
+				}
+			}
+		}
+	}
+
+	if showOutput {
+		sb.WriteString("echo \"TEST_DIR=$TEST_DIR\"\n")
+		sb.WriteString("find \"$TEST_DIR\" -path '*/.git' -print -prune -o -print\n")
+	}
+
+	if verbose {
+		sb.WriteString("echo \"TEST_DIR=$TEST_DIR\"\n")
+		sb.WriteString("ls -R \"$TEST_DIR\"\n")
+	}
+
+	if keepTmp {
+		sb.WriteString("echo \"__TEST_DIR__=$TEST_DIR\"\n")
+	}
+
+	// Cleanup
+	if !keepTmp {
+		sb.WriteString("rm -rf \"$TEST_DIR\"\n")
+	}
+
+	return sb.String()
+}
+
+// fishSingleQuote escapes a string for embedding inside a fish single-quoted
+// literal. Unlike POSIX shells, fish allows backslash-escaping directly
+// inside single quotes: only \\ and \' are special there.
+func fishSingleQuote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `'`, `\'`)
+	return s
+}
+
+// generateFishScript generates a test script using fish syntax. Fish is not
+// POSIX-compatible (e.g. `VAR=value` and `export VAR=value` are syntax
+// errors in fish), so it needs its own generator rather than reusing
+// generatePosixScript.
+func generateFishScript(wtBinary string, scenario Scenario, verbose, showOutput, keepTmp bool) string {
+	var sb strings.Builder
+
+	// Header. Fish has no errexit ("set -e" in the bash sense), so critical
+	// setup commands explicitly abort via "; or exit 1".
+	fmt.Fprintf(&sb, "set -x WT_BIN '%s'\n", fishSingleQuote(wtBinary))
+	sb.WriteString("set TEST_DIR (mktemp -d)\n")
+	sb.WriteString("set REPO_DIR \"$TEST_DIR/test-repo\"\n")
+	sb.WriteString("set REPO_NAME \"test-repo\"\n")
+	sb.WriteString("set -x WORKTREE_ROOT \"$TEST_DIR/worktrees\"\n")
+	sb.WriteString("mkdir -p \"$REPO_DIR\"; or exit 1\n")
+	sb.WriteString("cd \"$REPO_DIR\"; or exit 1\n")
+	sb.WriteString("git init --quiet; or exit 1\n")
+	sb.WriteString("git config user.email 'test@example.com'\n")
+	sb.WriteString("git config user.name 'Test User'\n")
+	sb.WriteString("echo 'initial' > README.md\n")
+	sb.WriteString("git add README.md; or exit 1\n")
+	sb.WriteString("git commit -m 'initial' --quiet; or exit 1\n")
+	sb.WriteString("git branch -M main; or exit 1\n")
+	fmt.Fprintf(&sb, "set -x PATH '%s' $PATH\n", fishSingleQuote(filepath.Dir(wtBinary)))
+
+	// Setup steps
+	for _, setup := range scenario.Setup {
+		if setup.CreateBranch != "" {
+			fmt.Fprintf(&sb, "git checkout -b '%s' --quiet; or exit 1\n", setup.CreateBranch)
+			fmt.Fprintf(&sb, "git commit --allow-empty -m 'commit on %s' --quiet; or exit 1\n", setup.CreateBranch)
+			sb.WriteString("git checkout main --quiet; or exit 1\n")
+		}
+		if setup.CreateFile != nil {
+			fmt.Fprintf(&sb, "echo '%s' > '%s'\n", setup.CreateFile.Content, setup.CreateFile.Path)
+		}
+		if setup.GitAdd != "" {
+			fmt.Fprintf(&sb, "git add '%s'; or exit 1\n", setup.GitAdd)
+		}
+		if setup.GitCommit != "" {
+			fmt.Fprintf(&sb, "git commit -m '%s' --quiet; or exit 1\n", setup.GitCommit)
+		}
+		if setup.GitCheckout != "" {
+			fmt.Fprintf(&sb, "git checkout '%s' --quiet; or exit 1\n", setup.GitCheckout)
+		}
+	}
+
+	// Source shellenv unless skipped
+	if !scenario.SkipShellenv {
+		sb.WriteString("$WT_BIN shellenv fish | source; or exit 1\n")
+	}
+
+	// Test steps
+	for _, step := range scenario.Steps {
+		if step.Cd != "" {
+			cd := step.Cd
+			cd = strings.ReplaceAll(cd, "$REPO_DIR", "\"$REPO_DIR\"")
+			fmt.Fprintf(&sb, "cd %s; or exit 1\n", cd)
+		}
+		if step.Run != "" {
+			// Set step-level environment variables
+			if len(step.Env) > 0 {
+				keys := make([]string, 0, len(step.Env))
+				for k := range step.Env {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				for _, k := range keys {
+					fmt.Fprintf(&sb, "set -x %s '%s'\n", k, fishSingleQuote(step.Env[k]))
+				}
+			}
+
+			// Trim trailing newlines so "2>&1" attaches to the last command
+			// line instead of becoming its own line — fish (unlike bash)
+			// rejects a bare redirection with no preceding command.
+			runCmd := strings.TrimRight(step.Run, "\n")
+			needsOutput := step.Expect != nil && (step.Expect.OutputContains != "" || step.Expect.OutputNotContains != "")
+
+			// Fish has no errexit to disable/re-enable around commands that
+			// expect a non-zero exit, so both cases capture $status the same way.
+			if needsOutput {
+				fmt.Fprintf(&sb, "set __output (%s 2>&1)\n", runCmd)
+				sb.WriteString("set __exit_code $status\n")
+			} else {
+				fmt.Fprintf(&sb, "%s\n", runCmd)
+				sb.WriteString("set __exit_code $status\n")
+			}
+
+			if step.Expect != nil {
+				if step.Expect.ExitCode != nil {
+					fmt.Fprintf(&sb, "if test $__exit_code -ne %d; echo \"Expected exit code %d, got $__exit_code\"; exit 1; end\n",
+						*step.Expect.ExitCode, *step.Expect.ExitCode)
+				}
+				if step.Expect.CwdEndsWith != "" {
+					fmt.Fprintf(&sb, "set __cwd (pwd); switch $__cwd; case '*%s'; case '*'; echo \"CWD $__cwd doesn't end with %s\"; exit 1; end\n",
+						step.Expect.CwdEndsWith, step.Expect.CwdEndsWith)
+				}
+				if step.Expect.Branch != "" {
+					fmt.Fprintf(&sb, "set __branch (git branch --show-current); if test \"$__branch\" != '%s'; echo \"Expected branch %s\"; exit 1; end\n",
+						step.Expect.Branch, step.Expect.Branch)
+				}
+				if step.Expect.OutputContains != "" {
+					contains := fishSingleQuote(step.Expect.OutputContains)
+					fmt.Fprintf(&sb, "echo \"$__output\" | grep -F -q -- '%s'; or begin; echo \"Output missing expected substring\"; exit 1; end\n",
+						contains)
+				}
+				if step.Expect.OutputNotContains != "" {
+					notContains := fishSingleQuote(step.Expect.OutputNotContains)
+					fmt.Fprintf(&sb, "echo \"$__output\" | grep -F -q -- '%s'; and begin; echo \"Output should not contain expected substring\"; exit 1; end\n",
 						notContains)
 				}
 			}
