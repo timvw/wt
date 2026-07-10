@@ -148,6 +148,16 @@ func detectShell(args []string) string {
 	return "bash"
 }
 
+// resolveConfigDir resolves a shell config directory override (e.g. ZDOTDIR,
+// XDG_CONFIG_HOME) to an absolute, cleaned path, treating relative values as
+// relative to the user's home directory.
+func resolveConfigDir(home, dir string) string {
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(home, dir)
+	}
+	return filepath.Clean(dir)
+}
+
 // getShellConfigPath returns the path to the shell configuration file
 func getShellConfigPath(shell string) string {
 	home, err := os.UserHomeDir()
@@ -170,19 +180,13 @@ func getShellConfigPath(shell string) string {
 		// Respect ZDOTDIR if set: zsh reads its startup files from $ZDOTDIR (default: $HOME).
 		// This avoids writing to the wrong (potentially unused or broken) ~/.zshrc.
 		if zdotdir := strings.TrimSpace(os.Getenv("ZDOTDIR")); zdotdir != "" {
-			if !filepath.IsAbs(zdotdir) {
-				zdotdir = filepath.Join(home, zdotdir)
-			}
-			return filepath.Join(filepath.Clean(zdotdir), ".zshrc")
+			return filepath.Join(resolveConfigDir(home, zdotdir), ".zshrc")
 		}
 		return filepath.Join(home, ".zshrc")
 	case "fish":
 		// Respect XDG_CONFIG_HOME if set, per fish's own config resolution.
 		if xdgConfig := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdgConfig != "" {
-			if !filepath.IsAbs(xdgConfig) {
-				xdgConfig = filepath.Join(home, xdgConfig)
-			}
-			return filepath.Join(filepath.Clean(xdgConfig), "fish", "config.fish")
+			return filepath.Join(resolveConfigDir(home, xdgConfig), "fish", "config.fish")
 		}
 		return filepath.Join(home, ".config", "fish", "config.fish")
 	case "powershell":

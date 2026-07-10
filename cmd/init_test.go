@@ -217,6 +217,10 @@ func TestGetShellConfigContent(t *testing.T) {
 		},
 	}
 
+	if supportedShells["tcsh"] {
+		t.Fatal("test assumption invalid: \"tcsh\" must not be in supportedShells")
+	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := getShellConfigContent(tt.shell)

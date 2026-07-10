@@ -183,7 +183,61 @@ func TestShellenvBypassesWrapperForShellenv(t *testing.T) {
 	}
 }
 
-// TestShellenvFishOutput verifies that `wt shellenv fish` outputs a
+// TestShellenvTargetShell verifies the priority order used to determine
+// which shell integration to output: explicit argument > $SHELL > GOOS.
+func TestShellenvTargetShell(t *testing.T) {
+	origShell := os.Getenv("SHELL")
+	t.Cleanup(func() { os.Setenv("SHELL", origShell) })
+
+	tests := []struct {
+		name     string
+		args     []string
+		envShell string
+		want     string
+	}{
+		{name: "explicit fish argument", args: []string{"fish"}, want: "fish"},
+		{name: "explicit bash argument", args: []string{"bash"}, want: "bash"},
+		{name: "explicit zsh argument maps to bash output", args: []string{"zsh"}, want: "bash"},
+		{name: "explicit powershell argument", args: []string{"powershell"}, want: "powershell"},
+		{name: "explicit pwsh argument maps to powershell", args: []string{"pwsh"}, want: "powershell"},
+		{name: "unknown explicit argument falls back to detection", args: []string{"tcsh"}, envShell: "/bin/bash", want: "bash"},
+		{name: "no args, SHELL=fish", args: []string{}, envShell: "/usr/bin/fish", want: "fish"},
+		{name: "no args, SHELL=bash", args: []string{}, envShell: "/bin/bash", want: "bash"},
+		{name: "no args, no SHELL", args: []string{}, envShell: "", want: "bash"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			os.Setenv("SHELL", tt.envShell)
+			if got := shellenvTargetShell(tt.args); got != tt.want {
+				t.Errorf("shellenvTargetShell(%v) with SHELL=%q = %q, want %q", tt.args, tt.envShell, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFishShellenvScript verifies key elements of the fish integration script.
+func TestFishShellenvScript(t *testing.T) {
+	script := fishShellenvScript()
+
+	for _, want := range []string{
+		"function wt",
+		"end",
+		"complete -c wt",
+		"__wt_complete_branches",
+		"__wt_complete_worktree_branches",
+		"mktemp -t wt.XXXXXX",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("fishShellenvScript() missing %q", want)
+		}
+	}
+
+	if strings.Contains(script, "wt() {") {
+		t.Error("fishShellenvScript() should not contain POSIX-style 'wt() {' function definition")
+	}
+}
+
 // fish-compatible integration script (fish `function`/`end` syntax rather
 // than POSIX `wt() { ... }`), and that fish auto-detection via $SHELL works.
 func TestShellenvFishOutput(t *testing.T) {
