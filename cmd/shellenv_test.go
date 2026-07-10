@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -179,5 +180,38 @@ func TestShellenvBypassesWrapperForShellenv(t *testing.T) {
 
 	if !strings.Contains(shellenv, `command wt "$@"`) {
 		t.Fatal("shellenv bypass must call binary directly using 'command wt \"$@\"'")
+	}
+}
+
+// TestShellenvFishOutput verifies that `wt shellenv fish` outputs a
+// fish-compatible integration script (fish `function`/`end` syntax rather
+// than POSIX `wt() { ... }`), and that fish auto-detection via $SHELL works.
+func TestShellenvFishOutput(t *testing.T) {
+	cmd := exec.Command("go", "run", "github.com/timvw/wt", "shellenv", "fish")
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("Failed to run wt shellenv fish: %v", err)
+	}
+	shellenv := string(output)
+
+	if !strings.Contains(shellenv, "function wt") {
+		t.Error("fish shellenv should define 'function wt'")
+	}
+	if !strings.Contains(shellenv, "complete -c wt") {
+		t.Error("fish shellenv should register completions using 'complete -c wt'")
+	}
+	if strings.Contains(shellenv, "wt() {") {
+		t.Error("fish shellenv should not contain POSIX-style 'wt() {' function definition")
+	}
+
+	// Auto-detect fish via $SHELL when no explicit argument is given
+	cmd = exec.Command("go", "run", "github.com/timvw/wt", "shellenv")
+	cmd.Env = append(os.Environ(), "SHELL=/usr/bin/fish")
+	output, err = cmd.Output()
+	if err != nil {
+		t.Fatalf("Failed to run wt shellenv with SHELL=fish: %v", err)
+	}
+	if !strings.Contains(string(output), "function wt") {
+		t.Error("shellenv should auto-detect fish via $SHELL and output fish script")
 	}
 }

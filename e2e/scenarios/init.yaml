@@ -23,6 +23,16 @@ scenarios:
           exit_code: 0
           output_contains: "wt initialize"
 
+  - name: init_fish_dry_run
+    description: Init shows what would be added to fish config.fish
+    skip_shellenv: true
+    skip_shells: [zsh, powershell, pwsh]
+    steps:
+      - run: $WT_BIN init fish --dry-run
+        expect:
+          exit_code: 0
+          output_contains: "wt shellenv fish"
+
   - name: init_powershell_dry_run
     description: Init shows what would be added to PowerShell profile
     skip_shellenv: true

@@ -33,6 +33,11 @@ func TestDetectShell(t *testing.T) {
 			want: "powershell",
 		},
 		{
+			name: "explicit fish argument",
+			args: []string{"fish"},
+			want: "fish",
+		},
+		{
 			name: "pwsh alias returns powershell",
 			args: []string{"pwsh"},
 			want: "powershell",
@@ -53,6 +58,12 @@ func TestDetectShell(t *testing.T) {
 			args:     []string{},
 			envShell: "/bin/bash",
 			want:     "bash",
+		},
+		{
+			name:     "detect from SHELL env - fish",
+			args:     []string{},
+			envShell: "/usr/bin/fish",
+			want:     "fish",
 		},
 	}
 
@@ -80,7 +91,7 @@ func TestDetectShell(t *testing.T) {
 
 func TestSupportedShells(t *testing.T) {
 	// Verify all expected shells are in the map
-	expected := []string{"bash", "zsh", "powershell", "pwsh"}
+	expected := []string{"bash", "zsh", "fish", "powershell", "pwsh"}
 	for _, shell := range expected {
 		if !supportedShells[shell] {
 			t.Errorf("supportedShells missing %q", shell)
@@ -104,6 +115,11 @@ func TestGetShellConfigPath(t *testing.T) {
 	os.Setenv("ZDOTDIR", "")
 	t.Cleanup(func() { os.Setenv("ZDOTDIR", origZdotdir) })
 
+	// Ensure tests are stable even when the developer machine has XDG_CONFIG_HOME set.
+	origXdgConfig := os.Getenv("XDG_CONFIG_HOME")
+	os.Setenv("XDG_CONFIG_HOME", "")
+	t.Cleanup(func() { os.Setenv("XDG_CONFIG_HOME", origXdgConfig) })
+
 	tests := []struct {
 		name  string
 		shell string
@@ -113,6 +129,11 @@ func TestGetShellConfigPath(t *testing.T) {
 			name:  "zsh config path",
 			shell: "zsh",
 			want:  filepath.Join(home, ".zshrc"),
+		},
+		{
+			name:  "fish config path",
+			shell: "fish",
+			want:  filepath.Join(home, ".config", "fish", "config.fish"),
 		},
 	}
 
@@ -145,6 +166,25 @@ func TestGetShellConfigPathZshRespectsZdotdir(t *testing.T) {
 	}
 }
 
+func TestGetShellConfigPathFishRespectsXdgConfigHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("Failed to get home dir: %v", err)
+	}
+
+	orig := os.Getenv("XDG_CONFIG_HOME")
+	t.Cleanup(func() { os.Setenv("XDG_CONFIG_HOME", orig) })
+
+	xdgConfig := filepath.Join(home, ".myconfig")
+	os.Setenv("XDG_CONFIG_HOME", xdgConfig)
+
+	got := getShellConfigPath("fish")
+	want := filepath.Join(xdgConfig, "fish", "config.fish")
+	if got != want {
+		t.Fatalf("getShellConfigPath(%q) = %q, want %q", "fish", got, want)
+	}
+}
+
 func TestGetShellConfigContent(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -162,13 +202,18 @@ func TestGetShellConfigContent(t *testing.T) {
 			contains: []string{markerStart, markerEnd, "wt shellenv"},
 		},
 		{
+			name:     "fish content",
+			shell:    "fish",
+			contains: []string{markerStart, markerEnd, "wt shellenv fish", "source"},
+		},
+		{
 			name:     "powershell content",
 			shell:    "powershell",
 			contains: []string{markerStart, markerEnd, "wt shellenv", "Invoke-Expression"},
 		},
 		{
 			name:  "unsupported shell returns empty",
-			shell: "fish",
+			shell: "tcsh",
 		},
 	}
 

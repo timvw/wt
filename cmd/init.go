@@ -14,6 +14,7 @@ import (
 var supportedShells = map[string]bool{
 	"bash":       true,
 	"zsh":        true,
+	"fish":       true,
 	"powershell": true,
 	"pwsh":       true, // alias for powershell
 }
@@ -33,6 +34,7 @@ var initCmd = &cobra.Command{
 Automatically detects your shell and updates the appropriate config file:
   - bash: ~/.bashrc
   - zsh:  ~/.zshrc (or $ZDOTDIR/.zshrc if ZDOTDIR is set)
+  - fish: ~/.config/fish/config.fish (or $XDG_CONFIG_HOME/fish/config.fish)
   - powershell: $PROFILE (Windows only)
 
 The configuration is wrapped in markers so it can be safely updated or removed.
@@ -40,13 +42,14 @@ The configuration is wrapped in markers so it can be safely updated or removed.
 Examples:
   wt init              # Auto-detect shell and configure
   wt init bash         # Configure for bash specifically
+  wt init fish         # Configure for fish specifically
   wt init --dry-run    # Preview changes without modifying files
   wt init --uninstall  # Remove wt configuration from shell`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		shell := detectShell(args)
 		if shell == "" {
-			return fmt.Errorf("could not detect shell. Please specify: wt init bash|zsh|powershell")
+			return fmt.Errorf("could not detect shell. Please specify: wt init bash|zsh|fish|powershell")
 		}
 
 		// PowerShell init is only supported on Windows because wt shellenv
@@ -131,6 +134,9 @@ func detectShell(args []string) string {
 
 	// 3. Check $SHELL environment variable
 	shellEnv := os.Getenv("SHELL")
+	if strings.Contains(shellEnv, "fish") {
+		return "fish"
+	}
 	if strings.Contains(shellEnv, "zsh") {
 		return "zsh"
 	}
@@ -170,6 +176,15 @@ func getShellConfigPath(shell string) string {
 			return filepath.Join(filepath.Clean(zdotdir), ".zshrc")
 		}
 		return filepath.Join(home, ".zshrc")
+	case "fish":
+		// Respect XDG_CONFIG_HOME if set, per fish's own config resolution.
+		if xdgConfig := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdgConfig != "" {
+			if !filepath.IsAbs(xdgConfig) {
+				xdgConfig = filepath.Join(home, xdgConfig)
+			}
+			return filepath.Join(filepath.Clean(xdgConfig), "fish", "config.fish")
+		}
+		return filepath.Join(home, ".config", "fish", "config.fish")
 	case "powershell":
 		// Check $PROFILE env var first (works for both Windows PowerShell 5.1 and PowerShell Core)
 		if profile := os.Getenv("PROFILE"); profile != "" {
@@ -196,6 +211,10 @@ func getShellConfigContent(shell string) string {
 	case "bash", "zsh":
 		return fmt.Sprintf(`%s
 eval "$(wt shellenv)"
+%s`, markerStart, markerEnd)
+	case "fish":
+		return fmt.Sprintf(`%s
+wt shellenv fish | source
 %s`, markerStart, markerEnd)
 	case "powershell":
 		return fmt.Sprintf(`%s
@@ -302,6 +321,8 @@ func installShellConfig(configPath, shell string, dryRun, noPrompt bool) error {
 			case "bash":
 				fmt.Printf("  source %s\n", configPath)
 			case "zsh":
+				fmt.Printf("  source %s\n", configPath)
+			case "fish":
 				fmt.Printf("  source %s\n", configPath)
 			case "powershell":
 				fmt.Println("  . $PROFILE")

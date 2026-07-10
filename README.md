@@ -25,7 +25,7 @@ Inspired by [haacked/dotfiles/tree-me](https://github.com/haacked/dotfiles/blob/
 - **CI/CD status integration** — `wt status --ci` shows pipeline status (✓/✗/●) per branch via `gh` or `glab` CLI
 - **Per-repo `.wt.toml` config** — override global settings (strategy, hooks, etc.) on a per-repository basis
 - Shell integration with auto-cd functionality
-- Tab completion for Bash and Zsh
+- Tab completion for Bash, Zsh, and Fish
 
 ## Quick Start
 

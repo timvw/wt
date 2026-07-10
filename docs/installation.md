@@ -115,6 +115,7 @@ The `wt init` command automatically configures shell integration for your shell:
 wt init              # Auto-detect shell and configure
 wt init bash         # Configure for bash specifically
 wt init zsh          # Configure for zsh specifically
+wt init fish         # Configure for fish specifically
 wt init --dry-run    # Preview changes without modifying files
 wt init --uninstall  # Remove wt configuration from shell
 ```
@@ -124,6 +125,7 @@ After running `wt init`, restart your shell or run:
 ```bash
 source ~/.bashrc   # for bash
 source "${ZDOTDIR:-$HOME}/.zshrc"    # for zsh
+source ~/.config/fish/config.fish    # for fish
 ```
 
 Shell integration enables:
@@ -135,6 +137,12 @@ Shell integration enables:
 
 ```bash
 eval "$(wt shellenv)"
+```
+
+For fish, add this instead:
+
+```fish
+wt shellenv fish | source
 ```
 
 **Note for zsh users:** Place this after `compinit` in your config file.

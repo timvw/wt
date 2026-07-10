@@ -4,26 +4,34 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
 
 var shellenvCmd = &cobra.Command{
-	Use:   "shellenv",
+	Use:   "shellenv [shell]",
 	Short: "Output shell function for auto-cd (source this)",
 	Long: `Output shell integration code for automatic directory navigation.
 
 Add this to the END of your ~/.bashrc or ~/.zshrc:
   source <(wt shellenv)
 
+For fish, add this to your ~/.config/fish/config.fish:
+  wt shellenv fish | source
+
 For PowerShell, add this to your $PROFILE:
   Invoke-Expression (& wt shellenv)
 
 Note: For zsh, place this AFTER compinit to enable tab completion.
 
+An optional shell argument (bash, zsh, fish, powershell/pwsh) can be given to
+override auto-detection, e.g. 'wt shellenv fish'.
+
 This enables:
 - Automatic cd to worktree after checkout/create/pr/mr commands
 - Tab completion for commands and branch names`,
+	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if isJSONOutput() {
 			_ = emitJSONSuccess(cmd, map[string]string{
@@ -31,9 +39,13 @@ This enables:
 			})
 			return
 		}
-		// Output OS-specific shell integration
-		// On Windows, default to PowerShell. On Unix, output bash/zsh.
-		if runtime.GOOS == "windows" {
+		// Determine which shell's integration to output. An explicit argument
+		// takes priority, then $SHELL detection, then GOOS (Windows -> PowerShell).
+		switch shellenvTargetShell(args) {
+		case "fish":
+			os.Stdout.WriteString(fishShellenvScript())
+			return
+		case "powershell":
 			// PowerShell integration for Windows
 			fmt.Print(`# PowerShell integration (Windows)
 # Detected via runtime.GOOS, compatible with $PSVersionTable
@@ -110,10 +122,15 @@ Register-ArgumentCompleter -CommandName wt -ScriptBlock {
 }
 `)
 			return
+		default:
+			// Bash/Zsh integration for Unix systems
+			writeBashZshShellenv()
 		}
+	},
+}
 
-		// Bash/Zsh integration for Unix systems
-		_, _ = os.Stdout.WriteString(`wt() {
+func writeBashZshShellenv() {
+	_, _ = os.Stdout.WriteString(`wt() {
     # Avoid wrapping shellenv generation itself through script(1)
     # to prevent control characters in process substitution output.
     if [ "$1" = "shellenv" ]; then
@@ -259,5 +276,121 @@ if [ -n "$ZSH_VERSION" ]; then
     fi
 fi
 `)
-	},
+}
+
+// shellenvTargetShell determines which shell's integration script shellenv
+// should output. Priority: explicit argument > $SHELL detection > GOOS.
+// Note: bash and zsh share the same output, so both map to "bash" here.
+func shellenvTargetShell(args []string) string {
+	if len(args) > 0 {
+		shell := strings.ToLower(args[0])
+		switch shell {
+		case "fish":
+			return "fish"
+		case "powershell", "pwsh":
+			return "powershell"
+		case "bash", "zsh":
+			return "bash"
+		}
+	}
+
+	if runtime.GOOS == "windows" {
+		return "powershell"
+	}
+
+	if strings.Contains(os.Getenv("SHELL"), "fish") {
+		return "fish"
+	}
+
+	return "bash"
+}
+
+// fishShellenvScript returns the fish shell integration script.
+func fishShellenvScript() string {
+	return `function wt
+    # Avoid wrapping shellenv generation itself through script(1)
+    # to prevent control characters in process substitution output.
+    if test "$argv[1]" = "shellenv"
+        command wt $argv
+        return $status
+    end
+
+    # In JSON mode, keep stdout machine-readable and skip auto-navigation.
+    if contains -- --format=json $argv
+        command wt $argv
+        return $status
+    end
+    set -l argv_str " $argv "
+    if string match -q "* --format json *" $argv_str
+        command wt $argv
+        return $status
+    end
+
+    # Use script(1) to provide a PTY for interactive commands (e.g., promptui menus)
+    # Command substitution (command wt) doesn't allocate a TTY, which breaks interactive prompts
+    set -l log_file (mktemp -t wt.XXXXXX)
+
+    # Detect OS to use correct script syntax (macOS vs Linux)
+    if test (uname) = "Darwin"
+        # macOS: script -q file command args
+        script -q $log_file /bin/sh -c 'command wt "$@"' wt $argv
+    else
+        # Linux: script -q -c "..." file — must pass command as single string,
+        # so we shell-quote each argument to preserve spaces and special chars.
+        set -l quoted_args
+        for arg in $argv
+            set -a quoted_args (string escape -- $arg)
+        end
+        script -q -c "command wt $quoted_args" $log_file
+    end
+    set -l exit_code $status
+
+    # Extract the navigation marker for auto-cd
+    set -l cd_path (grep '^wt navigating to: ' $log_file | tail -1 | sed 's/^wt navigating to: //')
+    rm -f $log_file
+    set cd_path (string trim -c \r -- $cd_path)
+
+    if test $exit_code -eq 0 -a -n "$cd_path"
+        cd $cd_path
+    end
+    return $exit_code
+end
+
+# Fish completion
+complete -c wt -f
+complete -c wt -n "__fish_use_subcommand" -a "checkout" -d "Checkout existing branch in new worktree"
+complete -c wt -n "__fish_use_subcommand" -a "co" -d "Checkout existing branch in new worktree"
+complete -c wt -n "__fish_use_subcommand" -a "create" -d "Create new branch in worktree"
+complete -c wt -n "__fish_use_subcommand" -a "default" -d "Navigate to the main worktree"
+complete -c wt -n "__fish_use_subcommand" -a "pr" -d "Checkout GitHub PR in worktree"
+complete -c wt -n "__fish_use_subcommand" -a "mr" -d "Checkout GitLab MR in worktree"
+complete -c wt -n "__fish_use_subcommand" -a "list" -d "List all worktrees"
+complete -c wt -n "__fish_use_subcommand" -a "ls" -d "List all worktrees"
+complete -c wt -n "__fish_use_subcommand" -a "remove" -d "Remove a worktree"
+complete -c wt -n "__fish_use_subcommand" -a "rm" -d "Remove a worktree"
+complete -c wt -n "__fish_use_subcommand" -a "status" -d "Show status dashboard of all worktrees"
+complete -c wt -n "__fish_use_subcommand" -a "cleanup" -d "Remove worktrees for merged branches"
+complete -c wt -n "__fish_use_subcommand" -a "migrate" -d "Migrate existing worktrees to configured paths"
+complete -c wt -n "__fish_use_subcommand" -a "prune" -d "Remove worktree administrative files"
+complete -c wt -n "__fish_use_subcommand" -a "help" -d "Show help"
+complete -c wt -n "__fish_use_subcommand" -a "shellenv" -d "Output shell function for auto-cd"
+complete -c wt -n "__fish_use_subcommand" -a "init" -d "Initialize shell integration"
+complete -c wt -n "__fish_use_subcommand" -a "info" -d "Show worktree location configuration"
+complete -c wt -n "__fish_use_subcommand" -a "config" -d "Manage wt configuration"
+complete -c wt -n "__fish_use_subcommand" -a "examples" -d "Show practical command examples"
+complete -c wt -n "__fish_use_subcommand" -a "version" -d "Show version information"
+
+function __wt_complete_branches
+    set -l remotes (git remote 2>/dev/null | string join '|')
+    git branch -a --format='%(refname:short)' 2>/dev/null | grep -v 'HEAD' | sed -E "s#^($remotes)/##" | sort -u
+end
+
+function __wt_complete_worktree_branches
+    git worktree list 2>/dev/null | tail -n +2 | sed -n 's/.*\[\([^]]*\)\].*/\1/p'
+end
+
+complete -c wt -n "__fish_seen_subcommand_from checkout co create" -a "(__wt_complete_branches)"
+complete -c wt -n "__fish_seen_subcommand_from remove rm" -a "(__wt_complete_worktree_branches)"
+complete -c wt -n "__fish_seen_subcommand_from config" -a "init show path"
+`
 }
