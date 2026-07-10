@@ -238,6 +238,7 @@ func TestFishShellenvScript(t *testing.T) {
 	}
 }
 
+// TestShellenvFishOutput verifies that `wt shellenv fish` outputs a
 // fish-compatible integration script (fish `function`/`end` syntax rather
 // than POSIX `wt() { ... }`), and that fish auto-detection via $SHELL works.
 func TestShellenvFishOutput(t *testing.T) {
