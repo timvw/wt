@@ -82,7 +82,7 @@ scenarios:
       - run: |
           touch "$TEST_DIR/.bashrc"
           HOME="$TEST_DIR" $WT_BIN init bash --no-prompt
-          HOME="$TEST_DIR" $WT_BIN init --uninstall --no-prompt
+          HOME="$TEST_DIR" $WT_BIN init bash --uninstall --no-prompt
           grep -c "wt initialize" "$TEST_DIR/.bashrc" 2>/dev/null || echo "0"
         expect:
           output_contains: "0"
