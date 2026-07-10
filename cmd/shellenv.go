@@ -43,7 +43,7 @@ This enables:
 		// takes priority, then $SHELL detection, then GOOS (Windows -> PowerShell).
 		switch shellenvTargetShell(args) {
 		case "fish":
-			os.Stdout.WriteString(fishShellenvScript())
+			_, _ = os.Stdout.WriteString(fishShellenvScript())
 			return
 		case "powershell":
 			// PowerShell integration for Windows
