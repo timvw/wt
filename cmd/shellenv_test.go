@@ -7,6 +7,20 @@ import (
 	"testing"
 )
 
+// envWithShell returns os.Environ() with any existing SHELL entry replaced
+// by shell, so the override is deterministic regardless of whether the
+// underlying OS/runtime resolves duplicate env entries by first or last
+// occurrence.
+func envWithShell(shell string) []string {
+	env := make([]string, 0, len(os.Environ())+1)
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "SHELL=") {
+			env = append(env, kv)
+		}
+	}
+	return append(env, "SHELL="+shell)
+}
+
 // TestShellenvInteractiveModeOutputCapture tests that the shell function
 // captures output for interactive commands (co/checkout/rm/remove/pr/mr with no args).
 // This is critical for auto-cd functionality.
@@ -15,7 +29,7 @@ import (
 func TestShellenvInteractiveModeOutputCapture(t *testing.T) {
 	// Get the shellenv output
 	cmd := exec.Command("go", "run", "github.com/timvw/wt", "shellenv")
-	cmd.Env = append(os.Environ(), "SHELL=/bin/bash")
+	cmd.Env = envWithShell("/bin/bash")
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("Failed to run wt shellenv: %v", err)
@@ -64,7 +78,7 @@ func TestShellenvInteractiveModeOutputCapture(t *testing.T) {
 // BUG: Currently fails because compdef is called unconditionally
 func TestShellenvZshCompdefProtection(t *testing.T) {
 	cmd := exec.Command("go", "run", "github.com/timvw/wt", "shellenv")
-	cmd.Env = append(os.Environ(), "SHELL=/bin/bash")
+	cmd.Env = envWithShell("/bin/bash")
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("Failed to run wt shellenv: %v", err)
@@ -116,7 +130,7 @@ func TestShellenvZshCompdefError(t *testing.T) {
 // for checkout/co/create completes from all branches (not just existing worktrees).
 func TestShellenvCompletionCheckoutUsesAllBranches(t *testing.T) {
 	cmd := exec.Command("go", "run", "github.com/timvw/wt", "shellenv")
-	cmd.Env = append(os.Environ(), "SHELL=/bin/bash")
+	cmd.Env = envWithShell("/bin/bash")
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("Failed to run wt shellenv: %v", err)
@@ -148,7 +162,7 @@ func TestShellenvCompletionCheckoutUsesAllBranches(t *testing.T) {
 // for remove/rm only completes from existing worktrees (not all branches).
 func TestShellenvCompletionRemoveUsesWorktreeList(t *testing.T) {
 	cmd := exec.Command("go", "run", "github.com/timvw/wt", "shellenv")
-	cmd.Env = append(os.Environ(), "SHELL=/bin/bash")
+	cmd.Env = envWithShell("/bin/bash")
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("Failed to run wt shellenv: %v", err)
@@ -172,7 +186,7 @@ func TestShellenvCompletionRemoveUsesWorktreeList(t *testing.T) {
 // session re-sources shellenv.
 func TestShellenvBypassesWrapperForShellenv(t *testing.T) {
 	cmd := exec.Command("go", "run", "github.com/timvw/wt", "shellenv")
-	cmd.Env = append(os.Environ(), "SHELL=/bin/bash")
+	cmd.Env = envWithShell("/bin/bash")
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("Failed to run wt shellenv: %v", err)
@@ -266,7 +280,7 @@ func TestShellenvFishOutput(t *testing.T) {
 
 	// Auto-detect fish via $SHELL when no explicit argument is given
 	cmd = exec.Command("go", "run", "github.com/timvw/wt", "shellenv")
-	cmd.Env = append(os.Environ(), "SHELL=/usr/bin/fish")
+	cmd.Env = envWithShell("/usr/bin/fish")
 	output, err = cmd.Output()
 	if err != nil {
 		t.Fatalf("Failed to run wt shellenv with SHELL=fish: %v", err)

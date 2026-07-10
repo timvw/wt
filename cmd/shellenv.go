@@ -279,7 +279,8 @@ fi
 }
 
 // shellenvTargetShell determines which shell's integration script shellenv
-// should output. Priority: explicit argument > $SHELL detection > GOOS.
+// should output. Priority: explicit argument > GOOS (Windows -> PowerShell)
+// > $SHELL detection.
 // Note: bash and zsh share the same output, so both map to "bash" here.
 func shellenvTargetShell(args []string) string {
 	if len(args) > 0 {
@@ -351,7 +352,7 @@ func fishShellenvScript() string {
     set cd_path (string trim -c \r -- $cd_path)
 
     if test $exit_code -eq 0 -a -n "$cd_path"
-        cd $cd_path
+        cd "$cd_path"
     end
     return $exit_code
 end

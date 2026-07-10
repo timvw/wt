@@ -297,6 +297,20 @@ func shouldSkip(scenario Scenario, shell string) bool {
 	return false
 }
 
+// envWithShell returns os.Environ() with any existing SHELL entry replaced
+// by shell, so the override is deterministic regardless of whether the
+// underlying OS/runtime resolves duplicate env entries by first or last
+// occurrence.
+func envWithShell(shell string) []string {
+	env := make([]string, 0, len(os.Environ())+1)
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "SHELL=") {
+			env = append(env, kv)
+		}
+	}
+	return append(env, "SHELL="+shell)
+}
+
 func runScenario(wtBinary, shell, fileName string, scenario Scenario, verbose, showOutput, keepTmp bool) Result {
 	result := Result{
 		Scenario: fmt.Sprintf("%s/%s", fileName, scenario.Name),
@@ -321,7 +335,7 @@ func runScenario(wtBinary, shell, fileName string, scenario Scenario, verbose, s
 		// explicit argument is given, so a mismatched ambient $SHELL (e.g.
 		// fish on the host machine) would otherwise produce output that
 		// doesn't match what bash/zsh expect.
-		cmd.Env = append(os.Environ(), "SHELL="+shell)
+		cmd.Env = envWithShell(shell)
 	}
 
 	output, err := cmd.CombinedOutput()

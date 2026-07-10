@@ -9,9 +9,13 @@ echo "Configuring wt shell integration..."
 # Determine the installing user's login shell so we can print the right
 # "activate now" instructions below. When installed via sudo, $SHELL reflects
 # root's shell, not the target user's, so look it up via getent instead.
-if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+# getent isn't available on macOS/BSD, so fall back to $SHELL when it's
+# missing or the lookup doesn't return a shell.
+TARGET_SHELL=""
+if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ] && command -v getent >/dev/null 2>&1; then
     TARGET_SHELL="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f7)"
-else
+fi
+if [ -z "$TARGET_SHELL" ]; then
     TARGET_SHELL="$SHELL"
 fi
 
