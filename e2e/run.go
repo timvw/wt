@@ -316,6 +316,12 @@ func runScenario(wtBinary, shell, fileName string, scenario Scenario, verbose, s
 		cmd = exec.Command(shell, "-NoProfile", "-Command", script)
 	} else {
 		cmd = exec.Command(shell, "-c", script)
+		// Override $SHELL to match the interpreter running this script.
+		// wt shellenv auto-detects its target shell from $SHELL when no
+		// explicit argument is given, so a mismatched ambient $SHELL (e.g.
+		// fish on the host machine) would otherwise produce output that
+		// doesn't match what bash/zsh expect.
+		cmd.Env = append(os.Environ(), "SHELL="+shell)
 	}
 
 	output, err := cmd.CombinedOutput()
@@ -385,9 +391,11 @@ func generatePosixScript(wtBinary, shell string, scenario Scenario, verbose, sho
 		}
 	}
 
-	// Source shellenv unless skipped
+	// Source shellenv unless skipped. Pass the shell explicitly so output
+	// matches the interpreter running this script, regardless of the
+	// ambient $SHELL env var (which may differ, e.g. fish on the host).
 	if !scenario.SkipShellenv {
-		sb.WriteString("eval \"$($WT_BIN shellenv)\"\n")
+		fmt.Fprintf(&sb, "eval \"$($WT_BIN shellenv %s)\"\n", shell)
 	}
 
 	// Test steps

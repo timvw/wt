@@ -15,6 +15,7 @@ import (
 func TestShellenvInteractiveModeOutputCapture(t *testing.T) {
 	// Get the shellenv output
 	cmd := exec.Command("go", "run", "github.com/timvw/wt", "shellenv")
+	cmd.Env = append(os.Environ(), "SHELL=/bin/bash")
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("Failed to run wt shellenv: %v", err)
@@ -63,6 +64,7 @@ func TestShellenvInteractiveModeOutputCapture(t *testing.T) {
 // BUG: Currently fails because compdef is called unconditionally
 func TestShellenvZshCompdefProtection(t *testing.T) {
 	cmd := exec.Command("go", "run", "github.com/timvw/wt", "shellenv")
+	cmd.Env = append(os.Environ(), "SHELL=/bin/bash")
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("Failed to run wt shellenv: %v", err)
@@ -114,6 +116,7 @@ func TestShellenvZshCompdefError(t *testing.T) {
 // for checkout/co/create completes from all branches (not just existing worktrees).
 func TestShellenvCompletionCheckoutUsesAllBranches(t *testing.T) {
 	cmd := exec.Command("go", "run", "github.com/timvw/wt", "shellenv")
+	cmd.Env = append(os.Environ(), "SHELL=/bin/bash")
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("Failed to run wt shellenv: %v", err)
@@ -145,6 +148,7 @@ func TestShellenvCompletionCheckoutUsesAllBranches(t *testing.T) {
 // for remove/rm only completes from existing worktrees (not all branches).
 func TestShellenvCompletionRemoveUsesWorktreeList(t *testing.T) {
 	cmd := exec.Command("go", "run", "github.com/timvw/wt", "shellenv")
+	cmd.Env = append(os.Environ(), "SHELL=/bin/bash")
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("Failed to run wt shellenv: %v", err)
@@ -168,6 +172,7 @@ func TestShellenvCompletionRemoveUsesWorktreeList(t *testing.T) {
 // session re-sources shellenv.
 func TestShellenvBypassesWrapperForShellenv(t *testing.T) {
 	cmd := exec.Command("go", "run", "github.com/timvw/wt", "shellenv")
+	cmd.Env = append(os.Environ(), "SHELL=/bin/bash")
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("Failed to run wt shellenv: %v", err)
