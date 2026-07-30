@@ -15,6 +15,11 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: generate-token
+        # Skip on fork PRs, where BOT_APP_ID is unavailable and
+        # create-github-app-token would error on the empty client-id and emit a CI
+        # annotation. `secrets` isn't allowed in `if`, so gate on the github context.
+        # Downstream steps fall back to github.token when this step is skipped.
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
         continue-on-error: true
         uses: actions/create-github-app-token@v3
         with:
@@ -47,6 +52,11 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: generate-token
+        # Skip on fork PRs, where BOT_APP_ID is unavailable and
+        # create-github-app-token would error on the empty client-id and emit a CI
+        # annotation. `secrets` isn't allowed in `if`, so gate on the github context.
+        # Downstream steps fall back to github.token when this step is skipped.
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
         continue-on-error: true
         uses: actions/create-github-app-token@v3
         with:
@@ -83,6 +93,11 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: generate-token
+        # Skip on fork PRs, where BOT_APP_ID is unavailable and
+        # create-github-app-token would error on the empty client-id and emit a CI
+        # annotation. `secrets` isn't allowed in `if`, so gate on the github context.
+        # Downstream steps fall back to github.token when this step is skipped.
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
         continue-on-error: true
         uses: actions/create-github-app-token@v3
         with:
@@ -204,6 +219,11 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: generate-token
+        # Skip on fork PRs, where BOT_APP_ID is unavailable and
+        # create-github-app-token would error on the empty client-id and emit a CI
+        # annotation. `secrets` isn't allowed in `if`, so gate on the github context.
+        # Downstream steps fall back to github.token when this step is skipped.
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
         continue-on-error: true
         uses: actions/create-github-app-token@v3
         with:
