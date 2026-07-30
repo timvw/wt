@@ -235,7 +235,11 @@ jobs:
 
       - name: Install fish (macOS)
         if: matrix.os == 'macos' && matrix.shell == 'fish'
-        run: brew install fish
+        run: |
+          # Drop the preinstalled aws/tap (unrelated to fish) so Homebrew's
+          # tap-trust check does not emit an "untrusted taps" warning annotation.
+          brew untap aws/tap 2>/dev/null || true
+          brew install fish
 
       - name: Download binary
         uses: actions/download-artifact@v8
