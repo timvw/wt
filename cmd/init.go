@@ -184,9 +184,13 @@ func getShellConfigPath(shell string) string {
 		}
 		return filepath.Join(home, ".zshrc")
 	case "fish":
-		// Respect XDG_CONFIG_HOME if set, per fish's own config resolution.
-		if xdgConfig := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdgConfig != "" {
-			return filepath.Join(resolveConfigDir(home, xdgConfig), "fish", "config.fish")
+		// Respect XDG_CONFIG_HOME when it is an absolute path, matching fish's
+		// own config resolution. Per the XDG Base Directory spec a relative
+		// value is invalid and must be ignored, so fall back to ~/.config
+		// rather than anchoring it under $HOME (which is where fish would not
+		// look, causing wt to write a config file fish never loads).
+		if xdgConfig := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); filepath.IsAbs(xdgConfig) {
+			return filepath.Join(filepath.Clean(xdgConfig), "fish", "config.fish")
 		}
 		return filepath.Join(home, ".config", "fish", "config.fish")
 	case "powershell":

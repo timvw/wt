@@ -185,6 +185,27 @@ func TestGetShellConfigPathFishRespectsXdgConfigHome(t *testing.T) {
 	}
 }
 
+// A relative XDG_CONFIG_HOME is invalid per the XDG Base Directory spec and is
+// ignored by fish, so wt must fall back to ~/.config/fish rather than anchoring
+// the relative value under $HOME (which fish would never read).
+func TestGetShellConfigPathFishIgnoresRelativeXdgConfigHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("Failed to get home dir: %v", err)
+	}
+
+	orig := os.Getenv("XDG_CONFIG_HOME")
+	t.Cleanup(func() { os.Setenv("XDG_CONFIG_HOME", orig) })
+
+	os.Setenv("XDG_CONFIG_HOME", "relative/config")
+
+	got := getShellConfigPath("fish")
+	want := filepath.Join(home, ".config", "fish", "config.fish")
+	if got != want {
+		t.Fatalf("getShellConfigPath(%q) with relative XDG_CONFIG_HOME = %q, want %q", "fish", got, want)
+	}
+}
+
 func TestGetShellConfigContent(t *testing.T) {
 	tests := []struct {
 		name     string

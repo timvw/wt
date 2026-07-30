@@ -336,11 +336,16 @@ func fishShellenvScript() string {
         # macOS: script -q file command args
         script -q $log_file /bin/sh -c 'command wt "$@"' wt $argv
     else
-        # Linux: script -q -c "..." file — must pass command as single string,
-        # so we shell-quote each argument to preserve spaces and special chars.
+        # Linux: script -q -c "..." file — the command must be a single string,
+        # which script parses with $SHELL. That may be bash/zsh even when fish is
+        # the interactive shell, and fish's own escaping (e.g. \t, \xHH) would be
+        # misread there. Wrap each argument in POSIX single quotes instead, which
+        # every POSIX shell and fish parse identically, preserving spaces and
+        # special characters regardless of which shell runs the command.
         set -l quoted_args
         for arg in $argv
-            set -a quoted_args (string escape -- $arg)
+            set -l esc (string replace -a -- "'" "'\\''" $arg)
+            set -a quoted_args "'$esc'"
         end
         script -q -c "command wt $quoted_args" $log_file
     end
