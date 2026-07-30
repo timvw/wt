@@ -347,7 +347,10 @@ func fishShellenvScript() string {
             set -l esc (string replace -a -- "'" "'\\''" $arg)
             set -a quoted_args "'$esc'"
         end
-        script -q -c "command wt $quoted_args" $log_file
+        # --return makes util-linux script exit with the child's status; without
+        # it script always returns 0 and failures (e.g. "wt remove missing")
+        # would be masked as success.
+        script -q --return -c "command wt $quoted_args" $log_file
     end
     set -l exit_code $status
 
