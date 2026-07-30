@@ -58,6 +58,12 @@ Examples:
 			return fmt.Errorf("PowerShell shell integration is only supported on Windows. On macOS/Linux, use: wt init bash or wt init zsh")
 		}
 
+		// Reject environment misconfigurations that would otherwise cause us to
+		// write a config file the shell never loads (fish + relative XDG_CONFIG_HOME).
+		if err := validateShellEnv(shell); err != nil {
+			return err
+		}
+
 		configPath := getShellConfigPath(shell)
 		if configPath == "" {
 			return fmt.Errorf("could not determine config file for %s", shell)
@@ -148,6 +154,24 @@ func detectShell(args []string) string {
 	return "bash"
 }
 
+// validateShellEnv rejects environment misconfigurations that would make
+// getShellConfigPath resolve a path the target shell never actually loads.
+//
+// For fish, a non-empty but relative XDG_CONFIG_HOME is invalid per the XDG
+// Base Directory spec (relative values must be ignored) and fish does not
+// reliably fall back to ~/.config for it — it resolves the relative value
+// against its own startup working directory, which is not knowable here. Rather
+// than silently guess ~/.config/fish/config.fish (a file fish may never read,
+// with no warning), fail with a clear, actionable error.
+func validateShellEnv(shell string) error {
+	if shell == "fish" {
+		if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" && !filepath.IsAbs(xdg) {
+			return fmt.Errorf("XDG_CONFIG_HOME is set to a relative path %q, but per the XDG Base Directory spec it must be absolute; fish will not load a config file at a guessed location. Set XDG_CONFIG_HOME to an absolute path or unset it, then run: wt init fish", xdg)
+		}
+	}
+	return nil
+}
+
 // resolveConfigDir resolves a shell config directory override (e.g. ZDOTDIR,
 // XDG_CONFIG_HOME) to an absolute, cleaned path, treating relative values as
 // relative to the user's home directory.
@@ -185,10 +209,9 @@ func getShellConfigPath(shell string) string {
 		return filepath.Join(home, ".zshrc")
 	case "fish":
 		// Respect XDG_CONFIG_HOME when it is an absolute path, matching fish's
-		// own config resolution. Per the XDG Base Directory spec a relative
-		// value is invalid and must be ignored, so fall back to ~/.config
-		// rather than anchoring it under $HOME (which is where fish would not
-		// look, causing wt to write a config file fish never loads).
+		// own config resolution. A non-empty relative value is spec-invalid and
+		// is rejected earlier by validateShellEnv, so here we only need to
+		// distinguish absolute (use it) from empty/unset (fall back to ~/.config).
 		if xdgConfig := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); filepath.IsAbs(xdgConfig) {
 			return filepath.Join(filepath.Clean(xdgConfig), "fish", "config.fish")
 		}
