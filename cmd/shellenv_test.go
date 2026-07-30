@@ -211,25 +211,41 @@ func TestShellenvTargetShell(t *testing.T) {
 	tests := []struct {
 		name     string
 		args     []string
+		goos     string
 		envShell string
 		want     string
+		wantErr  bool
 	}{
-		{name: "explicit fish argument", args: []string{"fish"}, want: "fish"},
-		{name: "explicit bash argument", args: []string{"bash"}, want: "bash"},
-		{name: "explicit zsh argument maps to bash output", args: []string{"zsh"}, want: "bash"},
-		{name: "explicit powershell argument", args: []string{"powershell"}, want: "powershell"},
-		{name: "explicit pwsh argument maps to powershell", args: []string{"pwsh"}, want: "powershell"},
-		{name: "unknown explicit argument falls back to detection", args: []string{"tcsh"}, envShell: "/bin/bash", want: "bash"},
-		{name: "no args, SHELL=fish", args: []string{}, envShell: "/usr/bin/fish", want: "fish"},
-		{name: "no args, SHELL=bash", args: []string{}, envShell: "/bin/bash", want: "bash"},
-		{name: "no args, no SHELL", args: []string{}, envShell: "", want: "bash"},
+		{name: "explicit fish argument", args: []string{"fish"}, goos: "linux", want: "fish"},
+		{name: "explicit bash argument", args: []string{"bash"}, goos: "linux", want: "bash"},
+		{name: "explicit zsh argument maps to bash output", args: []string{"zsh"}, goos: "linux", want: "bash"},
+		{name: "explicit powershell on windows", args: []string{"powershell"}, goos: "windows", want: "powershell"},
+		{name: "explicit pwsh on windows maps to powershell", args: []string{"pwsh"}, goos: "windows", want: "powershell"},
+		{name: "explicit powershell on linux is rejected", args: []string{"powershell"}, goos: "linux", wantErr: true},
+		{name: "explicit powershell on darwin is rejected", args: []string{"powershell"}, goos: "darwin", wantErr: true},
+		{name: "explicit pwsh on darwin is rejected", args: []string{"pwsh"}, goos: "darwin", wantErr: true},
+		{name: "unknown explicit argument falls back to detection", args: []string{"tcsh"}, goos: "linux", envShell: "/bin/bash", want: "bash"},
+		{name: "no args on windows defaults to powershell", args: []string{}, goos: "windows", want: "powershell"},
+		{name: "no args, SHELL=fish", args: []string{}, goos: "linux", envShell: "/usr/bin/fish", want: "fish"},
+		{name: "no args, SHELL=bash", args: []string{}, goos: "linux", envShell: "/bin/bash", want: "bash"},
+		{name: "no args, no SHELL", args: []string{}, goos: "linux", envShell: "", want: "bash"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			os.Setenv("SHELL", tt.envShell)
-			if got := shellenvTargetShell(tt.args); got != tt.want {
-				t.Errorf("shellenvTargetShell(%v) with SHELL=%q = %q, want %q", tt.args, tt.envShell, got, tt.want)
+			got, err := shellenvTargetShell(tt.args, tt.goos)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("shellenvTargetShell(%v, %q) = %q, want error", tt.args, tt.goos, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("shellenvTargetShell(%v, %q) returned unexpected error: %v", tt.args, tt.goos, err)
+			}
+			if got != tt.want {
+				t.Errorf("shellenvTargetShell(%v, %q) with SHELL=%q = %q, want %q", tt.args, tt.goos, tt.envShell, got, tt.want)
 			}
 		})
 	}

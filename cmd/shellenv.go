@@ -32,19 +32,22 @@ This enables:
 - Automatic cd to worktree after checkout/create/pr/mr commands
 - Tab completion for commands and branch names`,
 	Args: cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		if isJSONOutput() {
-			_ = emitJSONSuccess(cmd, map[string]string{
+			return emitJSONSuccess(cmd, map[string]string{
 				"note": "shellenv outputs shell script text; run without --format json to source it",
 			})
-			return
 		}
 		// Determine which shell's integration to output. An explicit argument
 		// takes priority, then $SHELL detection, then GOOS (Windows -> PowerShell).
-		switch shellenvTargetShell(args) {
+		target, err := shellenvTargetShell(args, runtime.GOOS)
+		if err != nil {
+			return err
+		}
+		switch target {
 		case "fish":
 			_, _ = os.Stdout.WriteString(fishShellenvScript())
-			return
+			return nil
 		case "powershell":
 			// PowerShell integration for Windows
 			fmt.Print(`# PowerShell integration (Windows)
@@ -121,10 +124,11 @@ Register-ArgumentCompleter -CommandName wt -ScriptBlock {
     }
 }
 `)
-			return
+			return nil
 		default:
 			// Bash/Zsh integration for Unix systems
 			writeBashZshShellenv()
+			return nil
 		}
 	},
 }
@@ -280,30 +284,38 @@ fi
 
 // shellenvTargetShell determines which shell's integration script shellenv
 // should output. Priority: explicit argument > GOOS (Windows -> PowerShell)
-// > $SHELL detection.
+// > $SHELL detection. The goos parameter (normally runtime.GOOS) is injected
+// so the decision can be unit-tested independently of the host OS.
+//
+// The generated PowerShell block invokes wt.exe, which only exists on Windows,
+// so an explicit powershell/pwsh target is rejected on non-Windows systems,
+// consistent with the PowerShell restriction in the init command.
 // Note: bash and zsh share the same output, so both map to "bash" here.
-func shellenvTargetShell(args []string) string {
+func shellenvTargetShell(args []string, goos string) (string, error) {
 	if len(args) > 0 {
 		shell := strings.ToLower(args[0])
 		switch shell {
 		case "fish":
-			return "fish"
+			return "fish", nil
 		case "powershell", "pwsh":
-			return "powershell"
+			if goos != "windows" {
+				return "", fmt.Errorf("PowerShell shell integration is only supported on Windows. On macOS/Linux, use: wt shellenv bash or wt shellenv zsh")
+			}
+			return "powershell", nil
 		case "bash", "zsh":
-			return "bash"
+			return "bash", nil
 		}
 	}
 
-	if runtime.GOOS == "windows" {
-		return "powershell"
+	if goos == "windows" {
+		return "powershell", nil
 	}
 
 	if strings.Contains(os.Getenv("SHELL"), "fish") {
-		return "fish"
+		return "fish", nil
 	}
 
-	return "bash"
+	return "bash", nil
 }
 
 // fishShellenvScript returns the fish shell integration script.

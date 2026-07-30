@@ -186,23 +186,49 @@ func TestGetShellConfigPathFishRespectsXdgConfigHome(t *testing.T) {
 }
 
 // A relative XDG_CONFIG_HOME is invalid per the XDG Base Directory spec and is
-// ignored by fish, so wt must fall back to ~/.config/fish rather than anchoring
-// the relative value under $HOME (which fish would never read).
-func TestGetShellConfigPathFishIgnoresRelativeXdgConfigHome(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatalf("Failed to get home dir: %v", err)
-	}
-
+// not reliably ignored by fish (it resolves the value against its own startup
+// cwd, which wt cannot know), so wt must reject it with a clear error rather
+// than silently guess a path fish may never load.
+func TestGetShellConfigPathFishRejectsRelativeXdgConfigHome(t *testing.T) {
 	orig := os.Getenv("XDG_CONFIG_HOME")
 	t.Cleanup(func() { os.Setenv("XDG_CONFIG_HOME", orig) })
 
 	os.Setenv("XDG_CONFIG_HOME", "relative/config")
 
-	got := getShellConfigPath("fish")
-	want := filepath.Join(home, ".config", "fish", "config.fish")
-	if got != want {
-		t.Fatalf("getShellConfigPath(%q) with relative XDG_CONFIG_HOME = %q, want %q", "fish", got, want)
+	err := validateShellEnv("fish")
+	if err == nil {
+		t.Fatal("validateShellEnv(\"fish\") with relative XDG_CONFIG_HOME = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "XDG_CONFIG_HOME") {
+		t.Fatalf("error %q does not mention XDG_CONFIG_HOME", err)
+	}
+	if !strings.Contains(err.Error(), "relative/config") {
+		t.Fatalf("error %q does not include the offending value", err)
+	}
+}
+
+// An absolute or unset XDG_CONFIG_HOME is valid and must not be rejected; and a
+// relative value only affects fish, not other shells.
+func TestValidateShellEnvAcceptsValidXdgConfigHome(t *testing.T) {
+	orig := os.Getenv("XDG_CONFIG_HOME")
+	t.Cleanup(func() { os.Setenv("XDG_CONFIG_HOME", orig) })
+
+	// Absolute value is accepted.
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(string(filepath.Separator), "abs", "config"))
+	if err := validateShellEnv("fish"); err != nil {
+		t.Fatalf("validateShellEnv(\"fish\") with absolute XDG_CONFIG_HOME = %v, want nil", err)
+	}
+
+	// Empty/unset value is accepted (falls back to ~/.config elsewhere).
+	os.Setenv("XDG_CONFIG_HOME", "")
+	if err := validateShellEnv("fish"); err != nil {
+		t.Fatalf("validateShellEnv(\"fish\") with empty XDG_CONFIG_HOME = %v, want nil", err)
+	}
+
+	// A relative value is irrelevant to non-fish shells.
+	os.Setenv("XDG_CONFIG_HOME", "relative/config")
+	if err := validateShellEnv("bash"); err != nil {
+		t.Fatalf("validateShellEnv(\"bash\") with relative XDG_CONFIG_HOME = %v, want nil", err)
 	}
 }
 
