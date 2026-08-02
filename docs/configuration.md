@@ -125,6 +125,52 @@ and `feature/foo` still map to names that collide on a case-insensitive
 filesystem. Avoid case-only branch differences, or place the repository and
 worktree root on a case-sensitive filesystem.
 
+## Categories (for `wt clone`)
+
+`wt clone` places a cloned repository into the canonical location for a
+**category** — an organizational context that groups repositories and carries
+an auth profile. Three categories ship built in (`work`, `personal`, `oss`).
+
+Canonical clones live under a single top-level `repo_root` (default
+`~/dev/repos`), and each category's location defaults to
+`<repo_root>/<category-name>` — so relocating everything is one setting:
+
+```toml
+# Base for all canonical clones (default: ~/dev/repos).
+repo_root = "~/dev/repos"
+
+# Categories only need to override what differs from the defaults.
+[categories.work]
+gh_auth      = "work"    # gh account (gh auth switch --user); repo_root -> <repo_root>/work
+git_protocol = "ssh"     # ssh|https for owner/repo -> clone URL
+
+[categories.personal]
+gh_auth = "personal"     # repo_root -> <repo_root>/personal
+
+[categories.client]
+repo_root = "~/clients/acme/src"   # explicit override, ignores the base
+glab_host = "gitlab.acme.com"
+
+# Reserved for future use.
+default_category = "personal"
+
+# Placement layout for cloned repos. Variables: {.category.RepoRoot},
+# {.repo.Host}, {.repo.Owner}, {.repo.Name}, {.branch}.
+# {.branch} is the remote's default branch (via git ls-remote, fallback "main").
+# Default: owner/repo/branch. Add {.repo.Host} for multi-forge categories.
+repo_pattern = "{.category.RepoRoot}/{.repo.Owner}/{.repo.Name}/{.branch}"
+```
+
+`wt clone work timvw/wt` then clones into
+`~/dev/repos/work/timvw/wt/main`, switching the active `gh` account to
+`work` and resolving the clone URL over `ssh`. A full git URL is used as-is; an
+explicit destination argument overrides the layout. The repository is left on
+its default branch, ready to inspect — add a worktree later with the usual
+`wt` commands.
+
+The base is also settable via the `WT_REPO_ROOT` environment variable, which
+overrides the config file.
+
 ## Hooks
 
 Hooks let you run custom commands before or after `wt` operations. Define them in the `[hooks]` section of your config file:
@@ -140,6 +186,7 @@ Hooks let you run custom commands before or after `wt` operations. Define them i
 | `pre_remove` / `post_remove` | Before/after `wt remove` (alias `wt rm`) |
 | `pre_pr` / `post_pr` | Before/after `wt pr` |
 | `pre_mr` / `post_mr` | Before/after `wt mr` |
+| `pre_clone` / `post_clone` | Before/after `wt clone` |
 
 Checkout hooks (`pre_checkout` / `post_checkout`) run both when a new worktree is created **and** when checking out an existing worktree. Create and remove hooks run only when a worktree is actually created or removed.
 

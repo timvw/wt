@@ -1,13 +1,13 @@
 package cmd
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"text/template"
+
+	"github.com/timvw/wt/internal/tmpl"
 )
 
 func buildWorktreePath(info repoInfo, branch string) (string, error) {
@@ -42,48 +42,26 @@ func renderWorktreePath(info repoInfo, branch string) (string, error) {
 
 	sep := worktreeSeparator
 
-	transformValue := func(s string) string {
-		return strings.ReplaceAll(strings.ReplaceAll(s, "/", sep), "\\", sep)
-	}
-
-	envMap := map[string]string{}
-	for _, e := range os.Environ() {
-		parts := strings.SplitN(e, "=", 2)
-		if len(parts) == 2 {
-			envMap[parts[0]] = transformValue(parts[1])
-		}
-	}
-
 	context := map[string]any{
 		"repo": repoInfo{
 			Main:  info.Main,
 			Host:  info.Host,
-			Owner: transformValue(info.Owner),
+			Owner: tmpl.Transform(sep, info.Owner),
 			Name:  info.Name,
 		},
-		"branch":       strings.TrimSpace(transformValue(branch)),
+		"branch":       strings.TrimSpace(tmpl.Transform(sep, branch)),
 		"worktreeRoot": worktreeRoot,
-		"env":          envMap,
+		"env":          tmpl.EnvMap(sep),
 	}
 
 	if pattern == "" {
 		return "", fmt.Errorf("worktree pattern cannot be empty")
 	}
 
-	tpl, err := template.New("worktreePattern").
-		Delims("{", "}").
-		Option("missingkey=error").
-		Parse(pattern)
+	rendered, err := tmpl.Render(pattern, context)
 	if err != nil {
-		return "", fmt.Errorf("invalid worktree pattern: %w", err)
-	}
-
-	var renderedBuf bytes.Buffer
-	if err := tpl.Execute(&renderedBuf, context); err != nil {
 		return "", fmt.Errorf("pattern variables missing values: %w", err)
 	}
-
-	rendered := renderedBuf.String()
 	rendered = filepath.FromSlash(rendered)
 	if !filepath.IsAbs(rendered) {
 		rendered = filepath.Join(worktreeRoot, rendered)

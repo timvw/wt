@@ -90,7 +90,7 @@ function wt {
 Register-ArgumentCompleter -CommandName wt -ScriptBlock {
     param($commandName, $wordToComplete, $commandAst, $fakeBoundParameters)
 
-    $commands = @('checkout', 'co', 'cd', 'sw', 'create', 'default', 'pr', 'mr', 'list', 'ls', 'remove', 'rm', 'status', 'cleanup', 'migrate', 'prune', 'help', 'shellenv', 'init', 'info', 'config', 'examples', 'version')
+    $commands = @('checkout', 'co', 'cd', 'sw', 'clone', 'cl', 'create', 'default', 'pr', 'mr', 'list', 'ls', 'remove', 'rm', 'status', 'cleanup', 'migrate', 'prune', 'help', 'shellenv', 'init', 'info', 'config', 'examples', 'version')
 
     # Get the position in the command line
     $position = $commandAst.CommandElements.Count - 1
@@ -107,6 +107,11 @@ Register-ArgumentCompleter -CommandName wt -ScriptBlock {
             $remotes = (git remote 2>$null) -join '|'
             $branches = git branch -a --format='%(refname:short)' 2>$null | Where-Object { $_ -notmatch 'HEAD' } | ForEach-Object { $_ -replace "^($remotes)/", '' } | Sort-Object -Unique
             $branches | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+                [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+            }
+        } elseif ($subCommand -in @('clone', 'cl')) {
+            # Builtin categories; user-defined ones from config are not listed here.
+            @('work', 'personal', 'oss') | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
                 [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
             }
         } elseif ($subCommand -in @('remove', 'rm')) {
@@ -222,7 +227,7 @@ if [ -n "$BASH_VERSION" ]; then
         COMPREPLY=()
         cur="${COMP_WORDS[COMP_CWORD]}"
         prev="${COMP_WORDS[COMP_CWORD-1]}"
-        commands="checkout co cd sw create default pr mr list ls remove rm status cleanup migrate prune help shellenv init info config examples version"
+        commands="checkout co cd sw clone cl create default pr mr list ls remove rm status cleanup migrate prune help shellenv init info config examples version"
 
         # Complete commands if first argument
         if [ $COMP_CWORD -eq 1 ]; then
@@ -251,6 +256,11 @@ if [ -n "$BASH_VERSION" ]; then
                 COMPREPLY=( $(compgen -W "$branches" -- "$cur") )
                 return 0
                 ;;
+            clone|cl)
+                # Builtin categories; user-defined ones from config are not listed here.
+                COMPREPLY=( $(compgen -W "work personal oss" -- "$cur") )
+                return 0
+                ;;
             config)
                 COMPREPLY=( $(compgen -W "init show path" -- "$cur") )
                 return 0
@@ -269,6 +279,8 @@ if [ -n "$ZSH_VERSION" ]; then
             'co:Checkout existing branch in new worktree'
             'cd:Switch to an existing worktree'
             'sw:Switch to an existing worktree'
+            'clone:Clone a repository into a category location'
+            'cl:Clone a repository into a category location'
             'create:Create new branch in worktree'
             'default:Navigate to the main worktree'
             'pr:Checkout GitHub PR in worktree'
@@ -307,6 +319,12 @@ if [ -n "$ZSH_VERSION" ]; then
                 cd|sw)
                     branches=(${(f)"$(git worktree list 2>/dev/null | sed -n 's/.*\[\([^]]*\)\].*/\1/p')"})
                     _describe 'branch' branches
+                    ;;
+                clone|cl)
+                    # Builtin categories; user-defined ones from config are not listed here.
+                    local -a cats
+                    cats=(work personal oss)
+                    _describe 'category' cats
                     ;;
                 config)
                     local -a config_cmds
@@ -432,6 +450,8 @@ complete -c wt -n "__fish_use_subcommand" -a "checkout" -d "Checkout existing br
 complete -c wt -n "__fish_use_subcommand" -a "co" -d "Checkout existing branch in new worktree"
 complete -c wt -n "__fish_use_subcommand" -a "cd" -d "Switch to an existing worktree"
 complete -c wt -n "__fish_use_subcommand" -a "sw" -d "Switch to an existing worktree"
+complete -c wt -n "__fish_use_subcommand" -a "clone" -d "Clone a repository into a category location"
+complete -c wt -n "__fish_use_subcommand" -a "cl" -d "Clone a repository into a category location"
 complete -c wt -n "__fish_use_subcommand" -a "create" -d "Create new branch in worktree"
 complete -c wt -n "__fish_use_subcommand" -a "default" -d "Navigate to the main worktree"
 complete -c wt -n "__fish_use_subcommand" -a "pr" -d "Checkout GitHub PR in worktree"
@@ -468,6 +488,8 @@ end
 complete -c wt -n "__fish_seen_subcommand_from checkout co create" -a "(__wt_complete_branches)"
 complete -c wt -n "__fish_seen_subcommand_from remove rm" -a "(__wt_complete_worktree_branches)"
 complete -c wt -n "__fish_seen_subcommand_from cd sw" -a "(__wt_complete_all_worktree_branches)"
+# Builtin categories; user-defined ones from config are not listed here.
+complete -c wt -n "__fish_seen_subcommand_from clone cl" -a "work personal oss"
 complete -c wt -n "__fish_seen_subcommand_from config" -a "init show path"
 `
 }

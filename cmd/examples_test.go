@@ -86,6 +86,7 @@ func TestSortedTopicsIncludesMigrate(t *testing.T) {
 
 func TestExamplesCoverAllTopLevelCommands(t *testing.T) {
 	expectedTopics := []string{
+		"clone",
 		"checkout",
 		"create",
 		"pr",

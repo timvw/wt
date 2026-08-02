@@ -40,6 +40,8 @@ var infoCmd = &cobra.Command{
 			"post_pr":       worktreeHooks.PostPR,
 			"pre_mr":        worktreeHooks.PreMR,
 			"post_mr":       worktreeHooks.PostMR,
+			"pre_clone":     worktreeHooks.PreClone,
+			"post_clone":    worktreeHooks.PostClone,
 		}
 
 		if jsonMode {
@@ -49,6 +51,7 @@ var infoCmd = &cobra.Command{
 				"strategy":  worktreeStrategy,
 				"pattern":   pattern,
 				"root":      worktreeRoot,
+				"repo_root": reposRoot,
 				"separator": worktreeSeparator,
 			}
 			if configRepoPath != "" {
@@ -68,6 +71,11 @@ var infoCmd = &cobra.Command{
 				},
 				"pattern_variables": []string{"{.repo.Name}", "{.repo.Main}", "{.repo.Owner}", "{.repo.Host}", "{.branch}", "{.worktreeRoot}", "{.env.VARNAME}"},
 				"hooks":             hooks,
+				"categories":        collectCategoriesForDisplay(),
+				"repo_pattern": map[string]any{
+					"value":     repoPattern,
+					"variables": []string{"{.category.RepoRoot}", "{.repo.Host}", "{.repo.Owner}", "{.repo.Name}", "{.branch}"},
+				},
 			})
 		}
 
@@ -99,6 +107,16 @@ Note: The separator setting controls how "/" and "\" in value variables are repl
 Note: {.env.VARNAME} accesses the environment variable VARNAME (e.g. {.env.HOME}).
 `, configFilePath, configStatus, repoLine, worktreeStrategy, pattern, worktreeRoot, worktreeSeparator)
 
+		// Show categories + clone placement (used by wt clone)
+		fmt.Printf("Repo root (base):        %s\n", reposRoot)
+		fmt.Printf("Repo pattern (wt clone): %s\n", repoPattern)
+		fmt.Println("Repo pattern variables: {.category.RepoRoot}, {.repo.Host}, {.repo.Owner}, {.repo.Name}")
+		fmt.Println("Categories:")
+		for _, c := range collectCategoriesForDisplay() {
+			fmt.Printf("  %-12s -> %s (%s)\n", c["name"], displayOrNone(c["repo_root"]), c["defined_in"])
+		}
+		fmt.Println()
+
 		// Show configured hooks
 		hookNames := []struct {
 			name  string
@@ -114,6 +132,8 @@ Note: {.env.VARNAME} accesses the environment variable VARNAME (e.g. {.env.HOME}
 			{"post_pr", worktreeHooks.PostPR},
 			{"pre_mr", worktreeHooks.PreMR},
 			{"post_mr", worktreeHooks.PostMR},
+			{"pre_clone", worktreeHooks.PreClone},
+			{"post_clone", worktreeHooks.PostClone},
 		}
 		hasHooks := false
 		for _, h := range hookNames {

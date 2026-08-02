@@ -1261,6 +1261,8 @@ func TestGetHooks(t *testing.T) {
 		PostPR:       []string{"echo post-pr"},
 		PreMR:        []string{"echo pre-mr"},
 		PostMR:       []string{"echo post-mr"},
+		PreClone:     []string{"echo pre-clone"},
+		PostClone:    []string{"echo post-clone"},
 	}
 
 	tests := []struct {
@@ -1278,6 +1280,8 @@ func TestGetHooks(t *testing.T) {
 		{"post_pr", "post_pr", []string{"echo post-pr"}},
 		{"pre_mr", "pre_mr", []string{"echo pre-mr"}},
 		{"post_mr", "post_mr", []string{"echo post-mr"}},
+		{"pre_clone", "pre_clone", []string{"echo pre-clone"}},
+		{"post_clone", "post_clone", []string{"echo post-clone"}},
 		{"unknown returns nil", "unknown", nil},
 		{"empty string returns nil", "", nil},
 	}

@@ -13,11 +13,15 @@ import (
 
 // Config represents the wt configuration file structure.
 type Config struct {
-	Root      string `toml:"root"`
-	Strategy  string `toml:"strategy"`
-	Pattern   string `toml:"pattern"`
-	Separator string `toml:"separator"`
-	Hooks     Hooks  `toml:"hooks"`
+	Root            string              `toml:"root"`
+	RepoRoot        string              `toml:"repo_root"`
+	Strategy        string              `toml:"strategy"`
+	Pattern         string              `toml:"pattern"`
+	Separator       string              `toml:"separator"`
+	Hooks           Hooks               `toml:"hooks"`
+	Categories      map[string]Category `toml:"categories"`
+	DefaultCategory string              `toml:"default_category"`
+	RepoPattern     string              `toml:"repo_pattern"`
 }
 
 // Hooks holds pre/post command hook commands.
@@ -32,14 +36,20 @@ type Hooks struct {
 	PostPR       []string `toml:"post_pr"`
 	PreMR        []string `toml:"pre_mr"`
 	PostMR       []string `toml:"post_mr"`
+	PreClone     []string `toml:"pre_clone"`
+	PostClone    []string `toml:"post_clone"`
 }
 
 // configSource tracks where each config value came from.
 type configSource struct {
-	Root      string
-	Strategy  string
-	Pattern   string
-	Separator string
+	Root            string
+	RepoRoot        string
+	Strategy        string
+	Pattern         string
+	Separator       string
+	Categories      string
+	DefaultCategory string
+	RepoPattern     string
 }
 
 // configFilePath is the resolved path to the config file (set during loading).
@@ -59,6 +69,17 @@ var configSources configSource
 
 // worktreeHooks holds the loaded hook configuration.
 var worktreeHooks Hooks
+
+// Category configuration, loaded by loadWorktreeConfig.
+var (
+	// reposRoot is the base directory for canonical clones (wt clone).
+	// A category's repo_root defaults to reposRoot/<category-name>.
+	reposRoot             string
+	configCategories      = map[string]Category{}
+	categoryDefaults      Category
+	configDefaultCategory string
+	repoPattern           string
+)
 
 // configFlag is the --config flag value (set by cobra).
 var configFlag string
@@ -84,6 +105,10 @@ const defaultConfigTemplate = `# wt configuration file
 # Root directory for worktrees (default: ~/dev/worktrees)
 # root = "~/dev/worktrees"
 
+# Base directory for canonical clones created by 'wt clone' (default: ~/dev/repos).
+# Each category's repo_root defaults to <repo_root>/<category-name>.
+# repo_root = "~/dev/repos"
+
 # Worktree placement strategy
 # Options: global, sibling-repo, parent-branches, parent-worktrees,
 #          parent-dotdir, inside-dotdir, custom
@@ -105,6 +130,15 @@ const defaultConfigTemplate = `# wt configuration file
 # strategy = "custom"
 # pattern = "{.worktreeRoot}/{.env.FEATURE}/{.repo.Name}"
 
+# Placement layout for cloned repos. Variables: {.category.RepoRoot},
+# {.repo.Host}, {.repo.Owner}, {.repo.Name}, {.branch}, {.env.VARNAME}.
+# Default uses owner/repo/branch layout; {.branch} is the remote's default branch
+# (queried via git ls-remote, fallback "main"). Add {.repo.Host} for multi-forge.
+# NOTE: keep this above any [categories.*] sections — TOML assigns keys to the
+#       nearest preceding section header, so placing repo_pattern after a
+#       [categories.x] block silently stores it there instead of top-level.
+# repo_pattern = "{.category.RepoRoot}/{.repo.Owner}/{.repo.Name}/{.branch}"
+
 # Hooks — run commands before/after wt operations
 # Available env vars in hooks: $WT_PATH, $WT_BRANCH, $WT_MAIN,
 #                              $WT_REPO_NAME, $WT_REPO_HOST, $WT_REPO_OWNER
@@ -116,6 +150,23 @@ const defaultConfigTemplate = `# wt configuration file
 # post_create = ["test -f \"$WT_MAIN/.env\" && cp \"$WT_MAIN/.env\" \"$WT_PATH/.env\" || true"]
 # post_checkout = ["cd \"$WT_PATH\" && npm install"]
 # pre_remove = ["echo \"Removing $WT_PATH\""]
+# post_clone = ["cd \"$WT_PATH\" && git status"]
+
+# Categories — organizational contexts that "wt clone" places repos into.
+# A category's repo_root defaults to <repo_root>/<category-name> (see above);
+# override it below only when a category needs a different location. Builtin
+# categories: work, personal, oss.
+# [categories.work]
+# repo_root    = "~/work/src"  # optional; defaults to <repo_root>/work
+# gh_auth      = "work"        # gh account (gh auth switch --user)
+# git_protocol = "ssh"         # ssh|https for owner/repo -> clone URL
+# glab_host    = ""            # glab --hostname for GitLab instances
+#
+# [categories.personal]
+# gh_auth = "personal"         # repo_root defaults to <repo_root>/personal
+#
+# Default category (reserved for future use).
+# default_category = "personal"
 `
 
 // configDir returns the directory where wt config files are stored.
@@ -152,19 +203,30 @@ func loadWorktreeConfig() {
 	defaultRoot := filepath.Join(home, "dev", "worktrees")
 
 	worktreeRoot = defaultRoot
+	reposRoot = filepath.Join(home, "dev", "repos")
 	worktreeStrategy = "global"
 	worktreePattern = ""
 	worktreeSeparator = "/"
 
 	configSources = configSource{
-		Root:      "default",
-		Strategy:  "default",
-		Pattern:   "default",
-		Separator: "default",
+		Root:            "default",
+		RepoRoot:        "default",
+		Strategy:        "default",
+		Pattern:         "default",
+		Separator:       "default",
+		Categories:      "default",
+		DefaultCategory: "default",
+		RepoPattern:     "default",
 	}
 
 	// Reset hooks
 	worktreeHooks = Hooks{}
+
+	// Reset categories (builtins are provided by builtinCategories()).
+	configCategories = map[string]Category{}
+	categoryDefaults = Category{}
+	configDefaultCategory = ""
+	repoPattern = defaultRepoPattern
 
 	// 2. Load config file
 	configFilePath = resolveConfigPath(configFlag)
@@ -178,6 +240,10 @@ func loadWorktreeConfig() {
 				worktreeRoot = expandHome(cfg.Root)
 				configSources.Root = "config file"
 			}
+			if cfg.RepoRoot != "" {
+				reposRoot = expandHome(cfg.RepoRoot)
+				configSources.RepoRoot = "config file"
+			}
 			if cfg.Strategy != "" {
 				worktreeStrategy = strings.ToLower(strings.TrimSpace(cfg.Strategy))
 				configSources.Strategy = "config file"
@@ -189,6 +255,18 @@ func loadWorktreeConfig() {
 			if cfg.Separator != "" {
 				worktreeSeparator = cfg.Separator
 				configSources.Separator = "config file"
+			}
+			if len(cfg.Categories) > 0 {
+				configCategories = cfg.Categories
+				configSources.Categories = "config file"
+			}
+			if cfg.DefaultCategory != "" {
+				configDefaultCategory = cfg.DefaultCategory
+				configSources.DefaultCategory = "config file"
+			}
+			if cfg.RepoPattern != "" {
+				repoPattern = strings.TrimSpace(cfg.RepoPattern)
+				configSources.RepoPattern = "config file"
 			}
 			worktreeHooks = cfg.Hooks
 		}
@@ -217,6 +295,18 @@ func loadWorktreeConfig() {
 				if repoCfg.Separator != "" {
 					worktreeSeparator = repoCfg.Separator
 					configSources.Separator = "repo config"
+				}
+				if len(repoCfg.Categories) > 0 {
+					configCategories = repoCfg.Categories
+					configSources.Categories = "repo config"
+				}
+				if repoCfg.DefaultCategory != "" {
+					configDefaultCategory = repoCfg.DefaultCategory
+					configSources.DefaultCategory = "repo config"
+				}
+				if repoCfg.RepoPattern != "" {
+					repoPattern = strings.TrimSpace(repoCfg.RepoPattern)
+					configSources.RepoPattern = "repo config"
 				}
 				// Merge hooks: repo hooks override per-hook type, unset hooks keep global values
 				if len(repoCfg.Hooks.PreCreate) > 0 {
@@ -249,6 +339,12 @@ func loadWorktreeConfig() {
 				if len(repoCfg.Hooks.PostMR) > 0 {
 					worktreeHooks.PostMR = repoCfg.Hooks.PostMR
 				}
+				if len(repoCfg.Hooks.PreClone) > 0 {
+					worktreeHooks.PreClone = repoCfg.Hooks.PreClone
+				}
+				if len(repoCfg.Hooks.PostClone) > 0 {
+					worktreeHooks.PostClone = repoCfg.Hooks.PostClone
+				}
 			}
 		}
 	}
@@ -257,6 +353,10 @@ func loadWorktreeConfig() {
 	if v := os.Getenv("WORKTREE_ROOT"); v != "" {
 		worktreeRoot = v
 		configSources.Root = "env: WORKTREE_ROOT"
+	}
+	if v := os.Getenv("WT_REPO_ROOT"); v != "" {
+		reposRoot = expandHome(v)
+		configSources.RepoRoot = "env: WT_REPO_ROOT"
 	}
 	if v := os.Getenv("WORKTREE_STRATEGY"); v != "" {
 		worktreeStrategy = strings.ToLower(strings.TrimSpace(v))
