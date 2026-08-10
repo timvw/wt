@@ -158,8 +158,26 @@ Checkout hooks (`pre_checkout` / `post_checkout`) run both when a new worktree i
 
 - **Pre-hooks** abort the operation if any command exits non-zero
 - **Post-hooks** print a warning on failure but do not fail the `wt` command
-- Each hook is a list of shell commands executed via `sh -c` (or `cmd /c` on Windows)
+- Each hook is a list of shell commands. `wt` spawns the shell itself, so the shell you are sitting in does not decide what runs them — see [Which shell runs a hook](#which-shell-runs-a-hook)
 - Set `WT_HOOKS_DISABLED=1` to skip all hooks (useful for scripting or CI)
+
+**Which shell runs a hook:**
+
+| Where `wt` runs | Interpreter | Write hooks in |
+| --- | --- | --- |
+| macOS, Linux | `sh -c` | POSIX shell syntax, `$WT_PATH` |
+| Windows, from Git Bash / MSYS2 / Cygwin | `sh -c` | POSIX shell syntax, `$WT_PATH` |
+| Windows, from PowerShell or `cmd` | `cmd /c` | cmd syntax, `%WT_PATH%` |
+
+On Windows, `wt` uses `sh` when it can see it is running in a POSIX shell environment (`MSYSTEM` is set, or `$SHELL` names a Unix shell) **and** `sh` is on `PATH`; otherwise it falls back to `cmd /c`. When `sh` is chosen, the path-valued variables `$WT_PATH` and `$WT_MAIN` are handed over with forward slashes (`C:/Users/you/worktrees/repo/branch`) so they survive both shell quoting and any native tool the hook invokes.
+
+The examples below — and everything in [examples.md](examples.md) — are POSIX, so they work as written everywhere except a PowerShell or `cmd` session on Windows. From those, write the cmd equivalent:
+
+```toml
+[hooks]
+# PowerShell / cmd on Windows: cmd syntax, %VAR% expansion
+post_create = ["if exist %WT_MAIN%\\.env copy %WT_MAIN%\\.env %WT_PATH%\\.env"]
+```
 
 **Common patterns:**
 

@@ -1,5 +1,7 @@
 # Examples
 
+> **Note:** every hook on this page is written in POSIX shell syntax. That is what `wt` runs them with on macOS, Linux, and on Windows under Git Bash, MSYS2 or Cygwin. From a PowerShell or `cmd` session on Windows, hooks run through `cmd /c` instead and need cmd syntax (`%WT_PATH%`, not `$WT_PATH`) — see [Which shell runs a hook](configuration.md#which-shell-runs-a-hook).
+
 ## AI assistants and editors
 
 Launch an AI coding assistant or editor automatically when checking out a worktree.
