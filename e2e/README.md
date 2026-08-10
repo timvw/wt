@@ -71,6 +71,27 @@ scenarios:
 | `output_contains` | Output includes string |
 | `output_not_contains` | Output excludes string |
 
+### Scenario Variables
+
+POSIX scenarios (bash/zsh/fish) can reference these, set up by the generator:
+
+| Variable | Form | Use |
+|----------|------|-----|
+| `$WT_BIN` | POSIX | The `wt` binary, invocable by the interpreter |
+| `$TEST_DIR`, `$REPO_DIR` | POSIX | Paths to hand to `test`, `cat`, `mkdir`, … |
+| `$WORKTREE_ROOT` | native | Exported; what `wt` itself reads |
+| `$WORKTREE_ROOT_POSIX` | POSIX | Assert on worktree paths from the shell |
+| `$TEST_DIR_NATIVE`, `$REPO_DIR_NATIVE` | native | Paths to hand to `wt` (e.g. `WT_CONFIG=`) |
+
+The `_NATIVE`/`_POSIX` pairs only differ under Git Bash, where the interpreter
+speaks `/c/...` and the native `wt.exe` speaks `C:\...`. Bash converts
+POSIX-looking *arguments* when it spawns a native binary, but not *environment
+variables* — so anything passed to `wt` through the environment needs the
+native form. Everywhere else both forms are the same string, which is what
+keeps a scenario using them portable.
+
+These are POSIX-generator only; the PowerShell generator does not define them.
+
 ### Skip Conditions
 
 ```yaml

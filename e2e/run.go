@@ -444,11 +444,24 @@ func generatePosixScript(wtBinary, shell string, scenario Scenario, verbose, sho
 	sb.WriteString("TEST_DIR=$(mktemp -d)\n")
 	sb.WriteString("REPO_DIR=\"$TEST_DIR/test-repo\"\n")
 	sb.WriteString("REPO_NAME=\"test-repo\"\n")
+	// A scenario running under Git Bash straddles two path worlds: the
+	// interpreter and its coreutils understand POSIX paths (/c/...), the native
+	// wt.exe understands Windows ones (C:\...). Every base path is therefore
+	// available in both forms — $..._NATIVE to hand to wt (as an argument value
+	// bash won't convert, e.g. an env var), $..._POSIX to assert on with
+	// test/grep. On every other OS the two forms are the same string, so a
+	// scenario written with them stays portable.
 	if runtime.GOOS == "windows" {
 		sb.WriteString("mkdir -p \"$TEST_DIR/worktrees\"\n")
 		sb.WriteString("export WORKTREE_ROOT=$(cygpath -w \"$TEST_DIR/worktrees\")\n")
+		sb.WriteString("WORKTREE_ROOT_POSIX=\"$TEST_DIR/worktrees\"\n")
+		sb.WriteString("TEST_DIR_NATIVE=$(cygpath -w \"$TEST_DIR\")\n")
+		sb.WriteString("REPO_DIR_NATIVE=$(cygpath -w \"$REPO_DIR\")\n")
 	} else {
 		sb.WriteString("export WORKTREE_ROOT=\"$TEST_DIR/worktrees\"\n")
+		sb.WriteString("WORKTREE_ROOT_POSIX=\"$WORKTREE_ROOT\"\n")
+		sb.WriteString("TEST_DIR_NATIVE=\"$TEST_DIR\"\n")
+		sb.WriteString("REPO_DIR_NATIVE=\"$REPO_DIR\"\n")
 	}
 	sb.WriteString("mkdir -p \"$REPO_DIR\"\n")
 	sb.WriteString("cd \"$REPO_DIR\"\n")
@@ -611,6 +624,11 @@ func generateFishScript(wtBinary string, scenario Scenario, verbose, showOutput,
 	sb.WriteString("set REPO_DIR \"$TEST_DIR/test-repo\"\n")
 	sb.WriteString("set REPO_NAME \"test-repo\"\n")
 	sb.WriteString("set -x WORKTREE_ROOT \"$TEST_DIR/worktrees\"\n")
+	// Fish never runs on Windows, so the native and POSIX forms coincide.
+	// They exist here only so scenarios can name them unconditionally.
+	sb.WriteString("set WORKTREE_ROOT_POSIX \"$WORKTREE_ROOT\"\n")
+	sb.WriteString("set TEST_DIR_NATIVE \"$TEST_DIR\"\n")
+	sb.WriteString("set REPO_DIR_NATIVE \"$REPO_DIR\"\n")
 	sb.WriteString("mkdir -p \"$REPO_DIR\"; or exit 1\n")
 	sb.WriteString("cd \"$REPO_DIR\"; or exit 1\n")
 	sb.WriteString("git init --quiet; or exit 1\n")
