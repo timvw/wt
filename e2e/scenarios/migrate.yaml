@@ -5,64 +5,64 @@ description: Test migration of existing worktrees to configured paths
 scenarios:
   - name: migrate_moves_worktree
     description: Migrate moves worktree into configured root
-    skip_os: [windows]  # Uses Unix test -d command
+    skip_shells: [powershell, pwsh]  # Uses Unix test -d command
     setup:
       - create_branch: migrate-apply
     steps:
-      - run: git worktree add "$REPO_DIR/../legacy/migrate-apply" migrate-apply
+      - run: git worktree add "$TEST_DIR/legacy/migrate-apply" migrate-apply
         expect:
           exit_code: 0
-      - run: WORKTREE_ROOT="$REPO_DIR/../worktrees" wt migrate
+      - run: wt migrate
         expect:
           exit_code: 0
           output_contains: "Moved migrate-apply"
-      - run: test -d "$REPO_DIR/../worktrees/test-repo/migrate-apply" && echo "TARGET_EXISTS"
+      - run: test -d "$WORKTREE_ROOT_POSIX/test-repo/migrate-apply" && echo "TARGET_EXISTS"
         expect:
           output_contains: TARGET_EXISTS
-      - run: test -d "$REPO_DIR/../legacy/migrate-apply" && echo "OLD_EXISTS" || echo "OLD_REMOVED"
+      - run: test -d "$TEST_DIR/legacy/migrate-apply" && echo "OLD_EXISTS" || echo "OLD_REMOVED"
         expect:
           output_contains: OLD_REMOVED
 
   - name: migrate_skip_non_empty_target_without_force
     description: Migrate skips when target exists and is non-empty without force
-    skip_os: [windows]  # Uses Unix test -d command
+    skip_shells: [powershell, pwsh]  # Uses Unix test -d command
     setup:
       - create_branch: migrate-skip
     steps:
-      - run: git worktree add "$REPO_DIR/../legacy/migrate-skip" migrate-skip
+      - run: git worktree add "$TEST_DIR/legacy/migrate-skip" migrate-skip
         expect:
           exit_code: 0
-      - run: mkdir -p "$REPO_DIR/../worktrees/test-repo/migrate-skip"
-      - run: echo "conflict" > "$REPO_DIR/../worktrees/test-repo/migrate-skip/conflict.txt"
-      - run: WORKTREE_ROOT="$REPO_DIR/../worktrees" wt migrate
+      - run: mkdir -p "$WORKTREE_ROOT_POSIX/test-repo/migrate-skip"
+      - run: echo "conflict" > "$WORKTREE_ROOT_POSIX/test-repo/migrate-skip/conflict.txt"
+      - run: wt migrate
         expect:
           exit_code: 0
           output_contains: "Skipped migrate-skip"
-      - run: test -d "$REPO_DIR/../legacy/migrate-skip" && echo "OLD_EXISTS"
+      - run: test -d "$TEST_DIR/legacy/migrate-skip" && echo "OLD_EXISTS"
         expect:
           output_contains: OLD_EXISTS
-      - run: test -f "$REPO_DIR/../worktrees/test-repo/migrate-skip/conflict.txt" && echo "CONFLICT_EXISTS"
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/migrate-skip/conflict.txt" && echo "CONFLICT_EXISTS"
         expect:
           output_contains: CONFLICT_EXISTS
 
   - name: migrate_force_overwrites_non_empty_target
     description: Migrate with force replaces conflicting target path
-    skip_os: [windows]  # Uses Unix test -d command
+    skip_shells: [powershell, pwsh]  # Uses Unix test -d command
     setup:
       - create_branch: migrate-force
     steps:
-      - run: git worktree add "$REPO_DIR/../legacy/migrate-force" migrate-force
+      - run: git worktree add "$TEST_DIR/legacy/migrate-force" migrate-force
         expect:
           exit_code: 0
-      - run: mkdir -p "$REPO_DIR/../worktrees/test-repo/migrate-force"
-      - run: echo "conflict" > "$REPO_DIR/../worktrees/test-repo/migrate-force/conflict.txt"
-      - run: WORKTREE_ROOT="$REPO_DIR/../worktrees" wt migrate --force
+      - run: mkdir -p "$WORKTREE_ROOT_POSIX/test-repo/migrate-force"
+      - run: echo "conflict" > "$WORKTREE_ROOT_POSIX/test-repo/migrate-force/conflict.txt"
+      - run: wt migrate --force
         expect:
           exit_code: 0
           output_contains: "Moved migrate-force"
-      - run: test -d "$REPO_DIR/../worktrees/test-repo/migrate-force" && echo "TARGET_EXISTS"
+      - run: test -d "$WORKTREE_ROOT_POSIX/test-repo/migrate-force" && echo "TARGET_EXISTS"
         expect:
           output_contains: TARGET_EXISTS
-      - run: test -f "$REPO_DIR/../worktrees/test-repo/migrate-force/conflict.txt" && echo "CONFLICT_EXISTS" || echo "CONFLICT_REMOVED"
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/migrate-force/conflict.txt" && echo "CONFLICT_EXISTS" || echo "CONFLICT_REMOVED"
         expect:
           output_contains: CONFLICT_REMOVED
