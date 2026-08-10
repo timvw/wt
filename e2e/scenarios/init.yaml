@@ -63,13 +63,16 @@ scenarios:
   - name: init_creates_config
     description: Init creates shell config with markers
     skip_shellenv: true
-    # steps use bash-only inline env syntax (HOME="..." cmd), so fish can't run them
+    # These four scenarios redirect wt's home lookup at TEST_DIR so they never
+    # touch the real ~/.bashrc. That needs bash-only inline env syntax
+    # (HOME="..." cmd), which rules out fish and the PowerShell shells — a
+    # shell constraint, not an OS one, so they do run under Git Bash. wt reads
+    # $HOME on Unix and %USERPROFILE% on Windows, hence both are set.
     skip_shells: [powershell, pwsh, fish]
-    skip_os: [windows]
     steps:
       - run: |
           touch "$TEST_DIR/.bashrc"
-          HOME="$TEST_DIR" $WT_BIN init bash --no-prompt
+          HOME="$TEST_DIR" USERPROFILE="$TEST_DIR_NATIVE" $WT_BIN init bash --no-prompt
           cat "$TEST_DIR/.bashrc"
         expect:
           exit_code: 0
@@ -79,12 +82,11 @@ scenarios:
     description: Running init twice does not duplicate config
     skip_shellenv: true
     skip_shells: [powershell, pwsh, fish]
-    skip_os: [windows]
     steps:
       - run: |
           touch "$TEST_DIR/.bashrc"
-          HOME="$TEST_DIR" $WT_BIN init bash --no-prompt
-          HOME="$TEST_DIR" $WT_BIN init bash --no-prompt
+          HOME="$TEST_DIR" USERPROFILE="$TEST_DIR_NATIVE" $WT_BIN init bash --no-prompt
+          HOME="$TEST_DIR" USERPROFILE="$TEST_DIR_NATIVE" $WT_BIN init bash --no-prompt
           grep -c "wt initialize >>>" "$TEST_DIR/.bashrc"
         expect:
           exit_code: 0
@@ -94,12 +96,11 @@ scenarios:
     description: Init --uninstall removes the config
     skip_shellenv: true
     skip_shells: [powershell, pwsh, fish]
-    skip_os: [windows]
     steps:
       - run: |
           touch "$TEST_DIR/.bashrc"
-          HOME="$TEST_DIR" $WT_BIN init bash --no-prompt
-          HOME="$TEST_DIR" $WT_BIN init bash --uninstall --no-prompt
+          HOME="$TEST_DIR" USERPROFILE="$TEST_DIR_NATIVE" $WT_BIN init bash --no-prompt
+          HOME="$TEST_DIR" USERPROFILE="$TEST_DIR_NATIVE" $WT_BIN init bash --uninstall --no-prompt
           grep -c "wt initialize" "$TEST_DIR/.bashrc" 2>/dev/null || echo "0"
         expect:
           output_contains: "0"
@@ -108,12 +109,11 @@ scenarios:
     description: Init preserves existing shell config content
     skip_shellenv: true
     skip_shells: [powershell, pwsh, fish]
-    skip_os: [windows]
     steps:
       - run: |
           echo "# My existing config" > "$TEST_DIR/.bashrc"
           echo "export MY_VAR=hello" >> "$TEST_DIR/.bashrc"
-          HOME="$TEST_DIR" $WT_BIN init bash --no-prompt
+          HOME="$TEST_DIR" USERPROFILE="$TEST_DIR_NATIVE" $WT_BIN init bash --no-prompt
           cat "$TEST_DIR/.bashrc"
         expect:
           exit_code: 0
