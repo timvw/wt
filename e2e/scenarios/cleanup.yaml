@@ -75,7 +75,7 @@ scenarios:
 
   - name: cleanup_cleans_directory
     description: Cleanup removes the worktree directory from filesystem
-    skip_os: [windows]  # Uses Unix test -d command
+    skip_shells: [powershell, pwsh]  # Uses Unix test -d command
     steps:
       # Create and merge a branch
       - run: git checkout -b cleanup-dir-branch
@@ -90,6 +90,6 @@ scenarios:
       - run: wt cleanup --force
         expect:
           exit_code: 0
-      - run: test -d "$WORKTREE_ROOT/$REPO_NAME/cleanup-dir-branch" && echo "EXISTS" || echo "REMOVED"
+      - run: test -d "$WORKTREE_ROOT_POSIX/$REPO_NAME/cleanup-dir-branch" && echo "EXISTS" || echo "REMOVED"
         expect:
           output_contains: REMOVED
