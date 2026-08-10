@@ -59,7 +59,9 @@ scenarios:
 
   - name: separator_empty_removes_slashes
     description: Empty separator removes slashes entirely
-    skip_os: [windows]  # PowerShell treats empty env vars as unset
+    # PowerShell treats an empty env var as unset, so it cannot express the
+    # case under test. Git Bash can, so this is a shell skip, not an OS one.
+    skip_shells: [powershell, pwsh]
     steps:
       - run: wt create feature/empty
         env:
