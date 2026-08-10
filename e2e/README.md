@@ -96,6 +96,13 @@ The CI workflow runs `go run e2e/run.go` with the appropriate shell for each OS:
 
 | OS | Shells |
 |----|--------|
-| Linux | bash, zsh |
-| macOS | bash, zsh |
-| Windows | powershell, pwsh |
+| Linux | bash, zsh, fish |
+| macOS | bash, zsh, fish |
+| Windows | powershell, pwsh, bash (Git Bash) |
+
+On Windows, `bash` means Git Bash specifically — `run.go` resolves it from the
+Git for Windows install rather than `PATH`, so the WSL launcher in `System32`
+is never picked up. Git Bash runs the same native `wt.exe` as PowerShell but
+through the bash integration, so scenarios there exercise the paths that need
+`cygpath` translation and the missing-`script(1)` fallback. Scenarios that only
+make sense there use `skip_os: [linux, darwin]`.

@@ -48,6 +48,23 @@ scenarios:
         expect:
           output_contains: "function wt"
 
+  # Regression test for #112. shellenv used to resolve the target shell from
+  # GOOS alone, so `eval "$(wt shellenv)"` in .bashrc fed PowerShell code to
+  # Git Bash.
+  - name: shellenv_git_bash_outputs_bash_integration
+    description: shellenv under Git Bash emits the bash wrapper, not PowerShell
+    skip_shellenv: true
+    skip_shells: [zsh, fish, powershell, pwsh]
+    skip_os: [linux, darwin]
+    steps:
+      - run: $WT_BIN shellenv
+        expect:
+          exit_code: 0
+          output_contains: "wt()"
+      - run: $WT_BIN shellenv
+        expect:
+          output_not_contains: "Set-Location"
+
   - name: shellenv_uses_portable_sed
     description: shellenv uses portable sed syntax for completion (not gawk)
     skip_shellenv: true

@@ -202,6 +202,11 @@ func determineShells(shellsFlag string) []string {
 		if _, err := exec.LookPath("pwsh"); err == nil {
 			shells = append(shells, "pwsh")
 		}
+		// Git Bash runs the same native wt.exe but needs the bash
+		// integration, which is a distinct code path from PowerShell.
+		if gitBashPath() != "" {
+			shells = append(shells, "bash")
+		}
 	} else {
 		if _, err := exec.LookPath("bash"); err == nil {
 			shells = append(shells, "bash")
@@ -214,6 +219,52 @@ func determineShells(shellsFlag string) []string {
 		}
 	}
 	return shells
+}
+
+// gitBashPath returns the path to Git Bash on Windows, or "" if it is not
+// installed. It returns "" on every other OS.
+//
+// Only the Git for Windows / MSYS2 bash qualifies. C:\Windows\System32\bash.exe
+// is the WSL launcher: it runs a Linux binary in a Linux filesystem, where a
+// native wt.exe does not exist, so it must never be picked up here.
+func gitBashPath() string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+
+	candidates := []string{
+		`C:\Program Files\Git\bin\bash.exe`,
+		`C:\Program Files (x86)\Git\bin\bash.exe`,
+	}
+	if root := os.Getenv("ProgramFiles"); root != "" {
+		candidates = append(candidates, filepath.Join(root, "Git", "bin", "bash.exe"))
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+
+	// Fall back to PATH, but reject the WSL launcher.
+	if p, err := exec.LookPath("bash"); err == nil {
+		sys := filepath.Join(os.Getenv("SystemRoot"), "System32")
+		if sys == "System32" || !strings.EqualFold(filepath.Dir(p), sys) {
+			return p
+		}
+	}
+
+	return ""
+}
+
+// posixShellCommand returns the interpreter to invoke for a POSIX shell. On
+// Windows, "bash" must resolve to Git Bash specifically (see gitBashPath).
+func posixShellCommand(shell string) string {
+	if runtime.GOOS == "windows" && shell == "bash" {
+		if p := gitBashPath(); p != "" {
+			return p
+		}
+	}
+	return shell
 }
 
 func findWtBinary(specified string) string {
@@ -332,13 +383,19 @@ func runScenario(wtBinary, shell, fileName string, scenario Scenario, verbose, s
 	if shell == "powershell" || shell == "pwsh" {
 		cmd = exec.Command(shell, "-NoProfile", "-Command", script)
 	} else {
-		cmd = exec.Command(shell, "-c", script)
+		cmd = exec.Command(posixShellCommand(shell), "-c", script)
 		// Override $SHELL to match the interpreter running this script.
 		// wt shellenv auto-detects its target shell from $SHELL when no
 		// explicit argument is given, so a mismatched ambient $SHELL (e.g.
 		// fish on the host machine) would otherwise produce output that
 		// doesn't match what bash/zsh expect.
 		cmd.Env = envWithShell(shell)
+		if runtime.GOOS == "windows" {
+			// `bash -c` does not read /etc/profile, so MSYSTEM — which a real
+			// Git Bash session always exports, and which wt uses to tell Git
+			// Bash apart from PowerShell — would otherwise be unset.
+			cmd.Env = append(cmd.Env, "MSYSTEM=MINGW64")
+		}
 	}
 
 	output, err := cmd.CombinedOutput()
@@ -374,11 +431,25 @@ func generatePosixScript(wtBinary, shell string, scenario Scenario, verbose, sho
 
 	// Header
 	sb.WriteString("set -e\n")
-	fmt.Fprintf(&sb, "export WT_BIN='%s'\n", wtBinary)
+	if runtime.GOOS == "windows" {
+		// Under Git Bash the two path worlds have to be kept apart. The
+		// interpreter only understands POSIX paths (/c/...), while wt.exe is a
+		// native binary that only understands native ones (C:\...) — an
+		// unconverted /tmp/... handed to it lands on the wrong drive root.
+		// cygpath translates in both directions.
+		fmt.Fprintf(&sb, "export WT_BIN=$(cygpath -u '%s')\n", wtBinary)
+	} else {
+		fmt.Fprintf(&sb, "export WT_BIN='%s'\n", wtBinary)
+	}
 	sb.WriteString("TEST_DIR=$(mktemp -d)\n")
 	sb.WriteString("REPO_DIR=\"$TEST_DIR/test-repo\"\n")
 	sb.WriteString("REPO_NAME=\"test-repo\"\n")
-	sb.WriteString("export WORKTREE_ROOT=\"$TEST_DIR/worktrees\"\n")
+	if runtime.GOOS == "windows" {
+		sb.WriteString("mkdir -p \"$TEST_DIR/worktrees\"\n")
+		sb.WriteString("export WORKTREE_ROOT=$(cygpath -w \"$TEST_DIR/worktrees\")\n")
+	} else {
+		sb.WriteString("export WORKTREE_ROOT=\"$TEST_DIR/worktrees\"\n")
+	}
 	sb.WriteString("mkdir -p \"$REPO_DIR\"\n")
 	sb.WriteString("cd \"$REPO_DIR\"\n")
 	sb.WriteString("git init --quiet\n")
@@ -388,7 +459,12 @@ func generatePosixScript(wtBinary, shell string, scenario Scenario, verbose, sho
 	sb.WriteString("git add README.md\n")
 	sb.WriteString("git commit -m 'initial' --quiet\n")
 	sb.WriteString("git branch -M main\n")
-	fmt.Fprintf(&sb, "export PATH=\"%s:$PATH\"\n", filepath.Dir(wtBinary))
+	if runtime.GOOS == "windows" {
+		// A native path in PATH would be split on its drive-letter colon.
+		fmt.Fprintf(&sb, "export PATH=\"$(cygpath -u '%s'):$PATH\"\n", filepath.Dir(wtBinary))
+	} else {
+		fmt.Fprintf(&sb, "export PATH=\"%s:$PATH\"\n", filepath.Dir(wtBinary))
+	}
 
 	// Setup steps
 	for _, setup := range scenario.Setup {

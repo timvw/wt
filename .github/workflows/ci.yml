@@ -46,8 +46,19 @@ jobs:
           version: latest
 
   test:
-    name: Unit Tests
-    runs-on: ubuntu-latest
+    name: Unit Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-latest
+          # Windows-specific path and shell-detection behaviour is unit-tested
+          # with GOOS injected, but only a Windows host proves the tests
+          # themselves hold there — and that nothing assumes POSIX paths.
+          - os: windows
+            runner: windows-latest
 
     steps:
       - name: Generate GitHub App token
@@ -75,9 +86,17 @@ jobs:
           cache: true
 
       - name: Run unit tests
+        if: matrix.os == 'linux'
         run: go test -short -v -race -coverprofile=coverage.out ./...
 
+      # No -race on Windows: it needs a cgo toolchain, and the value here is
+      # running the suite on a Windows host, not race detection twice.
+      - name: Run unit tests (Windows)
+        if: matrix.os == 'windows'
+        run: go test -short -v ./...
+
       - name: Upload coverage to Codecov
+        if: matrix.os == 'linux'
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -214,6 +233,13 @@ jobs:
           - os: windows
             runner: windows-latest
             shell: pwsh
+            binary: wt-windows-amd64
+          # Git Bash runs the same native wt.exe through the bash integration,
+          # a combination neither the Linux nor the PowerShell legs cover.
+          # That gap is what let #112 ship.
+          - os: windows
+            runner: windows-latest
+            shell: bash
             binary: wt-windows-amd64
 
     steps:

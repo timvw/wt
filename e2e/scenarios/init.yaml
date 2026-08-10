@@ -43,6 +43,23 @@ scenarios:
           exit_code: 0
           output_contains: "wt shellenv"
 
+  # Regression test for #112. On Windows, init used to pick PowerShell from
+  # GOOS alone, so under Git Bash it wrote the integration into the PowerShell
+  # $PROFILE — a file the bash session never loads.
+  - name: init_git_bash_targets_bash
+    description: Init under Git Bash configures bash, not the PowerShell profile
+    skip_shellenv: true
+    skip_shells: [zsh, fish, powershell, pwsh]
+    skip_os: [linux, darwin]
+    steps:
+      - run: $WT_BIN init --dry-run
+        expect:
+          exit_code: 0
+          output_contains: 'eval "$(wt shellenv bash)"'
+      - run: $WT_BIN init --dry-run
+        expect:
+          output_not_contains: "Invoke-Expression"
+
   - name: init_creates_config
     description: Init creates shell config with markers
     skip_shellenv: true
