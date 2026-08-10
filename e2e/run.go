@@ -542,13 +542,15 @@ func generatePosixScript(wtBinary, shell string, scenario Scenario, verbose, sho
 				sb.WriteString("__exit_code=$?\n")
 				sb.WriteString("set -e\n")
 			} else {
-				// Normal execution with set -e active
+				// Normal execution with set -e active. __exit_code is reset
+				// first: "${__exit_code:-0}" only defaults when unset or empty,
+				// so a successful step following a failing one would otherwise
+				// inherit the previous step's non-zero code.
+				sb.WriteString("__exit_code=0\n")
 				if needsOutput {
 					fmt.Fprintf(&sb, "__output=$(%s 2>&1) || __exit_code=$?\n", runCmd)
-					sb.WriteString("__exit_code=${__exit_code:-0}\n")
 				} else {
 					fmt.Fprintf(&sb, "%s || __exit_code=$?\n", runCmd)
-					sb.WriteString("__exit_code=${__exit_code:-0}\n")
 				}
 			}
 
