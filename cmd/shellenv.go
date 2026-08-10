@@ -15,18 +15,19 @@ var shellenvCmd = &cobra.Command{
 	Long: `Output shell integration code for automatic directory navigation.
 
 Add this to the END of your ~/.bashrc or ~/.zshrc:
-  source <(wt shellenv)
+  eval "$(wt shellenv bash)"
 
 For fish, add this to your ~/.config/fish/config.fish:
   wt shellenv fish | source
 
 For PowerShell, add this to your $PROFILE:
-  Invoke-Expression (& wt shellenv)
+  Invoke-Expression (& wt shellenv powershell)
 
 Note: For zsh, place this AFTER compinit to enable tab completion.
 
-An optional shell argument (bash, zsh, fish, powershell/pwsh) can be given to
-override auto-detection, e.g. 'wt shellenv fish'.
+The shell argument (bash, zsh, fish, powershell/pwsh) overrides auto-detection and
+is recommended: without it, detection re-runs on every shell startup. On Windows,
+detection picks PowerShell unless it finds a Git Bash/MSYS2 environment.
 
 This enables:
 - Automatic cd to worktree after checkout/create/pr/mr commands
@@ -155,10 +156,24 @@ func writeBashZshShellenv() {
     local log_file exit_code cd_path
     log_file=$(mktemp -t wt.XXXXXX)
 
-    # Detect OS to use correct script syntax (macOS vs Linux)
-    if [ "$(uname)" = "Darwin" ]; then
+    # script(1) may be missing entirely, and its syntax differs (macOS vs Linux)
+    if ! command -v script >/dev/null 2>&1; then
+        # No script(1) available (Git Bash on Windows does not ship it, nor do
+        # some minimal containers). Interactive prompts that require a TTY will
+        # not work here, but ordinary commands and auto-cd do.
+        #
+        # stdout is redirected and replayed rather than piped through tee: a
+        # pipeline would make $? tee's status, and PIPESTATUS/pipestatus are
+        # clobbered by the next command run — including the test needed to pick
+        # between the two shells' spellings. stderr is left alone so errors
+        # still stream live.
+        command wt "$@" > "$log_file"
+        exit_code=$?
+        cat "$log_file"
+    elif [ "$(uname)" = "Darwin" ]; then
         # macOS: script -q file command args
         script -q "$log_file" /bin/sh -c 'command wt "$@"' wt "$@"
+        exit_code=$?
     else
         # Linux: script -q -c "..." file — must pass command as single string,
         # so we shell-quote each argument to preserve spaces and special chars.
@@ -167,13 +182,19 @@ func writeBashZshShellenv() {
             quoted_args="$quoted_args $(printf '%q' "$arg")"
         done
         script -q -c "command wt$quoted_args" "$log_file"
+        exit_code=$?
     fi
-    exit_code=$?
 
     # Extract the navigation marker for auto-cd
     cd_path=$(grep '^wt navigating to: ' "$log_file" | tail -1 | sed 's/^wt navigating to: //')
     rm -f "$log_file"
     cd_path=${cd_path%$'\r'}
+
+    # Git Bash / MSYS2 / Cygwin: wt is a native Windows binary and prints native
+    # Windows paths (C:\...). Translate them to the POSIX form cd understands.
+    if [ -n "$cd_path" ] && command -v cygpath >/dev/null 2>&1; then
+        cd_path=$(cygpath -u "$cd_path")
+    fi
 
     if [ $exit_code -eq 0 ] && [ -n "$cd_path" ]; then
         cd "$cd_path"
@@ -283,9 +304,10 @@ fi
 }
 
 // shellenvTargetShell determines which shell's integration script shellenv
-// should output. Priority: explicit argument > GOOS (Windows -> PowerShell)
-// > $SHELL detection. The goos parameter (normally runtime.GOOS) is injected
-// so the decision can be unit-tested independently of the host OS.
+// should output. Priority: explicit argument > GOOS (Windows -> PowerShell,
+// unless running under a POSIX shell environment) > $SHELL detection. The goos
+// parameter (normally runtime.GOOS) is injected so the decision can be
+// unit-tested independently of the host OS.
 //
 // The generated PowerShell block invokes wt.exe, which only exists on Windows,
 // so an explicit powershell/pwsh target is rejected on non-Windows systems,
@@ -307,7 +329,9 @@ func shellenvTargetShell(args []string, goos string) (string, error) {
 		}
 	}
 
-	if goos == "windows" {
+	// Windows defaults to PowerShell, but Git Bash / MSYS2 / Cygwin run the
+	// same native binary and need the bash integration instead.
+	if goos == "windows" && !isPOSIXShellEnv() {
 		return "powershell", nil
 	}
 

@@ -5,17 +5,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestDetectShell(t *testing.T) {
 	tests := []struct {
-		name     string
-		args     []string
-		envShell string
-		want     string
+		name       string
+		args       []string
+		goos       string
+		envShell   string
+		envMsystem string
+		want       string
 	}{
 		{
 			name: "explicit bash argument",
@@ -65,25 +66,77 @@ func TestDetectShell(t *testing.T) {
 			envShell: "/usr/bin/fish",
 			want:     "fish",
 		},
+		{
+			name: "windows with no POSIX shell env defaults to powershell",
+			args: []string{},
+			goos: "windows",
+			want: "powershell",
+		},
+		{
+			// Regression test for #112: under Git Bash, wt init wrote a
+			// PowerShell profile because GOOS alone decided the shell.
+			name:       "windows under git bash detects bash via MSYSTEM",
+			args:       []string{},
+			goos:       "windows",
+			envMsystem: "MINGW64",
+			envShell:   "/usr/bin/bash",
+			want:       "bash",
+		},
+		{
+			name:     "windows with unix SHELL and no MSYSTEM detects bash",
+			args:     []string{},
+			goos:     "windows",
+			envShell: "/usr/bin/bash",
+			want:     "bash",
+		},
+		{
+			name:       "windows under git bash still honours explicit powershell",
+			args:       []string{"powershell"},
+			goos:       "windows",
+			envMsystem: "MINGW64",
+			envShell:   "/usr/bin/bash",
+			want:       "powershell",
+		},
+		{
+			name:     "windows git bash with .exe suffix detects bash",
+			args:     []string{},
+			goos:     "windows",
+			envShell: `C:\Program Files\Git\usr\bin\bash.exe`,
+			want:     "bash",
+		},
+		{
+			// "powershell" ends in "shell"; a substring match would misread it.
+			name:     "windows with powershell in SHELL stays on powershell",
+			args:     []string{},
+			goos:     "windows",
+			envShell: `C:\Program Files\PowerShell\7\pwsh.exe`,
+			want:     "powershell",
+		},
+		{
+			name:     "windows with a bash-named directory stays on powershell",
+			args:     []string{},
+			goos:     "windows",
+			envShell: `C:\bash-tools\cmd.exe`,
+			want:     "powershell",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Skip Windows-specific tests on non-Windows
-			if runtime.GOOS == "windows" && tt.envShell != "" {
-				t.Skip("Skipping SHELL env test on Windows")
+			// Env is set unconditionally (including to "") so ambient values on
+			// the host — a real MSYSTEM on a Windows runner — cannot leak in.
+			t.Setenv("SHELL", tt.envShell)
+			t.Setenv("MSYSTEM", tt.envMsystem)
+
+			goos := tt.goos
+			if goos == "" {
+				goos = "linux"
 			}
 
-			// Save and restore SHELL env var
-			origShell := os.Getenv("SHELL")
-			if tt.envShell != "" {
-				os.Setenv("SHELL", tt.envShell)
-			}
-			defer os.Setenv("SHELL", origShell)
-
-			got := detectShell(tt.args)
+			got := detectShell(tt.args, goos)
 			if got != tt.want {
-				t.Errorf("detectShell(%v) = %q, want %q", tt.args, got, tt.want)
+				t.Errorf("detectShell(%v, %q) with SHELL=%q MSYSTEM=%q = %q, want %q",
+					tt.args, goos, tt.envShell, tt.envMsystem, got, tt.want)
 			}
 		})
 	}
@@ -241,12 +294,12 @@ func TestGetShellConfigContent(t *testing.T) {
 		{
 			name:     "bash content",
 			shell:    "bash",
-			contains: []string{markerStart, markerEnd, "wt shellenv"},
+			contains: []string{markerStart, markerEnd, `eval "$(wt shellenv bash)"`},
 		},
 		{
 			name:     "zsh content",
 			shell:    "zsh",
-			contains: []string{markerStart, markerEnd, "wt shellenv"},
+			contains: []string{markerStart, markerEnd, `eval "$(wt shellenv zsh)"`},
 		},
 		{
 			name:     "fish content",
@@ -256,7 +309,7 @@ func TestGetShellConfigContent(t *testing.T) {
 		{
 			name:     "powershell content",
 			shell:    "powershell",
-			contains: []string{markerStart, markerEnd, "wt shellenv", "Invoke-Expression"},
+			contains: []string{markerStart, markerEnd, "wt shellenv powershell", "Invoke-Expression"},
 		},
 		{
 			name:  "unsupported shell returns empty",

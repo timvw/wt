@@ -291,7 +291,7 @@ var exampleCatalog = map[string]exampleTopic{
 				Purpose:       "Preview shell profile changes before writing anything.",
 				Outcome:       "Shows what would be added/updated in the detected shell profile.",
 				ExitCode:      "0 on success; non-zero if shell/config path detection fails.",
-				TextExample:   "Would append to ~/.bashrc:\n\n# >>> wt initialize >>>\neval \"$(wt shellenv)\"\n# <<< wt initialize <<<",
+				TextExample:   "Would append to ~/.bashrc:\n\n# >>> wt initialize >>>\neval \"$(wt shellenv bash)\"\n# <<< wt initialize <<<",
 				Preconditions: []string{"Run in an interactive environment where shell/profile can be detected."},
 				FailureModes:  []string{"Unsupported shell argument.", "PowerShell integration requested on non-Windows host."},
 				FollowUp:      []string{"wt init", "wt init --uninstall"},

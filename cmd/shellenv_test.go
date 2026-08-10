@@ -205,16 +205,14 @@ func TestShellenvBypassesWrapperForShellenv(t *testing.T) {
 // TestShellenvTargetShell verifies the priority order used to determine
 // which shell integration to output: explicit argument > $SHELL > GOOS.
 func TestShellenvTargetShell(t *testing.T) {
-	origShell := os.Getenv("SHELL")
-	t.Cleanup(func() { os.Setenv("SHELL", origShell) })
-
 	tests := []struct {
-		name     string
-		args     []string
-		goos     string
-		envShell string
-		want     string
-		wantErr  bool
+		name       string
+		args       []string
+		goos       string
+		envShell   string
+		envMsystem string
+		want       string
+		wantErr    bool
 	}{
 		{name: "explicit fish argument", args: []string{"fish"}, goos: "linux", want: "fish"},
 		{name: "explicit bash argument", args: []string{"bash"}, goos: "linux", want: "bash"},
@@ -226,6 +224,11 @@ func TestShellenvTargetShell(t *testing.T) {
 		{name: "explicit pwsh on darwin is rejected", args: []string{"pwsh"}, goos: "darwin", wantErr: true},
 		{name: "unknown explicit argument falls back to detection", args: []string{"tcsh"}, goos: "linux", envShell: "/bin/bash", want: "bash"},
 		{name: "no args on windows defaults to powershell", args: []string{}, goos: "windows", want: "powershell"},
+		// Regression tests for #112: shellenv emitted PowerShell under Git Bash,
+		// so `eval "$(wt shellenv)"` in .bashrc evaluated PowerShell code.
+		{name: "no args on windows under git bash outputs bash", args: []string{}, goos: "windows", envMsystem: "MINGW64", envShell: "/usr/bin/bash", want: "bash"},
+		{name: "no args on windows with unix SHELL outputs bash", args: []string{}, goos: "windows", envShell: "/usr/bin/bash", want: "bash"},
+		{name: "explicit powershell on windows under git bash is honoured", args: []string{"powershell"}, goos: "windows", envMsystem: "MINGW64", want: "powershell"},
 		{name: "no args, SHELL=fish", args: []string{}, goos: "linux", envShell: "/usr/bin/fish", want: "fish"},
 		{name: "no args, SHELL=bash", args: []string{}, goos: "linux", envShell: "/bin/bash", want: "bash"},
 		{name: "no args, no SHELL", args: []string{}, goos: "linux", envShell: "", want: "bash"},
@@ -233,7 +236,10 @@ func TestShellenvTargetShell(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			os.Setenv("SHELL", tt.envShell)
+			// Set unconditionally so a real MSYSTEM/SHELL on the host runner
+			// cannot leak into cases that expect them unset.
+			t.Setenv("SHELL", tt.envShell)
+			t.Setenv("MSYSTEM", tt.envMsystem)
 			got, err := shellenvTargetShell(tt.args, tt.goos)
 			if tt.wantErr {
 				if err == nil {

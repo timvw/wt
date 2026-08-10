@@ -37,6 +37,9 @@ Automatically detects your shell and updates the appropriate config file:
   - fish: ~/.config/fish/config.fish (or $XDG_CONFIG_HOME/fish/config.fish)
   - powershell: $PROFILE (Windows only)
 
+On Windows the shell defaults to PowerShell, unless a Git Bash or MSYS2
+environment is detected, in which case bash is configured instead.
+
 The configuration is wrapped in markers so it can be safely updated or removed.
 
 Examples:
@@ -47,7 +50,7 @@ Examples:
   wt init --uninstall  # Remove wt configuration from shell`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		shell := detectShell(args)
+		shell := detectShell(args, runtime.GOOS)
 		if shell == "" {
 			return fmt.Errorf("could not detect shell. Please specify: wt init bash|zsh|fish|powershell")
 		}
@@ -119,8 +122,10 @@ const (
 	markerEnd   = "# <<< wt initialize <<<"
 )
 
-// detectShell determines which shell to configure based on args or environment
-func detectShell(args []string) string {
+// detectShell determines which shell to configure based on args or environment.
+// The goos parameter (normally runtime.GOOS) is injected so the decision can be
+// unit-tested independently of the host OS.
+func detectShell(args []string, goos string) string {
 	// 1. Explicit argument
 	if len(args) > 0 {
 		shell := strings.ToLower(args[0])
@@ -133,8 +138,10 @@ func detectShell(args []string) string {
 		fmt.Fprintf(os.Stderr, "Warning: unknown shell '%s', attempting auto-detection\n", args[0])
 	}
 
-	// 2. On Windows, default to PowerShell
-	if runtime.GOOS == "windows" {
+	// 2. On Windows, default to PowerShell — unless we are running under a
+	// POSIX shell environment such as Git Bash, in which case fall through to
+	// $SHELL detection so we configure the shell the user is actually using.
+	if goos == "windows" && !isPOSIXShellEnv() {
 		return "powershell"
 	}
 
@@ -150,8 +157,37 @@ func detectShell(args []string) string {
 		return "bash"
 	}
 
-	// 4. Default to bash on Unix
+	// 4. Default to bash
 	return "bash"
+}
+
+// isPOSIXShellEnv reports whether the current process was started from a POSIX
+// shell environment. It only affects Windows, where GOOS alone cannot
+// distinguish PowerShell/cmd from Git Bash, MSYS2 or Cygwin — all of which run
+// native Windows binaries but need the bash integration, not the PowerShell one.
+//
+// Git Bash and MSYS2 export MSYSTEM (e.g. "MINGW64"). Cygwin does not, but every
+// one of these environments sets $SHELL to a Unix-style shell path, which
+// neither PowerShell nor cmd does.
+func isPOSIXShellEnv() bool {
+	if strings.TrimSpace(os.Getenv("MSYSTEM")) != "" {
+		return true
+	}
+
+	// Compare against the basename only. A substring match would treat any
+	// directory component containing a shell name as a match — and "powershell"
+	// itself ends in "shell".
+	shellEnv := strings.TrimSpace(os.Getenv("SHELL"))
+	if i := strings.LastIndexAny(shellEnv, `/\`); i >= 0 {
+		shellEnv = shellEnv[i+1:]
+	}
+	shellEnv = strings.TrimSuffix(strings.ToLower(shellEnv), ".exe")
+
+	switch shellEnv {
+	case "sh", "bash", "zsh", "fish", "dash", "ash", "ksh":
+		return true
+	}
+	return false
 }
 
 // validateShellEnv rejects environment misconfigurations that would make
@@ -236,20 +272,25 @@ func getShellConfigPath(shell string) string {
 	return ""
 }
 
-// getShellConfigContent returns the shell configuration block to add
+// getShellConfigContent returns the shell configuration block to add.
+//
+// The shell is always passed to shellenv explicitly. Without it, shellenv
+// re-runs its own auto-detection at every shell startup, which on Windows
+// resolves to PowerShell and would eval PowerShell code into a Git Bash
+// session. Naming the shell here makes the installed block unambiguous.
 func getShellConfigContent(shell string) string {
 	switch shell {
 	case "bash", "zsh":
 		return fmt.Sprintf(`%s
-eval "$(wt shellenv)"
-%s`, markerStart, markerEnd)
+eval "$(wt shellenv %s)"
+%s`, markerStart, shell, markerEnd)
 	case "fish":
 		return fmt.Sprintf(`%s
 wt shellenv fish | source
 %s`, markerStart, markerEnd)
 	case "powershell":
 		return fmt.Sprintf(`%s
-Invoke-Expression (& wt shellenv)
+Invoke-Expression (& wt shellenv powershell)
 %s`, markerStart, markerEnd)
 	}
 	return ""

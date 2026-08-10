@@ -136,7 +136,7 @@ Shell integration enables:
 **Manual setup** (alternative to `wt init`): Add this to the **END** of your shell config:
 
 ```bash
-eval "$(wt shellenv)"
+eval "$(wt shellenv bash)"   # use 'zsh' for zsh
 ```
 
 For fish, add this instead:
@@ -145,4 +145,30 @@ For fish, add this instead:
 wt shellenv fish | source
 ```
 
+For PowerShell, add this to your `$PROFILE`:
+
+```powershell
+Invoke-Expression (& wt shellenv powershell)
+```
+
+Naming the shell explicitly is recommended. Without it, `shellenv` re-runs auto-detection
+on every shell startup.
+
 **Note for zsh users:** Place this after `compinit` in your config file.
+
+### Windows: Git Bash vs PowerShell
+
+`wt` is a native Windows binary, so it behaves the same whether you launch it from
+PowerShell, Git Bash, or MSYS2 — but the shell integration differs. `wt init` detects
+Git Bash and MSYS2 (via `MSYSTEM`/`SHELL`) and configures `~/.bashrc`; otherwise it
+configures your PowerShell `$PROFILE`. Pass the shell explicitly to override:
+
+```bash
+wt init bash         # from Git Bash
+wt init powershell   # from PowerShell
+```
+
+Git Bash does not ship `script(1)`, so the integration falls back to a non-PTY mode
+there. Auto-`cd` and tab completion work; the interactive selection menus
+(`wt checkout` with no arguments) need a TTY and are unavailable — pass a branch name
+explicitly instead.
