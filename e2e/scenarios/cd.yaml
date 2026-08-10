@@ -34,14 +34,18 @@ scenarios:
 
   - name: cd_does_not_create_worktree
     description: cd fails instead of creating a worktree for a branch without one
+    # Exit codes are asserted against the binary directly: the shellenv wrapper
+    # runs commands through script(1), which does not propagate the child's exit
+    # status on every platform.
+    skip_shellenv: true
     setup:
       - create_branch: uncheckedout-branch
     steps:
-      - run: wt cd uncheckedout-branch
+      - run: $WT_BIN cd uncheckedout-branch
         expect:
           exit_code: 1
           output_contains: "no worktree found for branch"
-      - run: wt list
+      - run: $WT_BIN list
         expect:
           output_not_contains: uncheckedout-branch
 
