@@ -5,11 +5,14 @@ description: Test pre/post command hook functionality
 scenarios:
   - name: post_create_hook_runs
     description: Post-create hook executes after worktree creation
+    # wt runs hook commands through `cmd /c` on Windows (see runHooks), which
+    # neither expands $WT_PATH nor provides the POSIX utilities this hook body
+    # uses. That holds under Git Bash too, since it is wt that spawns the hook.
     skip_os: [windows]
     skip_shellenv: true
     steps:
       # Write a config file with a post_create hook, then create worktree
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_create = ["touch $WT_PATH/.hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN create hook-test
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_create = ["touch $WT_PATH/.hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" $WT_BIN create hook-test
         expect:
           exit_code: 0
       - run: test -f "$WORKTREE_ROOT/test-repo/hook-test/.hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
@@ -19,9 +22,9 @@ scenarios:
   - name: pre_create_hook_aborts
     description: Pre-create hook failure prevents worktree creation
     skip_shellenv: true
-    skip_os: [windows]
+    skip_shells: [powershell, pwsh]  # steps use POSIX shell syntax
     steps:
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_create = ["false"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN create blocked-branch
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_create = ["false"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" $WT_BIN create blocked-branch
         expect:
           exit_code: 1
       - run: $WT_BIN list
@@ -30,21 +33,24 @@ scenarios:
 
   - name: hooks_disabled_env
     description: WT_HOOKS_DISABLED=1 skips all hooks
-    skip_os: [windows]
+    skip_shells: [powershell, pwsh]  # steps use POSIX shell syntax
     skip_shellenv: true
     steps:
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_create = ["false"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" WT_HOOKS_DISABLED=1 $WT_BIN create should-succeed
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_create = ["false"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" WT_HOOKS_DISABLED=1 $WT_BIN create should-succeed
         expect:
           exit_code: 0
 
   - name: post_checkout_hook_runs
     description: Post-checkout hook executes after worktree checkout
+    # wt runs hook commands through `cmd /c` on Windows (see runHooks), which
+    # neither expands $WT_PATH nor provides the POSIX utilities this hook body
+    # uses. That holds under Git Bash too, since it is wt that spawns the hook.
     skip_os: [windows]
     skip_shellenv: true
     setup:
       - create_branch: hook-co-branch
     steps:
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_checkout = ["touch $WT_PATH/.checkout-hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN checkout hook-co-branch
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_checkout = ["touch $WT_PATH/.checkout-hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" $WT_BIN checkout hook-co-branch
         expect:
           exit_code: 0
       - run: test -f "$WORKTREE_ROOT/test-repo/hook-co-branch/.checkout-hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
@@ -53,6 +59,9 @@ scenarios:
 
   - name: checkout_hooks_run_on_existing_worktree
     description: Pre/post checkout hooks execute even when worktree already exists
+    # wt runs hook commands through `cmd /c` on Windows (see runHooks), which
+    # neither expands $WT_PATH nor provides the POSIX utilities this hook body
+    # uses. That holds under Git Bash too, since it is wt that spawns the hook.
     skip_os: [windows]
     skip_shellenv: true
     setup:
@@ -64,7 +73,7 @@ scenarios:
           exit_code: 0
       - cd: $REPO_DIR
       # Second checkout with hooks configured — hooks should still run
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_checkout = ["touch $WT_PATH/.existing-hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN checkout existing-co-branch
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_checkout = ["touch $WT_PATH/.existing-hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" $WT_BIN checkout existing-co-branch
         expect:
           exit_code: 0
           output_contains: "already exists"
@@ -74,7 +83,7 @@ scenarios:
 
   - name: pre_checkout_hook_aborts_existing_worktree
     description: Pre-checkout hook failure prevents checkout of existing worktree
-    skip_os: [windows]
+    skip_shells: [powershell, pwsh]  # steps use POSIX shell syntax
     skip_shellenv: true
     setup:
       - create_branch: abort-co-branch
@@ -85,13 +94,13 @@ scenarios:
           exit_code: 0
       - cd: $REPO_DIR
       # Second checkout with failing pre_checkout hook — should abort
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_checkout = ["false"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN checkout abort-co-branch
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_checkout = ["false"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" $WT_BIN checkout abort-co-branch
         expect:
           exit_code: 1
 
   - name: pre_remove_hook_runs
     description: Pre-remove hook executes before worktree removal
-    skip_os: [windows]
+    skip_shells: [powershell, pwsh]  # steps use POSIX shell syntax
     skip_shellenv: true
     setup:
       - create_branch: rm-hook-branch
@@ -100,13 +109,16 @@ scenarios:
         expect:
           exit_code: 0
       - cd: $REPO_DIR
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_remove = ["echo HOOK_PRE_REMOVE"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN remove rm-hook-branch
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_remove = ["echo HOOK_PRE_REMOVE"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" $WT_BIN remove rm-hook-branch
         expect:
           exit_code: 0
           output_contains: "HOOK_PRE_REMOVE"
 
   - name: copy_env_file_when_exists
     description: Post-create hook copies .env from main to worktree when it exists
+    # wt runs hook commands through `cmd /c` on Windows (see runHooks), which
+    # neither expands $WT_PATH nor provides the POSIX utilities this hook body
+    # uses. That holds under Git Bash too, since it is wt that spawns the hook.
     skip_os: [windows]
     skip_shellenv: true
     setup:
@@ -116,7 +128,7 @@ scenarios:
       - git_add: .env
       - git_commit: "add .env file"
     steps:
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_create = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN create env-branch
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_create = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" $WT_BIN create env-branch
         expect:
           exit_code: 0
       - run: cat "$WORKTREE_ROOT/test-repo/env-branch/.env"
@@ -125,10 +137,13 @@ scenarios:
 
   - name: copy_env_file_skipped_when_missing
     description: Post-create hook silently skips when .env does not exist in main
+    # wt runs hook commands through `cmd /c` on Windows (see runHooks), which
+    # neither expands $WT_PATH nor provides the POSIX utilities this hook body
+    # uses. That holds under Git Bash too, since it is wt that spawns the hook.
     skip_os: [windows]
     skip_shellenv: true
     steps:
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_create = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN create no-env-branch
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_create = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" $WT_BIN create no-env-branch
         expect:
           exit_code: 0
       - run: test -f "$WORKTREE_ROOT/test-repo/no-env-branch/.env" && echo "ENV_EXISTS" || echo "ENV_MISSING"
