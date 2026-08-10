@@ -168,7 +168,14 @@ func findCaseInsensitivePathCollision(path string) (string, bool) {
 			}
 		}
 		if !foundExact {
-			return "", false
+			// The component is not in the listing under this spelling, and no
+			// case variant matched either. On Windows it may still be a valid
+			// 8.3 short name (RUNNER~1 for runneradmin), which os.ReadDir
+			// reports only by its long name. Those resolve through Stat, so
+			// keep walking rather than giving up on the rest of the path.
+			if _, err := os.Stat(exactPath); err != nil {
+				return "", false
+			}
 		}
 
 		current = exactPath

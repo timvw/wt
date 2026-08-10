@@ -266,8 +266,10 @@ func TestValidateShellEnvAcceptsValidXdgConfigHome(t *testing.T) {
 	orig := os.Getenv("XDG_CONFIG_HOME")
 	t.Cleanup(func() { os.Setenv("XDG_CONFIG_HOME", orig) })
 
-	// Absolute value is accepted.
-	os.Setenv("XDG_CONFIG_HOME", filepath.Join(string(filepath.Separator), "abs", "config"))
+	// Absolute value is accepted. t.TempDir is used for the value because what
+	// counts as absolute is platform-specific: "\abs\config" is a rooted but
+	// *relative* path on Windows, since it has no volume name.
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
 	if err := validateShellEnv("fish"); err != nil {
 		t.Fatalf("validateShellEnv(\"fish\") with absolute XDG_CONFIG_HOME = %v, want nil", err)
 	}

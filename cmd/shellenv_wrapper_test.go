@@ -63,25 +63,46 @@ exit "${FAKE_WT_EXIT:-0}"
 // it ships no script(1). Without the override the test would take whichever
 // branch the host happens to have.
 //
-// It returns the wrapper's exit status, the resulting working directory, and
-// the combined output.
-func runBashWrapper(t *testing.T, binDir, shellenv, startDir string, env []string) (exitCode int, cwd, output string) {
+// Where the wrapper ended up is reported by probing for marker files rather
+// than by comparing paths: under Git Bash the interpreter names the same
+// directory /tmp/... that Go names C:\Users\...\Temp\..., so no string (or
+// even EvalSymlinks) comparison of the two holds.
+//
+// It returns the wrapper's exit status, which marker directory it landed in,
+// and the combined output.
+func runBashWrapper(t *testing.T, binDir, shellenv, startDir, targetDir string, env []string) (exitCode int, landed, output string) {
 	t.Helper()
 
+	// Paths are handed over in the host's native form and converted inside the
+	// shell: under Git Bash a native path in PATH would be split on its
+	// drive-letter colon.
 	script := fmt.Sprintf(`
-export PATH=%q:"$PATH"
+to_posix() {
+    if command -v cygpath >/dev/null 2>&1; then cygpath -u "$1"; else printf '%%s' "$1"; fi
+}
+WT_TEST_BIN=$(to_posix %q)
+WT_TEST_SHELLENV=$(to_posix %q)
+WT_TEST_START=$(to_posix %q)
+# Exported for the stub cygpath, which cannot compute this itself.
+export WT_TEST_TARGET_POSIX=$(to_posix %q)
+export PATH="$WT_TEST_BIN:$PATH"
 command() {
     if [ "$1" = "-v" ] && [ "$2" = "script" ]; then
         return 1
     fi
     builtin command "$@"
 }
-. %q
-cd %q
+. "$WT_TEST_SHELLENV"
+cd "$WT_TEST_START"
 wt checkout demo
 echo "__EXIT__=$?"
+for marker in start target; do
+    if [ -f ".wt-test-$marker" ]; then
+        echo "__LANDED__=$marker"
+    fi
+done
 echo "__PWD__=$(pwd)"
-`, binDir, shellenv, startDir)
+`, binDir, shellenv, startDir, targetDir)
 
 	cmd := exec.Command("bash", "-c", script)
 	cmd.Env = append(os.Environ(), env...)
@@ -99,24 +120,42 @@ echo "__PWD__=$(pwd)"
 			if _, err := fmt.Sscanf(line, "__EXIT__=%d", &exitCode); err != nil {
 				t.Fatalf("parsing %q: %v", line, err)
 			}
-		case strings.HasPrefix(line, "__PWD__="):
-			cwd = strings.TrimPrefix(line, "__PWD__=")
+		case strings.HasPrefix(line, "__LANDED__="):
+			landed = strings.TrimPrefix(line, "__LANDED__=")
 		}
 	}
-	if cwd == "" {
-		t.Fatalf("harness did not report a working directory:\n%s", output)
+	if landed == "" {
+		t.Fatalf("wrapper ended up in a directory with no marker:\n%s", output)
 	}
-	return exitCode, cwd, output
+	return exitCode, landed, output
 }
 
-// realPath resolves symlinks so comparisons survive macOS's /var -> /private/var.
-func realPath(t *testing.T, path string) string {
+// stageWrapperDirs lays out a fixture: a bin directory holding the fake wt, a
+// start directory, and a target directory to navigate to. Each directory gets
+// a marker file so the wrapper's final location can be identified without
+// comparing path strings.
+func stageWrapperDirs(t *testing.T) (binDir, startDir, targetDir string) {
 	t.Helper()
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		t.Fatalf("resolving %s: %v", path, err)
+
+	root := t.TempDir()
+	binDir = filepath.Join(root, "bin")
+	startDir = filepath.Join(root, "start")
+	targetDir = filepath.Join(root, "worktrees", "demo")
+
+	for _, dir := range []string{binDir, startDir, targetDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("creating %s: %v", dir, err)
+		}
 	}
-	return resolved
+
+	writeExecutable(t, filepath.Join(binDir, "wt"), fakeWtScript)
+	for dir, marker := range map[string]string{startDir: "start", targetDir: "target"} {
+		if err := os.WriteFile(filepath.Join(dir, ".wt-test-"+marker), nil, 0o644); err != nil {
+			t.Fatalf("writing marker in %s: %v", dir, err)
+		}
+	}
+
+	return binDir, startDir, targetDir
 }
 
 func requireBash(t *testing.T) {
@@ -133,29 +172,18 @@ func requireBash(t *testing.T) {
 func TestBashWrapperAutoCdWithoutScript(t *testing.T) {
 	requireBash(t)
 
-	dir := t.TempDir()
-	shellenv := writeShellenvBash(t, dir)
+	binDir, startDir, targetDir := stageWrapperDirs(t)
+	shellenv := writeShellenvBash(t, t.TempDir())
 
-	binDir := filepath.Join(dir, "bin")
-	if err := os.Mkdir(binDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeExecutable(t, filepath.Join(binDir, "wt"), fakeWtScript)
-
-	target := filepath.Join(dir, "worktrees", "demo")
-	if err := os.MkdirAll(target, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	exitCode, cwd, output := runBashWrapper(t, binDir, shellenv, dir, []string{
-		"FAKE_WT_TARGET=" + target,
+	exitCode, landed, output := runBashWrapper(t, binDir, shellenv, startDir, targetDir, []string{
+		"FAKE_WT_TARGET=" + targetDir,
 	})
 
 	if exitCode != 0 {
 		t.Errorf("exit code = %d, want 0\noutput:\n%s", exitCode, output)
 	}
-	if got, want := realPath(t, cwd), realPath(t, target); got != want {
-		t.Errorf("wrapper did not auto-cd: cwd = %q, want %q\noutput:\n%s", got, want, output)
+	if landed != "target" {
+		t.Errorf("wrapper did not auto-cd: ended up in the %q directory\noutput:\n%s", landed, output)
 	}
 	// The fallback redirects stdout to the log file, so it has to replay it.
 	if !strings.Contains(output, "fake wt ran: checkout demo") {
@@ -169,30 +197,19 @@ func TestBashWrapperAutoCdWithoutScript(t *testing.T) {
 func TestBashWrapperExitCodeWithoutScript(t *testing.T) {
 	requireBash(t)
 
-	dir := t.TempDir()
-	shellenv := writeShellenvBash(t, dir)
+	binDir, startDir, targetDir := stageWrapperDirs(t)
+	shellenv := writeShellenvBash(t, t.TempDir())
 
-	binDir := filepath.Join(dir, "bin")
-	if err := os.Mkdir(binDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeExecutable(t, filepath.Join(binDir, "wt"), fakeWtScript)
-
-	target := filepath.Join(dir, "worktrees", "demo")
-	if err := os.MkdirAll(target, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	exitCode, cwd, output := runBashWrapper(t, binDir, shellenv, dir, []string{
-		"FAKE_WT_TARGET=" + target,
+	exitCode, landed, output := runBashWrapper(t, binDir, shellenv, startDir, targetDir, []string{
+		"FAKE_WT_TARGET=" + targetDir,
 		"FAKE_WT_EXIT=3",
 	})
 
 	if exitCode != 3 {
 		t.Errorf("exit code = %d, want 3 (the failing command's status)\noutput:\n%s", exitCode, output)
 	}
-	if got, want := realPath(t, cwd), realPath(t, dir); got != want {
-		t.Errorf("wrapper cd'd despite a failing command: cwd = %q, want %q\noutput:\n%s", got, want, output)
+	if landed != "start" {
+		t.Errorf("wrapper cd'd despite a failing command: ended up in the %q directory\noutput:\n%s", landed, output)
 	}
 }
 
@@ -203,40 +220,32 @@ func TestBashWrapperExitCodeWithoutScript(t *testing.T) {
 func TestBashWrapperTranslatesNativePathWithCygpath(t *testing.T) {
 	requireBash(t)
 
-	dir := t.TempDir()
-	shellenv := writeShellenvBash(t, dir)
+	binDir, startDir, targetDir := stageWrapperDirs(t)
+	shellenv := writeShellenvBash(t, t.TempDir())
 
-	binDir := filepath.Join(dir, "bin")
-	if err := os.Mkdir(binDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeExecutable(t, filepath.Join(binDir, "wt"), fakeWtScript)
-
-	target := filepath.Join(dir, "worktrees", "demo")
-	if err := os.MkdirAll(target, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Stub cygpath: translates the one native path this test uses, and fails
-	// on anything else so a wrapper that passed the wrong argument is caught.
-	nativePath := `C:\worktrees\demo`
+	// Stub cygpath, first on PATH so it shadows a real one. It translates the
+	// single native path this test uses and fails on anything else, so a
+	// wrapper that passed the wrong argument is caught rather than ignored.
+	// The POSIX form of the target comes from the harness, which is the only
+	// place that can compute it on either kind of host.
+	nativePath := `C:\wt-test\worktrees\demo`
 	writeExecutable(t, filepath.Join(binDir, "cygpath"), fmt.Sprintf(`#!/bin/sh
 if [ "$1" = "-u" ] && [ "$2" = %q ]; then
-    echo %q
+    printf '%%s\n' "$WT_TEST_TARGET_POSIX"
     exit 0
 fi
 echo "cygpath: unexpected arguments: $*" >&2
 exit 1
-`, nativePath, target))
+`, nativePath))
 
-	exitCode, cwd, output := runBashWrapper(t, binDir, shellenv, dir, []string{
+	exitCode, landed, output := runBashWrapper(t, binDir, shellenv, startDir, targetDir, []string{
 		"FAKE_WT_TARGET=" + nativePath,
 	})
 
 	if exitCode != 0 {
 		t.Errorf("exit code = %d, want 0\noutput:\n%s", exitCode, output)
 	}
-	if got, want := realPath(t, cwd), realPath(t, target); got != want {
-		t.Errorf("native path was not translated: cwd = %q, want %q\noutput:\n%s", got, want, output)
+	if landed != "target" {
+		t.Errorf("native path was not translated: ended up in the %q directory\noutput:\n%s", landed, output)
 	}
 }
