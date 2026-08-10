@@ -65,18 +65,20 @@ scenarios:
   - name: migrate_json_summary
     description: migrate command returns structured JSON summary
     skip_shellenv: true
-    skip_os: [windows]
+    # $TEST_DIR is a POSIX-generator variable; the PowerShell generator names
+    # it $TestDir and does not translate it inside a step.
+    skip_shells: [powershell, pwsh]
     setup:
       - create_branch: migrate-json
     steps:
-      - run: git worktree add "$REPO_DIR/../legacy/migrate-json" migrate-json
+      - run: git worktree add "$TEST_DIR/legacy/migrate-json" migrate-json
         expect:
           exit_code: 0
-      - run: WORKTREE_ROOT="$REPO_DIR/../worktrees" $WT_BIN --format json migrate
+      - run: $WT_BIN --format json migrate
         expect:
           exit_code: 0
           output_contains: '"command":"wt migrate"'
-      - run: WORKTREE_ROOT="$REPO_DIR/../worktrees" $WT_BIN --format json migrate
+      - run: $WT_BIN --format json migrate
         expect:
           output_contains: '"migrated"'
 
