@@ -13,6 +13,7 @@ Section A: Using wt (installed tool consumers)
 - Primary commands:
   - wt create <branch> [base-branch]
   - wt checkout <branch> (alias: wt co)
+  - wt cd <branch> (alias: wt sw) — switch to an existing worktree; never creates one
   - wt list (alias: wt ls)
   - wt remove <branch> (alias: wt rm)
   - wt pr [number|url] (requires gh)
@@ -58,6 +59,7 @@ Canonical docs
 Non-interactive execution note
 - For agent/CI contexts, prefer explicit args over interactive prompts:
   - wt co <branch>
+  - wt cd <branch>
   - wt rm <branch>
   - wt pr <id>
   - wt mr <id>

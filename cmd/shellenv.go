@@ -90,7 +90,7 @@ function wt {
 Register-ArgumentCompleter -CommandName wt -ScriptBlock {
     param($commandName, $wordToComplete, $commandAst, $fakeBoundParameters)
 
-    $commands = @('checkout', 'co', 'create', 'default', 'pr', 'mr', 'list', 'ls', 'remove', 'rm', 'status', 'cleanup', 'migrate', 'prune', 'help', 'shellenv', 'init', 'info', 'config', 'examples', 'version')
+    $commands = @('checkout', 'co', 'cd', 'sw', 'create', 'default', 'pr', 'mr', 'list', 'ls', 'remove', 'rm', 'status', 'cleanup', 'migrate', 'prune', 'help', 'shellenv', 'init', 'info', 'config', 'examples', 'version')
 
     # Get the position in the command line
     $position = $commandAst.CommandElements.Count - 1
@@ -112,6 +112,14 @@ Register-ArgumentCompleter -CommandName wt -ScriptBlock {
         } elseif ($subCommand -in @('remove', 'rm')) {
             # Complete branch names from existing worktrees
             $branches = git worktree list 2>$null | Select-Object -Skip 1 | ForEach-Object {
+                if ($_ -match '\[([^\]]+)\]') { $matches[1] }
+            }
+            $branches | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+                [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+            }
+        } elseif ($subCommand -in @('cd', 'sw')) {
+            # Complete branch names from existing worktrees, including the main one
+            $branches = git worktree list 2>$null | ForEach-Object {
                 if ($_ -match '\[([^\]]+)\]') { $matches[1] }
             }
             $branches | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
@@ -209,7 +217,7 @@ if [ -n "$BASH_VERSION" ]; then
         COMPREPLY=()
         cur="${COMP_WORDS[COMP_CWORD]}"
         prev="${COMP_WORDS[COMP_CWORD-1]}"
-        commands="checkout co create default pr mr list ls remove rm status cleanup migrate prune help shellenv init info config examples version"
+        commands="checkout co cd sw create default pr mr list ls remove rm status cleanup migrate prune help shellenv init info config examples version"
 
         # Complete commands if first argument
         if [ $COMP_CWORD -eq 1 ]; then
@@ -232,6 +240,12 @@ if [ -n "$BASH_VERSION" ]; then
                 COMPREPLY=( $(compgen -W "$branches" -- "$cur") )
                 return 0
                 ;;
+            cd|sw)
+                local branches
+                branches=$(git worktree list 2>/dev/null | sed -n 's/.*\[\([^]]*\)\].*/\1/p')
+                COMPREPLY=( $(compgen -W "$branches" -- "$cur") )
+                return 0
+                ;;
             config)
                 COMPREPLY=( $(compgen -W "init show path" -- "$cur") )
                 return 0
@@ -248,6 +262,8 @@ if [ -n "$ZSH_VERSION" ]; then
         commands=(
             'checkout:Checkout existing branch in new worktree'
             'co:Checkout existing branch in new worktree'
+            'cd:Switch to an existing worktree'
+            'sw:Switch to an existing worktree'
             'create:Create new branch in worktree'
             'default:Navigate to the main worktree'
             'pr:Checkout GitHub PR in worktree'
@@ -281,6 +297,10 @@ if [ -n "$ZSH_VERSION" ]; then
                     ;;
                 remove|rm)
                     branches=(${(f)"$(git worktree list 2>/dev/null | tail -n +2 | sed -n 's/.*\[\([^]]*\)\].*/\1/p')"})
+                    _describe 'branch' branches
+                    ;;
+                cd|sw)
+                    branches=(${(f)"$(git worktree list 2>/dev/null | sed -n 's/.*\[\([^]]*\)\].*/\1/p')"})
                     _describe 'branch' branches
                     ;;
                 config)
@@ -405,6 +425,8 @@ end
 complete -c wt -f
 complete -c wt -n "__fish_use_subcommand" -a "checkout" -d "Checkout existing branch in new worktree"
 complete -c wt -n "__fish_use_subcommand" -a "co" -d "Checkout existing branch in new worktree"
+complete -c wt -n "__fish_use_subcommand" -a "cd" -d "Switch to an existing worktree"
+complete -c wt -n "__fish_use_subcommand" -a "sw" -d "Switch to an existing worktree"
 complete -c wt -n "__fish_use_subcommand" -a "create" -d "Create new branch in worktree"
 complete -c wt -n "__fish_use_subcommand" -a "default" -d "Navigate to the main worktree"
 complete -c wt -n "__fish_use_subcommand" -a "pr" -d "Checkout GitHub PR in worktree"
@@ -434,8 +456,13 @@ function __wt_complete_worktree_branches
     git worktree list 2>/dev/null | tail -n +2 | sed -n 's/.*\[\([^]]*\)\].*/\1/p'
 end
 
+function __wt_complete_all_worktree_branches
+    git worktree list 2>/dev/null | sed -n 's/.*\[\([^]]*\)\].*/\1/p'
+end
+
 complete -c wt -n "__fish_seen_subcommand_from checkout co create" -a "(__wt_complete_branches)"
 complete -c wt -n "__fish_seen_subcommand_from remove rm" -a "(__wt_complete_worktree_branches)"
+complete -c wt -n "__fish_seen_subcommand_from cd sw" -a "(__wt_complete_all_worktree_branches)"
 complete -c wt -n "__fish_seen_subcommand_from config" -a "init show path"
 `
 }

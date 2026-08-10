@@ -1,0 +1,82 @@
+# E2E tests for `wt cd` command
+name: cd
+description: Test switching to existing worktrees with auto-cd
+
+scenarios:
+  - name: cd_to_existing_worktree
+    description: cd navigates to a worktree that already exists
+    setup:
+      - create_branch: switch-branch
+    steps:
+      - run: wt checkout switch-branch
+        expect:
+          exit_code: 0
+      - cd: $REPO_DIR
+      - run: wt cd switch-branch
+        expect:
+          exit_code: 0
+          cwd_ends_with: /switch-branch
+          branch: switch-branch
+
+  - name: cd_alias_sw
+    description: The sw alias behaves like cd
+    setup:
+      - create_branch: alias-branch
+    steps:
+      - run: wt checkout alias-branch
+        expect:
+          exit_code: 0
+      - cd: $REPO_DIR
+      - run: wt sw alias-branch
+        expect:
+          exit_code: 0
+          cwd_ends_with: /alias-branch
+
+  - name: cd_does_not_create_worktree
+    description: cd fails instead of creating a worktree for a branch without one
+    setup:
+      - create_branch: uncheckedout-branch
+    steps:
+      - run: wt cd uncheckedout-branch
+        expect:
+          exit_code: 1
+          output_contains: "no worktree found for branch"
+      - run: wt list
+        expect:
+          output_not_contains: uncheckedout-branch
+
+  - name: cd_back_to_main_worktree
+    description: cd can return to the main checkout from a worktree
+    setup:
+      - create_branch: away-branch
+    steps:
+      - run: wt checkout away-branch
+        expect:
+          cwd_ends_with: /away-branch
+      - run: wt cd main
+        expect:
+          exit_code: 0
+          branch: main
+
+  - name: cd_json_requires_branch
+    description: JSON mode without an argument is an error
+    skip_shellenv: true
+    steps:
+      - run: $WT_BIN --format json cd
+        expect:
+          exit_code: 1
+          output_contains: "requires an explicit branch argument"
+
+  - name: cd_json_emits_navigate_to
+    description: JSON mode with a branch emits the worktree path
+    skip_shellenv: true
+    setup:
+      - create_branch: json-branch
+    steps:
+      - run: $WT_BIN checkout json-branch
+        expect:
+          exit_code: 0
+      - run: $WT_BIN --format json cd json-branch
+        expect:
+          exit_code: 0
+          output_contains: '"navigate_to"'

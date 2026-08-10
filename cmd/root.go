@@ -83,6 +83,7 @@ func init() {
 	})
 
 	rootCmd.AddCommand(checkoutCmd)
+	rootCmd.AddCommand(cdCmd)
 	rootCmd.AddCommand(createCmd)
 	rootCmd.AddCommand(prCmd)
 	rootCmd.AddCommand(mrCmd)

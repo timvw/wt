@@ -19,6 +19,8 @@ wt is a fast Git worktree helper written in Go. It wraps `git worktree` with a c
 | `wt create <branch> [base]` | Create a new branch in a worktree (defaults to main/master as base) |
 | `wt co <branch>` | Checkout an existing branch in a new worktree |
 | `wt co` | Interactive: fuzzy-search from available branches |
+| `wt cd <branch>` | Switch to an existing worktree (alias: `wt sw`); never creates one |
+| `wt cd` | Interactive: fuzzy-search from existing worktrees |
 | `wt ls` | List all worktrees |
 | `wt rm <branch>` | Remove a worktree |
 | `wt rm` | Interactive: fuzzy-search worktree to remove |

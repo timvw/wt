@@ -16,7 +16,7 @@ Inspired by [haacked/dotfiles/tree-me](https://github.com/haacked/dotfiles/blob/
 
 - Configurable worktree strategies: `global`, `sibling-repo`, `parent-branches`, and more
 - Simple commands for common worktree operations
-- **Interactive selection menus** with fuzzy matching for checkout, remove, pr, and mr commands
+- **Interactive selection menus** with fuzzy matching for checkout, cd, remove, pr, and mr commands
 - GitHub PR support via `wt pr` command (uses `gh` CLI) — checks out the PR's actual branch name
 - GitLab MR support via `wt mr` command (uses `glab` CLI) — checks out the MR's actual branch name
 - **Pre/post command hooks** — run custom scripts on create/checkout/remove (e.g. [launch AI assistants](docs/examples.md#ai-assistants-and-editors), [share build caches](docs/examples.md#shared-build-cache-across-worktrees), [assign dev server ports](docs/examples.md#deterministic-dev-server-port-per-worktree), [copy `.env`](docs/examples.md#copy-env-to-new-worktrees), [init submodules](docs/examples.md#git-submodules-in-worktrees))
@@ -49,6 +49,17 @@ wt co                             # interactive: fuzzy-search from available bra
 wt create my-feature
 wt create my-feature develop      # specify base branch
 ```
+
+### Switch Between Worktrees
+
+```bash
+# Switch to a worktree that already exists (never creates one)
+wt cd feature-branch
+wt cd                             # interactive: fuzzy-search from existing worktrees
+wt sw                             # alias for wt cd
+```
+
+Unlike `wt co`, the `wt cd` list contains only branches that already have a worktree — including the main checkout — so it stays short in repositories with many branches.
 
 ### PRs & MRs
 
@@ -122,7 +133,9 @@ Shows dirty/clean state, ahead/behind counts, and highlights the current worktre
 
 ![wt interactive](docs/wt-interactive.gif)
 
-When you run `wt co`, `wt rm`, `wt pr`, or `wt mr` without arguments, you'll get an interactive selection menu. Typing filters the results with fuzzy matching, so you can quickly find the branch or worktree you're looking for.
+When you run `wt co`, `wt cd`, `wt rm`, `wt pr`, or `wt mr` without arguments, you'll get an interactive selection menu. Typing filters the results with fuzzy matching, so you can quickly find the branch or worktree you're looking for.
+
+`wt co` selects from every local and remote branch (creating a worktree when needed), while `wt cd` selects only from worktrees that already exist.
 
 ### JSON Output (`--format json`)
 

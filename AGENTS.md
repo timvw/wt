@@ -122,6 +122,9 @@ When run without arguments, several commands provide interactive selection:
 # Interactively select a branch to checkout
 wt checkout
 
+# Interactively select an existing worktree to switch to
+wt cd
+
 # Interactively select a worktree to remove
 wt remove
 

@@ -1404,3 +1404,74 @@ func runGitCommand(t *testing.T, dir string, args ...string) {
 			args, err, output)
 	}
 }
+
+// TestInteractiveCdWithoutArgs verifies that `wt cd` without arguments offers
+// only worktrees that already exist, unlike `wt co` which lists all branches.
+func TestInteractiveCdWithoutArgs(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping interactive e2e test in short mode")
+	}
+
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("zsh not available, skipping zsh interactive test")
+	}
+
+	tmpDir := t.TempDir()
+	repoDir := filepath.Join(tmpDir, "test-repo")
+	worktreeRoot := filepath.Join(tmpDir, "worktrees")
+
+	setupTestRepo(t, repoDir)
+	wtBinary := buildWtBinary(t, tmpDir)
+
+	// One branch with a worktree, one without: only the former may be offered.
+	runGitCommand(t, repoDir, "checkout", "-b", "with-worktree")
+	runGitCommand(t, repoDir, "commit", "--allow-empty", "-m", "test commit 1")
+	runGitCommand(t, repoDir, "checkout", "main")
+	runGitCommand(t, repoDir, "checkout", "-b", "without-worktree")
+	runGitCommand(t, repoDir, "commit", "--allow-empty", "-m", "test commit 2")
+	runGitCommand(t, repoDir, "checkout", "main")
+	runGitCommand(t, repoDir, "worktree", "add",
+		filepath.Join(tmpDir, "existing-worktree"), "with-worktree")
+
+	rcContent := fmt.Sprintf(`
+export WORKTREE_ROOT=%s
+export PATH=%s:$PATH
+cd %s
+source <(%s shellenv)
+echo "=== WT SHELLENV LOADED ==="
+`, worktreeRoot, filepath.Dir(wtBinary), repoDir, wtBinary)
+
+	ps, err := newPtyZsh(t, rcContent)
+	if err != nil {
+		t.Fatalf("Failed to create pty zsh: %v", err)
+	}
+	defer ps.close()
+
+	time.Sleep(getInitWaitTime())
+	ctx, cancel := context.WithTimeout(context.Background(), getContextTimeout())
+	defer cancel()
+	if err := ps.waitForText(ctx, "=== WT SHELLENV LOADED ==="); err != nil {
+		t.Fatalf("Failed to load shellenv: %v\nOutput:\n%s", err, ps.getOutput())
+	}
+
+	ps.resetOutput()
+	if err := ps.send("wt cd\n"); err != nil {
+		t.Fatalf("Failed to send command: %v", err)
+	}
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel2()
+	if err := ps.waitForText(ctx2, "Select worktree"); err != nil {
+		t.Fatalf("Interactive cd prompt did not appear: %v\nOutput:\n%s", err, ps.getOutput())
+	}
+
+	if err := ps.waitForText(ctx2, "with-worktree"); err != nil {
+		t.Fatalf("Expected existing worktree in selection: %v\nOutput:\n%s", err, ps.getOutput())
+	}
+	if strings.Contains(ps.getOutput(), "without-worktree") {
+		t.Fatalf("Branch without a worktree must not be offered:\n%s", ps.getOutput())
+	}
+
+	ps.send("\x03") // Ctrl-C to cancel the prompt
+	time.Sleep(500 * time.Millisecond)
+}
