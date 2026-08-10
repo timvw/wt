@@ -189,7 +189,10 @@ func writeBashZshShellenv() {
         for arg in "$@"; do
             quoted_args="$quoted_args $(printf '%q' "$arg")"
         done
-        script -q -c "command wt$quoted_args" "$log_file"
+        # --return makes util-linux script exit with the child's status; without
+        # it script always returns 0 and failures (e.g. "wt remove missing")
+        # would be masked as success. The fish integration does the same.
+        script -q --return -c "command wt$quoted_args" "$log_file"
         exit_code=$?
     fi
 

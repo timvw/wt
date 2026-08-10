@@ -99,3 +99,26 @@ scenarios:
       - run: $WT_BIN shellenv
         expect:
           output_contains: "--format json"
+
+  - name: shellenv_propagates_failure_exit_code
+    description: A failing wt command run through the wrapper exits non-zero
+    # util-linux script(1) returns its own status unless --return is passed, so
+    # without it the wrapper reported success for a failed command on Linux.
+    skip_os: [windows]  # PowerShell exit code handling differs
+    steps:
+      - run: wt remove nonexistent-branch
+        expect:
+          exit_code: 1
+          output_contains: "no worktree found for branch"
+
+  - name: shellenv_success_after_failure_exit_code
+    description: A successful command after a failing one still reports success
+    skip_os: [windows]  # PowerShell exit code handling differs
+    steps:
+      - run: wt remove nonexistent-branch
+        expect:
+          exit_code: 1
+      - run: wt list
+        expect:
+          exit_code: 0
+          output_contains: "[main]"
