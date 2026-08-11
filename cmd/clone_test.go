@@ -77,11 +77,12 @@ func TestRepoPlacementPathWithBranchLiteral(t *testing.T) {
 	}
 	// Branch will be whatever resolveDefaultBranch returns (likely "main" in CI).
 	// Just verify it's non-empty and the path structure is correct.
-	if got == filepath.Clean("/tmp/repos/oss/timvw/wt") {
+	wantBase := filepath.FromSlash("/tmp/repos/oss/timvw/wt")
+	if got == wantBase {
 		t.Errorf("repoPlacementPath with {.branch} should include a branch segment, got %q", got)
 	}
-	if !strings.HasPrefix(got, "/tmp/repos/oss/timvw/wt/") {
-		t.Errorf("repoPlacementPath = %q, want prefix /tmp/repos/oss/timvw/wt/", got)
+	if !strings.HasPrefix(got, wantBase+string(filepath.Separator)) {
+		t.Errorf("repoPlacementPath = %q, want prefix %q/", got, wantBase)
 	}
 }
 
@@ -125,7 +126,7 @@ func TestResolveCategoryDerivesRepoRoot(t *testing.T) {
 	reposRoot = "/base/repos"
 	categoryDefaults = Category{}
 	configCategories = map[string]Category{
-		"custom": {GHAuth: "x"},          // no repo_root -> derive from base
+		"custom": {GHAuth: "x"},           // no repo_root -> derive from base
 		"pinned": {RepoRoot: "/explicit"}, // explicit repo_root wins
 	}
 
