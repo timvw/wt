@@ -12,8 +12,16 @@ before:
 builds:
   - main: .
     binary: wt
+    flags:
+      - -trimpath
     ldflags:
       - -s -w -X github.com/timvw/wt/cmd.Version={{.Version}}
+    # Reproducible builds. The release workflow runs GoReleaser twice (core, then
+    # best-effort winget), and the second run rebuilds from scratch. Without a
+    # pinned timestamp the rebuilt archives hash differently than the ones already
+    # uploaded to the release, so the generated winget manifest carries a hash that
+    # no published asset matches (Error-Hash-Mismatch on the winget-pkgs PR).
+    mod_timestamp: '{{ .CommitTimestamp }}'
     env:
       - CGO_ENABLED=0
     goos:
@@ -30,11 +38,23 @@ builds:
         goarch: arm64
 
 archives:
-  - format: tar.gz
+  - formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
+    # Pin every archive member's mtime, not just the binary's: the default
+    # LICENSE/README globs otherwise carry the checkout time, which differs
+    # between the two GoReleaser runs and changes the archive hash.
+    builds_info:
+      mtime: '{{ .CommitDate }}'
+    files:
+      - src: LICENSE*
+        info:
+          mtime: '{{ .CommitDate }}'
+      - src: README*
+        info:
+          mtime: '{{ .CommitDate }}'
 
 checksum:
   name_template: 'checksums.txt'
