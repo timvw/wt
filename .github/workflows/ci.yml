@@ -95,6 +95,14 @@ jobs:
         if: matrix.os == 'windows'
         run: go test -short -v ./...
 
+      # The suite above runs -short, which skips every PTY-driven test. The
+      # prompt-visibility tests only mean anything when they actually drive a
+      # terminal, so they are run explicitly. Windows is the platform #124 was
+      # reported on: Git Bash ships no script(1), so the wrapper redirects
+      # stdout to a file and a prompt written there is invisible.
+      - name: Run prompt visibility tests (PTY, not -short)
+        run: go test -v -run 'TestInteractivePromptVisibleWithoutScript|TestNavigationMarkerStaysOnStdout' ./cmd/
+
       - name: Upload coverage to Codecov
         if: matrix.os == 'linux'
         uses: codecov/codecov-action@v7

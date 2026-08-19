@@ -32,18 +32,44 @@ import (
 // order to run once script(1) has been hidden from PATH.
 var scriptlessToolchain = []string{"git", "grep", "sed", "mktemp", "cat", "tail", "rm", "uname"}
 
-// scriptlessPATH returns a PATH value on which script(1) cannot be found, so a
-// shell sourcing the integration takes the Git Bash fallback branch.
+// shQuote wraps a value so a POSIX shell reads it literally, whatever spaces or
+// metacharacters a temp directory happens to contain.
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// posixPath renders a path the way the shell being driven expects it. Git Bash
+// is a POSIX shell over native Windows paths, so C:\x\y has to become /c/x/y
+// before it can go in PATH — where the separator is ':' rather than the ';' of
+// os.PathListSeparator.
+func posixPath(p string) string {
+	if runtime.GOOS != "windows" {
+		return p
+	}
+	p = filepath.ToSlash(p)
+	if len(p) > 1 && p[1] == ':' {
+		return "/" + strings.ToLower(p[:1]) + p[2:]
+	}
+	return p
+}
+
+// scriptlessPATHExpr returns a shell expression assigning a PATH on which
+// script(1) cannot be found, so a shell sourcing the integration takes the Git
+// Bash fallback branch. binDir holds the wt binary under test and is always
+// reachable, so the wrapper's `command wt` cannot silently pick up an installed
+// wt from the host.
 //
-// On Windows this needs no help: Git Bash genuinely ships no script(1), which
-// is the whole reason #124 exists there. Elsewhere script(1) normally sits in
-// the same directory as grep and sed, so the directory cannot simply be dropped
-// and a whitelist of symlinks is built instead.
-func scriptlessPATH(t *testing.T, extraDirs ...string) string {
+// On Windows no shim is needed: Git Bash genuinely ships no script(1), which is
+// the whole reason #124 exists there, so the host PATH is kept and only binDir
+// is prepended. Elsewhere script(1) normally sits in the same directory as grep
+// and sed, so that directory cannot simply be dropped and a whitelist of
+// symlinks is built instead — deliberately replacing PATH rather than extending
+// it, so nothing else on the host can reintroduce script(1).
+func scriptlessPATHExpr(t *testing.T, binDir string) string {
 	t.Helper()
 
 	if runtime.GOOS == "windows" {
-		return os.Getenv("PATH")
+		return shQuote(posixPath(binDir)) + `:$PATH`
 	}
 
 	shim := t.TempDir()
@@ -57,11 +83,7 @@ func scriptlessPATH(t *testing.T, extraDirs ...string) string {
 		}
 	}
 
-	path := shim
-	for _, d := range extraDirs {
-		path += string(os.PathListSeparator) + d
-	}
-	return path
+	return shQuote(shim) + ":" + shQuote(binDir)
 }
 
 // TestInteractivePromptVisibleWithoutScript reproduces #124: with script(1)
@@ -86,10 +108,12 @@ func TestInteractivePromptVisibleWithoutScript(t *testing.T) {
 	runGitCommand(t, repoDir, "branch", "feature-1")
 	runGitCommand(t, repoDir, "branch", "feature-2")
 
-	// The wt binary lives outside the shim, so its directory is appended.
-	path := scriptlessPATH(t, filepath.Dir(wtBinary))
+	pathExpr := scriptlessPATHExpr(t, filepath.Dir(wtBinary))
 
-	// SCRIPTLESS_CONFIRMED guards the test itself: if script(1) were reachable
+	// WORKTREE_ROOT is consumed by wt itself, which is a native binary, so it
+	// keeps the native path form. Everything the shell resolves is converted.
+	//
+	// SCRIPTLESS CONFIRMED guards the test itself: if script(1) were reachable
 	// the wrapper would take the PTY branch, the prompt would be visible for
 	// reasons unrelated to the fix, and this test would pass while guarding
 	// nothing.
@@ -103,7 +127,12 @@ if command -v script >/dev/null 2>&1; then
 else
     echo "=== SCRIPTLESS CONFIRMED ==="
 fi
-`, worktreeRoot, path, repoDir, wtBinary)
+`,
+		shQuote(worktreeRoot),
+		pathExpr,
+		shQuote(posixPath(repoDir)),
+		shQuote(posixPath(wtBinary)),
+	)
 
 	ps, err := newPtyBash(t, rcContent)
 	if err != nil {
