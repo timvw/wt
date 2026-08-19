@@ -37,7 +37,11 @@ The installed `wt` binary bundles `git` in its runtime path. The shell
 integration (`wt init`) runs in your interactive shell, however, and calls
 `git` (completions) and `script(1)` (PTY for interactive commands) directly, so
 make sure both are on your `PATH`: `git`, plus `util-linux` for `script(1)` on
-Linux (on macOS `script` ships with the base system).
+Linux (on macOS `script` ships with the base system). Of the two only `git` is
+required — without `script(1)` the integration falls back to running commands
+without a PTY, which keeps auto-cd and interactive prompts working. It still
+assumes the usual POSIX utilities (`mktemp`, `cat`, `grep`, `tail`, `sed`,
+`rm`).
 
 For NixOS or home-manager, add `wt` as a flake input and reference its package
 in your modules (it is not part of `nixpkgs`, so `pkgs.wt` will not resolve):

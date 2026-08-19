@@ -393,11 +393,29 @@ func fishShellenvScript() string {
     # Use script(1) to provide a PTY for interactive commands (e.g., promptui menus)
     # Command substitution (command wt) doesn't allocate a TTY, which breaks interactive prompts
     set -l log_file (mktemp -t wt.XXXXXX)
+    set -l exit_code 0
 
-    # Detect OS to use correct script syntax (macOS vs Linux)
-    if test (uname) = "Darwin"
+    # script(1) may be missing entirely, and its syntax differs (macOS vs Linux).
+    # The probe is spelled "type -q" rather than the bash side's "command -v":
+    # fish only accepts "command -v" from 3.1 on, and type also sees a shadowing
+    # "script" function, which is what the branches below would end up running.
+    if not type -q script
+        # No script(1) available (minimal containers and any distro without
+        # util-linux), so there is no PTY to hand the command. Prompts still
+        # work: stdin remains the terminal, and wt renders them to stderr, which
+        # is left alone below. Without this branch every wt call would fail,
+        # because the missing command is the one producing the output.
+        #
+        # stdout is redirected and replayed rather than piped, so $status is the
+        # command's own rather than the tail of a pipeline's. stderr is left
+        # alone so errors and prompts still stream live.
+        command wt $argv >$log_file
+        set exit_code $status
+        cat $log_file
+    else if test (uname) = "Darwin"
         # macOS: script -q file command args
         script -q $log_file /bin/sh -c 'command wt "$@"' wt $argv
+        set exit_code $status
     else
         # Linux: script -q -c "..." file — the command must be a single string,
         # which script parses with $SHELL. That may be bash/zsh even when fish is
@@ -414,8 +432,8 @@ func fishShellenvScript() string {
         # it script always returns 0 and failures (e.g. "wt remove missing")
         # would be masked as success.
         script -q --return -c "command wt $quoted_args" $log_file
+        set exit_code $status
     end
-    set -l exit_code $status
 
     # Extract the navigation marker for auto-cd
     set -l cd_path (grep '^wt navigating to: ' $log_file | tail -1 | sed 's/^wt navigating to: //')
