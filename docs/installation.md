@@ -152,7 +152,7 @@ wt shellenv fish | source
 For PowerShell, add this to your `$PROFILE`:
 
 ```powershell
-Invoke-Expression (& wt shellenv powershell)
+wt shellenv powershell | Out-String | Invoke-Expression
 ```
 
 Naming the shell explicitly is recommended. Without it, `shellenv` re-runs auto-detection

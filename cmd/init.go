@@ -289,9 +289,7 @@ eval "$(wt shellenv %s)"
 wt shellenv fish | source
 %s`, markerStart, markerEnd)
 	case "powershell":
-		return fmt.Sprintf(`%s
-Invoke-Expression (& wt shellenv powershell)
-%s`, markerStart, markerEnd)
+		return fmt.Sprintf("%s\n%s\n%s", markerStart, powershellSetupLine, markerEnd)
 	}
 	return ""
 }

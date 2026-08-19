@@ -9,6 +9,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// powershellSetupLine is the PowerShell $PROFILE line that loads the wt
+// integration. It is the single source of truth for `wt init powershell`, the
+// shellenv help text, docs/installation.md and the E2E harness — they must not
+// drift apart.
+//
+// The output is piped through Out-String rather than passed as a subexpression
+// (Invoke-Expression (& wt shellenv powershell)). shellenv emits many lines, so
+// the subexpression evaluates to an Object[], and Invoke-Expression's -Command
+// parameter is [string] — Windows PowerShell 5.1 rejects the call and the wt
+// function is never defined. Out-String rejoins the lines into one string.
+const powershellSetupLine = "wt shellenv powershell | Out-String | Invoke-Expression"
+
 var shellenvCmd = &cobra.Command{
 	Use:   "shellenv [shell]",
 	Short: "Output shell function for auto-cd (source this)",
@@ -21,7 +33,7 @@ For fish, add this to your ~/.config/fish/config.fish:
   wt shellenv fish | source
 
 For PowerShell, add this to your $PROFILE:
-  Invoke-Expression (& wt shellenv powershell)
+  ` + powershellSetupLine + `
 
 Note: For zsh, place this AFTER compinit to enable tab completion.
 
