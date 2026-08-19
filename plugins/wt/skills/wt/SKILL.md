@@ -74,6 +74,20 @@ post_checkout = ["echo 'Switched to $WT_BRANCH'"]
 
 Hook environment variables: `WT_PATH`, `WT_BRANCH`, `WT_MAIN`, `WT_REPO_NAME`, `WT_REPO_HOST`, `WT_REPO_OWNER`. Disable all hooks: `WT_HOOKS_DISABLED=1`.
 
+### Hook trust
+
+`.wt.toml` is committed, so its hooks come from the repository rather than from the user. wt does not run them until they are approved:
+
+```bash
+wt trust          # approve this repository's .wt.toml hooks
+wt trust --list   # show every approval on this machine
+wt untrust        # revoke this repository's approval
+```
+
+The approval is pinned to (repository, contents of `.wt.toml`), so editing the file — or pulling a commit that adds a hook — asks again. Non-interactive runs (scripts, CI, `--format json`) decline and warn on stderr, unless `WT_HOOKS_APPROVE_ALL=1` is set. Hooks from the user's own `config.toml` are not gated.
+
+Set `hooks_policy` in `config.toml` (or `WT_HOOKS_POLICY`) to `prompt-untrusted` (default), `prompt-all` (confirm every hook, including the user's own), `trusted-only` (never prompt, skip anything unapproved), or `off`. It is never read from `.wt.toml`.
+
 ### Common Hook Recipes
 
 **Copy `.env` files from main worktree:**

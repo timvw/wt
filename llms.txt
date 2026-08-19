@@ -52,6 +52,11 @@ Configuration and hooks
 - Supported hooks: pre/post create, checkout, remove, pr, mr, clone
 - Hook env vars: WT_PATH, WT_BRANCH, WT_MAIN, WT_REPO_NAME, WT_REPO_HOST, WT_REPO_OWNER
 - Disable hooks: WT_HOOKS_DISABLED=1
+- Hooks from a repo's committed .wt.toml are NOT run until approved: 'wt trust' (approve), 'wt trust --list', 'wt untrust'
+- An approval is pinned to (repository, sha256 of .wt.toml); editing the file or an identical file elsewhere re-prompts
+- Approvals live in ~/.config/wt/trust.toml; non-interactive runs decline unless WT_HOOKS_APPROVE_ALL=1
+- hooks_policy (config file or WT_HOOKS_POLICY): prompt-untrusted (default), prompt-all, trusted-only, off
+- hooks_policy is never read from a repo-level .wt.toml; WT_HOOKS_APPROVE_ALL=1 approves everything (automation only)
 
 Dependencies
 - Required: git

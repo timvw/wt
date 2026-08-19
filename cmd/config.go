@@ -19,6 +19,7 @@ type Config struct {
 	Pattern     string `toml:"pattern"`
 	Separator   string `toml:"separator"`
 	Hooks       Hooks  `toml:"hooks"`
+	HooksPolicy string `toml:"hooks_policy"`
 	RepoPattern string `toml:"repo_pattern"`
 }
 
@@ -46,6 +47,7 @@ type configSource struct {
 	Pattern     string
 	Separator   string
 	RepoPattern string
+	HooksPolicy string
 }
 
 // configFilePath is the resolved path to the config file (set during loading).
@@ -60,11 +62,39 @@ var configRepoPath string
 // configRepoFound indicates whether a repo-level .wt.toml was found during loading.
 var configRepoFound bool
 
+// configRepoKey is the repository identity a trust record is pinned to,
+// resolved while the .wt.toml is being read.
+//
+// Resolved here rather than when a hook is about to run because by then the
+// working directory may be gone: `wt remove` fires post_remove hooks after git
+// has deleted the worktree the user was standing in, and `git rev-parse` from a
+// deleted directory answers nothing. Config load is the last moment the answer
+// is reliably available.
+var configRepoKey string
+
+// configRepoSHA is the sha256 of the repo-level .wt.toml bytes that were
+// actually decoded, and is what hook approvals are pinned to.
+var configRepoSHA string
+
 // configSources tracks the origin of each resolved value.
 var configSources configSource
 
-// worktreeHooks holds the loaded hook configuration.
+// worktreeHooks holds the effective (merged) hook configuration.
 var worktreeHooks Hooks
+
+// repoConfigHooks holds the hooks the repo-level .wt.toml supplied, kept
+// separate so they can be shown for approval before anything runs.
+var repoConfigHooks Hooks
+
+// hookSources records which config layer supplied each hook event's commands.
+// The merge below replaces a whole event at a time, so one source per event is
+// exact — and it is what tells runHooks whether it is looking at commands the
+// user wrote or commands a repository shipped.
+var hookSources = map[string]string{}
+
+// hooksPolicy is the configured hook approval policy (see hookPolicy* in
+// hooks.go). Deliberately loaded from the user's config file only.
+var hooksPolicy string
 
 // Clone placement configuration, loaded by loadWorktreeConfig.
 var (
@@ -234,6 +264,15 @@ const defaultConfigTemplate = `# wt configuration file
 #                              $WT_REPO_NAME, $WT_REPO_HOST, $WT_REPO_OWNER
 # Pre-hooks abort on failure; post-hooks warn only.
 # Set WT_HOOKS_DISABLED=1 to skip all hooks.
+#
+# Hooks from a repository's committed .wt.toml are not run until you approve
+# them ('wt trust'). Hooks from THIS file are yours, so they run as-is unless
+# you ask for more:
+#   prompt-untrusted  (default) approve hooks that came from a repo's .wt.toml
+#   prompt-all        confirm every hook batch, whatever supplied it
+#   trusted-only      never prompt; skip anything not already approved
+#   off               run no hooks at all
+# hooks_policy = "prompt-untrusted"
 # NOTE: Always quote path variables ("$WT_PATH") to handle spaces in paths.
 #
 # [hooks]
@@ -297,10 +336,14 @@ func loadWorktreeConfig() {
 		Pattern:     "default",
 		Separator:   "default",
 		RepoPattern: "default",
+		HooksPolicy: "default",
 	}
 
 	// Reset hooks
 	worktreeHooks = Hooks{}
+	repoConfigHooks = Hooks{}
+	hookSources = map[string]string{}
+	hooksPolicy = ""
 
 	repoPattern = defaultRepoPattern
 
@@ -341,6 +384,15 @@ func loadWorktreeConfig() {
 				configSources.RepoPattern = "config file"
 			}
 			worktreeHooks = cfg.Hooks
+			for _, event := range hookEvents {
+				if len(hooksOf(cfg.Hooks, event)) > 0 {
+					hookSources[event] = hookSourceConfigFile
+				}
+			}
+			if cfg.HooksPolicy != "" {
+				hooksPolicy = strings.ToLower(strings.TrimSpace(cfg.HooksPolicy))
+				configSources.HooksPolicy = "config file"
+			}
 		}
 	}
 
@@ -350,14 +402,25 @@ func loadWorktreeConfig() {
 	//    .wt.toml redirect the destination or run clone hooks would be wrong.
 	configRepoPath = ""
 	configRepoFound = false
+	configRepoSHA = ""
+	configRepoKey = ""
 
 	if repoRoot, err := gitRepoRootFn(); err == nil {
 		repoConfigPath := filepath.Join(repoRoot, ".wt.toml")
 		configRepoPath = repoConfigPath
-		if _, err := os.Stat(repoConfigPath); err == nil {
+		// Read once and hash those exact bytes, rather than hashing the path
+		// again when the hooks are about to run. Approval has to be pinned to
+		// the commands actually decoded here: re-reading later would leave a
+		// window in which the file is swapped, and wt would check one file's
+		// hash while running another file's commands.
+		if data, err := os.ReadFile(repoConfigPath); err == nil {
 			configRepoFound = true
+			configRepoSHA = hashBytes(data)
+			if key, err := repoTrustKeyFn(); err == nil {
+				configRepoKey = key
+			}
 			var repoCfg Config
-			if _, err := toml.DecodeFile(repoConfigPath, &repoCfg); err == nil {
+			if _, err := toml.Decode(string(data), &repoCfg); err == nil {
 				// root, repo_root and repo_pattern are intentionally NOT loaded
 				// from repo config
 				if repoCfg.Strategy != "" {
@@ -372,39 +435,27 @@ func loadWorktreeConfig() {
 					worktreeSeparator = repoCfg.Separator
 					configSources.Separator = "repo config"
 				}
-				// Merge hooks: repo hooks override per-hook type, unset hooks keep global values
-				if len(repoCfg.Hooks.PreCreate) > 0 {
-					worktreeHooks.PreCreate = repoCfg.Hooks.PreCreate
-				}
-				if len(repoCfg.Hooks.PostCreate) > 0 {
-					worktreeHooks.PostCreate = repoCfg.Hooks.PostCreate
-				}
-				if len(repoCfg.Hooks.PreCheckout) > 0 {
-					worktreeHooks.PreCheckout = repoCfg.Hooks.PreCheckout
-				}
-				if len(repoCfg.Hooks.PostCheckout) > 0 {
-					worktreeHooks.PostCheckout = repoCfg.Hooks.PostCheckout
-				}
-				if len(repoCfg.Hooks.PreRemove) > 0 {
-					worktreeHooks.PreRemove = repoCfg.Hooks.PreRemove
-				}
-				if len(repoCfg.Hooks.PostRemove) > 0 {
-					worktreeHooks.PostRemove = repoCfg.Hooks.PostRemove
-				}
-				if len(repoCfg.Hooks.PrePR) > 0 {
-					worktreeHooks.PrePR = repoCfg.Hooks.PrePR
-				}
-				if len(repoCfg.Hooks.PostPR) > 0 {
-					worktreeHooks.PostPR = repoCfg.Hooks.PostPR
-				}
-				if len(repoCfg.Hooks.PreMR) > 0 {
-					worktreeHooks.PreMR = repoCfg.Hooks.PreMR
-				}
-				if len(repoCfg.Hooks.PostMR) > 0 {
-					worktreeHooks.PostMR = repoCfg.Hooks.PostMR
-				}
+				// hooks_policy is deliberately NOT read from repo config: a
+				// repository choosing how closely wt scrutinises that same
+				// repository's hooks would defeat the point.
+
+				// Merge hooks: repo hooks override per-hook type, unset hooks keep
+				// global values. Which layer won is recorded in hookSources, because
+				// commands that arrived here from a committed file need the user's
+				// approval before they run (see approveHooks).
+				repoConfigHooks = repoCfg.Hooks
 				// pre_clone/post_clone are deliberately not merged from repo
 				// config: clone targets a different repository than this one.
+				repoConfigHooks.PreClone = nil
+				repoConfigHooks.PostClone = nil
+				for _, event := range hookEvents {
+					cmds := hooksOf(repoConfigHooks, event)
+					if len(cmds) == 0 {
+						continue
+					}
+					setHooks(&worktreeHooks, event, cmds)
+					hookSources[event] = hookSourceRepoConfig
+				}
 			}
 		}
 	}
