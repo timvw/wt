@@ -78,3 +78,17 @@ scenarios:
       - run: pwd
         expect:
           cwd_ends_with: /worktrees/a/b/feature-slashdef
+
+  - name: env_var_default_respects_separator
+    description: Default value slash is replaced by the configured separator
+    steps:
+      - run: wt create feature-sepdef
+        env:
+          WORKTREE_STRATEGY: custom
+          WORKTREE_SEPARATOR: "-"
+          WORKTREE_PATTERN: "{.worktreeRoot}/{.env.NOSUCH:-a/b}/{.branch}"
+        expect:
+          exit_code: 0
+      - run: pwd
+        expect:
+          cwd_ends_with: /worktrees/a-b/feature-sepdef

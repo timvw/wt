@@ -11,6 +11,10 @@ import (
 // Render executes pattern as a Go template with "{" "}" delimiters against ctx.
 // Empty pattern returns "". Missing keys are an error.
 //
+// sep is the separator used to transform "/" and "\" in value variables; it is
+// applied to default values in {.env.X:-fallback} the same way EnvMap applies
+// it to actual environment variable values.
+//
 // Bash-style defaults are supported for environment-variable references:
 //
 //	{.env.X:-fallback}   → uses "fallback" when X is unset
@@ -18,7 +22,7 @@ import (
 //	{.env.X}             → errors when X is unset (unchanged behaviour)
 //
 // The default value may contain any character except "}".
-func Render(pattern string, ctx any) (string, error) {
+func Render(pattern string, ctx any, sep string) (string, error) {
 	if pattern == "" {
 		return "", nil
 	}
@@ -27,7 +31,12 @@ func Render(pattern string, ctx any) (string, error) {
 		Delims("{", "}").
 		Option("missingkey=error").
 		Funcs(template.FuncMap{
-			"envOr": envOr,
+			"envOr": func(key, fallback string, env map[string]string) string {
+				if v, ok := env[key]; ok {
+					return v
+				}
+				return Transform(sep, fallback)
+			},
 		}).
 		Parse(processed)
 	if err != nil {
@@ -38,14 +47,6 @@ func Render(pattern string, ctx any) (string, error) {
 		return "", fmt.Errorf("render %q: %w", pattern, err)
 	}
 	return buf.String(), nil
-}
-
-// envOr returns env[key] when present, otherwise fallback.
-func envOr(key, fallback string, env map[string]string) string {
-	if v, ok := env[key]; ok {
-		return v
-	}
-	return fallback
 }
 
 // expandDefaults rewrites bash-style defaults in env references:

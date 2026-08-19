@@ -17,68 +17,87 @@ func TestRender(t *testing.T) {
 	tests := []struct {
 		name    string
 		pattern string
+		sep     string
 		want    string
 		wantErr bool
 	}{
 		{
 			name:    "empty pattern",
 			pattern: "",
+			sep:     "/",
 			want:    "",
 		},
 		{
 			name:    "plain variables",
 			pattern: "{.worktreeRoot}/{.repo.Name}/{.branch}",
+			sep:     "/",
 			want:    "/home/user/worktrees/wt/feat-login",
 		},
 		{
 			name:    "env var set",
 			pattern: "{.worktreeRoot}/{.env.WT_CATEGORY}/{.branch}",
+			sep:     "/",
 			want:    "/home/user/worktrees/work/feat-login",
 		},
 		{
 			name:    "env var unset without default errors",
 			pattern: "{.worktreeRoot}/{.env.UNSET_VAR}/{.branch}",
+			sep:     "/",
 			wantErr: true,
 		},
 		{
 			name:    "misspelled non-env key errors",
 			pattern: "{.brnach}",
+			sep:     "/",
 			wantErr: true,
 		},
 		// Default-value syntax: {.env.X:-fallback}
 		{
 			name:    "default used when var unset",
 			pattern: "{.worktreeRoot}/{.env.UNSET_VAR:-personal}/{.branch}",
+			sep:     "/",
 			want:    "/home/user/worktrees/personal/feat-login",
 		},
 		{
 			name:    "default ignored when var set",
 			pattern: "{.worktreeRoot}/{.env.WT_CATEGORY:-personal}/{.branch}",
+			sep:     "/",
 			want:    "/home/user/worktrees/work/feat-login",
 		},
 		{
 			name:    "empty default when var unset",
 			pattern: "{.worktreeRoot}/{.env.UNSET_VAR:-}/{.branch}",
+			sep:     "/",
 			want:    "/home/user/worktrees//feat-login",
 		},
 		{
-			name:    "default containing slash",
+			name:    "default containing slash with default separator",
 			pattern: "{.worktreeRoot}/{.env.UNSET_VAR:-a/b}/{.branch}",
+			sep:     "/",
 			want:    "/home/user/worktrees/a/b/feat-login",
+		},
+		{
+			name:    "default containing slash with dash separator",
+			pattern: "{.env.UNSET_VAR:-a/b}",
+			sep:     "-",
+			want:    "a-b",
 		},
 		{
 			name:    "default with set empty var uses empty value",
 			pattern: "{.worktreeRoot}/{.env.EMPTY_VAR:-fallback}/{.branch}",
+			sep:     "/",
 			want:    "/home/user/worktrees//feat-login",
 		},
 		{
 			name:    "multiple defaults in one pattern",
 			pattern: "{.env.UNSET_A:-alpha}/{.env.UNSET_B:-beta}",
+			sep:     "/",
 			want:    "alpha/beta",
 		},
 		{
 			name:    "default mixed with plain env ref",
 			pattern: "{.env.WT_CATEGORY}/{.env.MISSING:-fallback}",
+			sep:     "/",
 			want:    "work/fallback",
 		},
 	}
@@ -86,7 +105,7 @@ func TestRender(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := Render(tt.pattern, ctx)
+			got, err := Render(tt.pattern, ctx, tt.sep)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("Render(%q) succeeded with %q, want error", tt.pattern, got)

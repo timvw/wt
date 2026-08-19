@@ -63,7 +63,7 @@ func repoPlacementPath(info repoInfo, branch string) (string, error) {
 		"branch":   tmpl.Transform(sep, branch),
 		"env":      tmpl.EnvMap(sep),
 	}
-	rendered, err := tmpl.Render(pattern, ctx)
+	rendered, err := tmpl.Render(pattern, ctx, sep)
 	if err != nil {
 		return "", err
 	}
