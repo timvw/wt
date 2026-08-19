@@ -22,7 +22,7 @@ just e2e-shells bash,zsh
 e2e/
 ├── scenarios/          # YAML test definitions (all *.yaml here are auto-discovered)
 │   ├── checkout.yaml
-│   ├── clone.yaml      # wt clone: category placement, dest override, errors
+│   ├── clone.yaml      # wt clone: placement, dest override, errors
 │   ├── create.yaml
 │   ├── hooks.yaml      # pre/post hooks, incl. pre_clone / post_clone
 │   ├── list.yaml

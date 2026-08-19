@@ -109,11 +109,6 @@ Register-ArgumentCompleter -CommandName wt -ScriptBlock {
             $branches | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
                 [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
             }
-        } elseif ($subCommand -in @('clone', 'cl')) {
-            # Builtin categories; user-defined ones from config are not listed here.
-            @('work', 'personal', 'oss') | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
-                [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
-            }
         } elseif ($subCommand -in @('remove', 'rm')) {
             # Complete branch names from existing worktrees
             $branches = git worktree list 2>$null | Select-Object -Skip 1 | ForEach-Object {
@@ -256,11 +251,6 @@ if [ -n "$BASH_VERSION" ]; then
                 COMPREPLY=( $(compgen -W "$branches" -- "$cur") )
                 return 0
                 ;;
-            clone|cl)
-                # Builtin categories; user-defined ones from config are not listed here.
-                COMPREPLY=( $(compgen -W "work personal oss" -- "$cur") )
-                return 0
-                ;;
             config)
                 COMPREPLY=( $(compgen -W "init show path" -- "$cur") )
                 return 0
@@ -319,12 +309,6 @@ if [ -n "$ZSH_VERSION" ]; then
                 cd|sw)
                     branches=(${(f)"$(git worktree list 2>/dev/null | sed -n 's/.*\[\([^]]*\)\].*/\1/p')"})
                     _describe 'branch' branches
-                    ;;
-                clone|cl)
-                    # Builtin categories; user-defined ones from config are not listed here.
-                    local -a cats
-                    cats=(work personal oss)
-                    _describe 'category' cats
                     ;;
                 config)
                     local -a config_cmds
@@ -488,8 +472,6 @@ end
 complete -c wt -n "__fish_seen_subcommand_from checkout co create" -a "(__wt_complete_branches)"
 complete -c wt -n "__fish_seen_subcommand_from remove rm" -a "(__wt_complete_worktree_branches)"
 complete -c wt -n "__fish_seen_subcommand_from cd sw" -a "(__wt_complete_all_worktree_branches)"
-# Builtin categories; user-defined ones from config are not listed here.
-complete -c wt -n "__fish_seen_subcommand_from clone cl" -a "work personal oss"
 complete -c wt -n "__fish_seen_subcommand_from config" -a "init show path"
 `
 }

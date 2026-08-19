@@ -12,51 +12,30 @@ import (
 )
 
 var cloneCmd = &cobra.Command{
-	Use:     "clone <category> <owner/repo|url> [dest]",
+	Use:     "clone <owner/repo|url> [dest]",
 	Aliases: []string{"cl"},
-	Short:   "Clone a repository into a category's canonical location",
-	Long: `Clone a repository into the canonical location for a category.
+	Short:   "Clone a repository into its canonical location",
+	Long: `Clone a repository into its canonical location under repo_root.
 
 Unlike the worktree commands, clone acquires the main repository itself. The
-clone is placed under the category's repo_root using an owner/repo/branch layout
-(where branch is the remote's default branch) and left on that branch, ready to
-inspect. A worktree can be added later with the usual wt commands.
+clone is placed using repo_pattern (by default host/owner/repo/default-branch)
+and left on its default branch, ready to inspect. A worktree can be added later
+with the usual wt commands.
 
-The <owner/repo> form is resolved to a clone URL via gh (or glab), honoring the
-category's git_protocol. A full git URL is used as-is. Pass an explicit [dest]
-to override placement.`,
-	Args: cobra.RangeArgs(2, 3),
+The <owner/repo> form is resolved to a clone URL via gh (or glab). A full git
+URL is used as-is. Pass an explicit [dest] to override placement.`,
+	Args: cobra.RangeArgs(1, 2),
 	RunE: runClone,
 }
 
 func runClone(cmd *cobra.Command, args []string) error {
-	categoryName := args[0]
-	src := args[1]
+	src := args[0]
 	dest := ""
-	if len(args) > 2 {
-		dest = args[2]
+	if len(args) > 1 {
+		dest = args[1]
 	}
 
-	cat, ok := resolveCategory(categoryName)
-	if !ok {
-		return fmt.Errorf("unknown category %q (known: %s)", categoryName, strings.Join(knownCategoryNames(), ", "))
-	}
-	cat, err := expandCategoryTemplates(cat, categoryName)
-	if err != nil {
-		return err
-	}
-
-	// Switch auth context before resolving/cloning. Best-effort: a failure here
-	// (e.g. account not configured) is a warning, not fatal.
-	if cat.GHAuth != "" {
-		if _, err := exec.LookPath("gh"); err == nil {
-			if err := ghAuthSwitch(cat.GHAuth); err != nil {
-				fmt.Fprintf(os.Stderr, "⚠ gh auth switch to %q failed: %v (continuing with current account)\n", cat.GHAuth, err)
-			}
-		}
-	}
-
-	url, err := resolveCloneURL(src, cat)
+	url, err := resolveCloneURL(src)
 	if err != nil {
 		return err
 	}
@@ -65,11 +44,16 @@ func runClone(cmd *cobra.Command, args []string) error {
 	// unusual URLs may not parse; that's fine when an explicit dest is given.
 	info, _ := parseRemoteURL(url)
 
+	// Resolved up front rather than only for {.branch} patterns: clone hooks get
+	// it as WT_BRANCH, so an explicit destination needs it too. Falls back to
+	// "main" when the remote is unreachable — the clone below then fails anyway.
+	branch := resolveDefaultBranch(url)
+
 	var target string
 	if dest != "" {
 		target = filepath.Clean(expandHome(dest))
 	} else {
-		target, err = repoPlacementPath(categoryName, cat, info, url)
+		target, err = repoPlacementPath(info, branch)
 		if err != nil {
 			return err
 		}
@@ -85,12 +69,17 @@ func runClone(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create parent dir for %s: %w", target, err)
 	}
 
-	hookEnv := buildHookEnv(info, "", target)
+	// The clone is its own main worktree, so WT_MAIN and WT_PATH are the same
+	// path here. parseRemoteURL never sets Main (it only reads the URL), so it
+	// has to be filled in explicitly or hooks would see an empty WT_MAIN.
+	info.Main = target
+	hookEnv := buildHookEnv(info, branch, target)
 	if err := runHooks("pre_clone", getHooks("pre_clone"), hookEnv); err != nil {
 		return fmt.Errorf("pre-clone hook failed: %w", err)
 	}
 
-	c := exec.Command("git", "clone", url, target)
+	// "--" keeps a source that begins with "-" from being read as a git option.
+	c := exec.Command("git", "clone", "--", url, target)
 	if !isJSONOutput() {
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
@@ -107,7 +96,6 @@ func runClone(cmd *cobra.Command, args []string) error {
 	if isJSONOutput() {
 		return emitJSONSuccess(cmd, map[string]any{
 			"status":      "cloned",
-			"category":    categoryName,
 			"url":         url,
 			"path":        target,
 			"navigate_to": target,
@@ -121,16 +109,12 @@ func runClone(cmd *cobra.Command, args []string) error {
 
 // resolveCloneURL turns the clone source into a git URL. A full URL (scheme or
 // scp-like host:path) is used verbatim; an owner/repo shorthand is resolved via
-// gh/glab honoring the category's git_protocol.
-func resolveCloneURL(src string, cat Category) (string, error) {
+// gh/glab, each honoring its own configured git_protocol.
+func resolveCloneURL(src string) (string, error) {
 	if !looksLikeGHNameWithOwner(src) {
 		return src, nil
 	}
-	proto := cat.GitProtocol
-	if proto == "" {
-		proto = ghGitProtocol()
-	}
-	if url := resolveOwnerRepoURL(src, proto, cat.GLabHost); url != "" {
+	if url := resolveOwnerRepoURL(src); url != "" {
 		return url, nil
 	}
 	return "", fmt.Errorf("could not resolve %q to a clone URL via gh or glab; pass a full git URL", src)
@@ -161,15 +145,17 @@ func looksLikeGHNameWithOwner(name string) bool {
 }
 
 // resolveOwnerRepoURL resolves an owner/repo to a clone URL, trying gh first
-// then glab. Returns "" when neither can resolve it.
-func resolveOwnerRepoURL(nameWithOwner, proto, glabHost string) string {
+// then glab. Each tool's own git_protocol setting decides ssh vs https, so a
+// GitLab-only user is not held to whatever gh happens to be configured for.
+// Returns "" when neither can resolve it.
+func resolveOwnerRepoURL(nameWithOwner string) string {
 	if _, err := exec.LookPath("gh"); err == nil {
-		if url := resolveGHRepoURL(nameWithOwner, proto); url != "" {
+		if url := resolveGHRepoURL(nameWithOwner, gitProtocol("gh")); url != "" {
 			return url
 		}
 	}
 	if _, err := exec.LookPath("glab"); err == nil {
-		return resolveGLabRepoURL(nameWithOwner, glabHost)
+		return resolveGLabRepoURL(nameWithOwner, gitProtocol("glab"))
 	}
 	return ""
 }
@@ -192,10 +178,10 @@ func resolveGHRepoURL(nameWithOwner, proto string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// ghGitProtocol reads gh's configured git_protocol, defaulting to ssh.
-func ghGitProtocol() string {
-	c := exec.Command("gh", "config", "get", "git_protocol")
-	out, err := c.Output()
+// gitProtocol reads the git_protocol setting of gh or glab (both spell the
+// command the same way), defaulting to ssh when the tool is absent or unset.
+func gitProtocol(tool string) string {
+	out, err := exec.Command(tool, "config", "get", "git_protocol").Output()
 	if err != nil {
 		return "ssh"
 	}
@@ -205,14 +191,10 @@ func ghGitProtocol() string {
 	return "ssh"
 }
 
-// resolveGLabRepoURL asks glab for a clone URL, preferring ssh. host, when set,
-// selects the GitLab instance via --hostname.
-func resolveGLabRepoURL(nameWithOwner, host string) string {
-	args := []string{"repo", "view", nameWithOwner, "--output", "json"}
-	if host != "" {
-		args = append([]string{"--hostname", host}, args...)
-	}
-	c := exec.Command("glab", args...)
+// resolveGLabRepoURL asks glab for a clone URL, honoring proto the same way the
+// gh path does rather than always preferring ssh.
+func resolveGLabRepoURL(nameWithOwner, proto string) string {
+	c := exec.Command("glab", "repo", "view", nameWithOwner, "--output", "json")
 	out, err := c.Output()
 	if err != nil {
 		return ""
@@ -224,21 +206,12 @@ func resolveGLabRepoURL(nameWithOwner, host string) string {
 	if err := json.Unmarshal(out, &r); err != nil {
 		return ""
 	}
-	if r.SSHURLToRepo != "" {
-		return r.SSHURLToRepo
+	primary, fallback := r.SSHURLToRepo, r.HTTPURLToRepo
+	if proto == "https" {
+		primary, fallback = r.HTTPURLToRepo, r.SSHURLToRepo
 	}
-	return r.HTTPURLToRepo
-}
-
-// ghAuthSwitch switches the active gh account. No-op on empty account.
-func ghAuthSwitch(account string) error {
-	if account == "" {
-		return nil
+	if primary != "" {
+		return primary
 	}
-	c := exec.Command("gh", "auth", "switch", "--user", account)
-	out, err := c.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s: %w", strings.TrimSpace(string(out)), err)
-	}
-	return nil
+	return fallback
 }

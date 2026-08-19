@@ -71,10 +71,9 @@ var infoCmd = &cobra.Command{
 				},
 				"pattern_variables": []string{"{.repo.Name}", "{.repo.Main}", "{.repo.Owner}", "{.repo.Host}", "{.branch}", "{.worktreeRoot}", "{.env.VARNAME}"},
 				"hooks":             hooks,
-				"categories":        collectCategoriesForDisplay(),
 				"repo_pattern": map[string]any{
 					"value":     repoPattern,
-					"variables": []string{"{.category.RepoRoot}", "{.repo.Host}", "{.repo.Owner}", "{.repo.Name}", "{.branch}"},
+					"variables": []string{"{.repoRoot}", "{.repo.Host}", "{.repo.Owner}", "{.repo.Name}", "{.branch}", "{.env.VARNAME}"},
 				},
 			})
 		}
@@ -107,14 +106,10 @@ Note: The separator setting controls how "/" and "\" in value variables are repl
 Note: {.env.VARNAME} accesses the environment variable VARNAME (e.g. {.env.HOME}).
 `, configFilePath, configStatus, repoLine, worktreeStrategy, pattern, worktreeRoot, worktreeSeparator)
 
-		// Show categories + clone placement (used by wt clone)
-		fmt.Printf("Repo root (base):        %s\n", reposRoot)
+		// Show clone placement (used by wt clone)
+		fmt.Printf("Repo root (wt clone):    %s\n", reposRoot)
 		fmt.Printf("Repo pattern (wt clone): %s\n", repoPattern)
-		fmt.Println("Repo pattern variables: {.category.RepoRoot}, {.repo.Host}, {.repo.Owner}, {.repo.Name}")
-		fmt.Println("Categories:")
-		for _, c := range collectCategoriesForDisplay() {
-			fmt.Printf("  %-12s -> %s (%s)\n", c["name"], displayOrNone(c["repo_root"]), c["defined_in"])
-		}
+		fmt.Println("Repo pattern variables: {.repoRoot}, {.repo.Host}, {.repo.Owner}, {.repo.Name}, {.branch}, {.env.VARNAME}")
 		fmt.Println()
 
 		// Show configured hooks

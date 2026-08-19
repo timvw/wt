@@ -15,7 +15,7 @@ Inspired by [haacked/dotfiles/tree-me](https://github.com/haacked/dotfiles/blob/
 ## Features
 
 - Configurable worktree strategies: `global`, `sibling-repo`, `parent-branches`, and more
-- **Clone into organized locations** — `wt clone` acquires a repo into a category's `repo_root` (`<host>/<owner>/<repo>`), ready to inspect
+- **Clone into organized locations** — `wt clone` acquires a repo under `repo_root` (`<host>/<owner>/<repo>/<branch>`), ready to inspect
 - Simple commands for common worktree operations
 - **Interactive selection menus** with fuzzy matching for checkout, cd, remove, pr, and mr commands
 - GitHub PR support via `wt pr` command (uses `gh` CLI) — checks out the PR's actual branch name
@@ -42,17 +42,28 @@ See [docs/installation.md](docs/installation.md) for all platforms (Scoop, WinGe
 ### Clone
 
 ```bash
-# Acquire the main repository for a category, ready to inspect.
-# Placed under the category's repo_root as <repo_root>/<host>/<owner>/<repo>,
-# left on its default branch (no worktree yet — add one later with wt create).
-wt clone oss timvw/wt                              # owner/repo resolved via gh/glab
-wt clone personal git@github.com:me/dotfiles.git   # full URL used as-is
-wt clone work acme/api ~/src/api                   # explicit destination
+# Acquire the main repository, ready to inspect. Placed under repo_root as
+# <repo_root>/<host>/<owner>/<repo>/<default-branch>, left on its default branch
+# (that trailing segment makes the clone a normal worktree slot, so wt create
+# later puts siblings next to it).
+wt clone timvw/wt                              # owner/repo resolved via gh/glab
+wt clone git@github.com:me/dotfiles.git        # full URL used as-is
+wt clone acme/api ~/src/api                    # explicit destination
 ```
 
-Categories (builtin: `work`, `personal`, `oss`; extend under `[categories.*]` in
-config) define where clones land (`repo_root`) and the auth profile (`gh_auth`,
-`git_protocol`, `glab_host`) used to reach them.
+Two settings control placement: `repo_root` (default `~/dev/repos`) and
+`repo_pattern`. Grouping levels like "work" vs "personal" are yours to define —
+put an env var in the pattern:
+
+```toml
+repo_pattern = "{.repoRoot}/{.env.WT_CATEGORY}/{.repo.Owner}/{.repo.Name}/{.branch}"
+```
+
+```bash
+export WT_CATEGORY=personal          # default, e.g. in your shell rc
+WT_CATEGORY=work wt clone acme/api   # ~/dev/repos/work/acme/api/main
+wt clone timvw/wt                    # ~/dev/repos/personal/timvw/wt/main
+```
 
 ### Checkout & Create
 

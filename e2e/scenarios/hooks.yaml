@@ -140,20 +140,34 @@ scenarios:
     skip_os: [windows]
     skip_shellenv: true
     steps:
-      # Clone the test repo locally (builtin category 'personal') with a post_clone hook.
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_clone = ["touch $WT_PATH/.clone-hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN clone personal "$REPO_DIR" "$TEST_DIR/clone-dest"
+      # Clone the test repo locally with a post_clone hook.
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_clone = ["touch $WT_PATH/.clone-hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN clone "$REPO_DIR" "$TEST_DIR/clone-dest"
         expect:
           exit_code: 0
       - run: test -f "$TEST_DIR/clone-dest/.clone-hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
         expect:
           output_contains: "HOOK_RAN"
 
+  - name: clone_hook_env_has_branch
+    description: Clone hooks receive WT_BRANCH (the remote's default branch)
+    skip_os: [windows]
+    skip_shellenv: true
+    steps:
+      # The exact name depends on the runner's init.defaultBranch, so only
+      # assert that WT_BRANCH is populated rather than a specific value.
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_clone = ["printf %%s \\"$WT_BRANCH\\" > $WT_PATH/.clone-branch"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN clone "$REPO_DIR" "$TEST_DIR/branch-dest"
+        expect:
+          exit_code: 0
+      - run: test -s "$TEST_DIR/branch-dest/.clone-branch" && echo "BRANCH_SET" || echo "BRANCH_EMPTY"
+        expect:
+          output_contains: "BRANCH_SET"
+
   - name: pre_clone_hook_aborts
     description: Pre-clone hook failure prevents clone
     skip_os: [windows]
     skip_shellenv: true
     steps:
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_clone = ["false"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN clone personal "$REPO_DIR" "$TEST_DIR/blocked-clone"
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_clone = ["false"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN clone "$REPO_DIR" "$TEST_DIR/blocked-clone"
         expect:
           exit_code: 1
       - run: test -d "$TEST_DIR/blocked-clone" && echo "EXISTS" || echo "ABSENT"

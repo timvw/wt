@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -46,113 +45,154 @@ func TestLooksLikeGHNameWithOwner(t *testing.T) {
 	}
 }
 
-func TestRepoPlacementPathNested(t *testing.T) {
-	repoPattern = defaultRepoPattern
-	cat := Category{RepoRoot: "/tmp/repos/work"}
+// withCloneConfig sets the clone placement globals for a test and restores them.
+func withCloneConfig(t *testing.T, root, pattern string) {
+	t.Helper()
+	origRoot, origPattern, origSep := reposRoot, repoPattern, worktreeSeparator
+	t.Cleanup(func() {
+		reposRoot, repoPattern, worktreeSeparator = origRoot, origPattern, origSep
+	})
+	reposRoot = root
+	repoPattern = pattern
+	worktreeSeparator = "/"
+}
+
+func TestRepoPlacementPathDefault(t *testing.T) {
+	withCloneConfig(t, filepath.FromSlash("/tmp/repos"), defaultRepoPattern)
 	info := repoInfo{Host: "github.com", Owner: "timvw", Name: "wt"}
 
-	// Empty URL → resolveDefaultBranch returns "main" (git ls-remote unreachable).
-	got, err := repoPlacementPath("work", cat, info, "")
+	got, err := repoPlacementPath(info, "main")
 	if err != nil {
 		t.Fatalf("repoPlacementPath: %v", err)
 	}
-	want := filepath.Clean("/tmp/repos/work/timvw/wt/main")
+	want := filepath.FromSlash("/tmp/repos/github.com/timvw/wt/main")
 	if got != want {
 		t.Errorf("repoPlacementPath = %q, want %q", got, want)
 	}
 }
 
-func TestRepoPlacementPathWithBranchLiteral(t *testing.T) {
-	repoPattern = "{.category.RepoRoot}/{.repo.Owner}/{.repo.Name}/{.branch}"
-	defer func() { repoPattern = defaultRepoPattern }()
-	cat := Category{RepoRoot: "/tmp/repos/oss"}
-	info := repoInfo{Host: "github.com", Owner: "timvw", Name: "wt"}
+// The env-var escape hatch is what replaces a built-in "category" concept:
+// users add their own grouping level through repo_pattern.
+func TestRepoPlacementPathEnvCategory(t *testing.T) {
+	withCloneConfig(t, filepath.FromSlash("/tmp/repos"), "{.repoRoot}/{.env.WT_TEST_CATEGORY}/{.repo.Owner}/{.repo.Name}/{.branch}")
+	info := repoInfo{Host: "github.com", Owner: "acme", Name: "api"}
 
-	// Stub resolveDefaultBranch by pre-setting a known value via a wrapper test.
-	// We can't mock gh in unit tests, so verify the path shape when branch = "main"
-	// by using the resolveDefaultBranch fallback (no gh in test env → "main").
-	got, err := repoPlacementPath("oss", cat, info, "")
+	t.Setenv("WT_TEST_CATEGORY", "work")
+	got, err := repoPlacementPath(info, "main")
 	if err != nil {
 		t.Fatalf("repoPlacementPath: %v", err)
 	}
-	// Branch will be whatever resolveDefaultBranch returns (likely "main" in CI).
-	// Just verify it's non-empty and the path structure is correct.
-	wantBase := filepath.FromSlash("/tmp/repos/oss/timvw/wt")
-	if got == wantBase {
-		t.Errorf("repoPlacementPath with {.branch} should include a branch segment, got %q", got)
+	want := filepath.FromSlash("/tmp/repos/work/acme/api/main")
+	if got != want {
+		t.Errorf("repoPlacementPath = %q, want %q", got, want)
 	}
-	if !strings.HasPrefix(got, wantBase+string(filepath.Separator)) {
-		t.Errorf("repoPlacementPath = %q, want prefix %q/", got, wantBase)
+
+	// An empty value collapses the segment away rather than leaving "//".
+	t.Setenv("WT_TEST_CATEGORY", "")
+	got, err = repoPlacementPath(info, "main")
+	if err != nil {
+		t.Fatalf("repoPlacementPath (empty category): %v", err)
+	}
+	want = filepath.FromSlash("/tmp/repos/acme/api/main")
+	if got != want {
+		t.Errorf("repoPlacementPath with empty category = %q, want %q", got, want)
+	}
+}
+
+// A pattern that omits {.repoRoot} must not clone into the caller's cwd.
+func TestRepoPlacementPathAnchorsRelativePattern(t *testing.T) {
+	withCloneConfig(t, filepath.FromSlash("/tmp/repos"), "{.repo.Owner}/{.repo.Name}")
+	info := repoInfo{Host: "github.com", Owner: "timvw", Name: "wt"}
+
+	got, err := repoPlacementPath(info, "main")
+	if err != nil {
+		t.Fatalf("repoPlacementPath: %v", err)
+	}
+	if !filepath.IsAbs(got) {
+		t.Fatalf("repoPlacementPath returned relative path %q", got)
+	}
+	want := filepath.FromSlash("/tmp/repos/timvw/wt")
+	if got != want {
+		t.Errorf("repoPlacementPath = %q, want %q", got, want)
 	}
 }
 
 func TestRepoPlacementPathRequiresRepoInfo(t *testing.T) {
-	cat := Category{RepoRoot: "/tmp/repos/work"}
-	// Missing owner/host (e.g. a local path source) must error, prompting for
-	// an explicit destination instead of producing a malformed path.
-	if _, err := repoPlacementPath("work", cat, repoInfo{Name: "wt"}, ""); err == nil {
+	withCloneConfig(t, filepath.FromSlash("/tmp/repos"), defaultRepoPattern)
+	// Missing owner (e.g. a local path source) must error, prompting for an
+	// explicit destination instead of producing a malformed path.
+	if _, err := repoPlacementPath(repoInfo{Name: "wt"}, "main"); err == nil {
 		t.Error("expected error for incomplete repoInfo, got nil")
 	}
 }
 
+// A URL pasted from an untrusted source must not walk the clone out of
+// repo_root: https://host/../../../tmp/pwn.git parses to owner "../../../tmp".
+func TestRepoPlacementPathRejectsTraversal(t *testing.T) {
+	withCloneConfig(t, filepath.FromSlash("/tmp/repos"), defaultRepoPattern)
+
+	// Escapes via the path, and via the host: an scp-like source parses
+	// everything before the colon as the host.
+	for _, src := range []string{
+		"https://github.com/../../../tmp/pwn.git",
+		"https://../owner/repo.git",
+		"../escape:owner/repo.git",
+	} {
+		info, ok := parseRemoteURL(src)
+		if !ok {
+			t.Fatalf("parseRemoteURL(%q) failed; test no longer exercises the traversal path", src)
+		}
+		if _, err := repoPlacementPath(info, "main"); err == nil {
+			t.Errorf("expected error for %q, got nil", src)
+		}
+	}
+
+	// The same guard applies to the branch segment.
+	clean := repoInfo{Host: "github.com", Owner: "timvw", Name: "wt"}
+	if _, err := repoPlacementPath(clean, "../../escape"); err == nil {
+		t.Error("expected error for branch containing \"..\", got nil")
+	}
+
+	// A ".." inside a segment is a legitimate host and must still resolve.
+	if _, err := repoPlacementPath(repoInfo{Host: "a..b", Owner: "o", Name: "r"}, "main"); err != nil {
+		t.Errorf("host %q should be allowed: %v", "a..b", err)
+	}
+}
+
+func TestHasDotDotSegment(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"timvw", false},
+		{"group/subgroup", false},
+		{"..hidden", false}, // sub-segment, not a component
+		{"a/..b/c", false},
+		{"..", true},
+		{"../../tmp", true},
+		{"group/../etc", true},
+		{`group\..\etc`, true}, // Windows separator
+	}
+	for _, c := range cases {
+		if got := hasDotDotSegment(c.in); got != c.want {
+			t.Errorf("hasDotDotSegment(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
 func TestResolveCloneURLPassthrough(t *testing.T) {
-	cat := Category{}
 	for _, src := range []string{
 		"https://github.com/timvw/wt.git",
 		"git@github.com:timvw/wt.git",
 		"/abs/local/repo",
 		"./rel/repo",
 	} {
-		got, err := resolveCloneURL(src, cat)
+		got, err := resolveCloneURL(src)
 		if err != nil {
 			t.Errorf("resolveCloneURL(%q) error: %v", src, err)
 		}
 		if got != src {
 			t.Errorf("resolveCloneURL(%q) = %q, want passthrough", src, got)
 		}
-	}
-}
-
-func TestResolveCategoryDerivesRepoRoot(t *testing.T) {
-	origRepos := reposRoot
-	origCats := configCategories
-	origDefaults := categoryDefaults
-	t.Cleanup(func() {
-		reposRoot = origRepos
-		configCategories = origCats
-		categoryDefaults = origDefaults
-	})
-
-	reposRoot = "/base/repos"
-	categoryDefaults = Category{}
-	configCategories = map[string]Category{
-		"custom": {GHAuth: "x"},           // no repo_root -> derive from base
-		"pinned": {RepoRoot: "/explicit"}, // explicit repo_root wins
-	}
-
-	// Builtin with no repo_root derives <base>/<name>.
-	if work, ok := resolveCategory("work"); !ok || work.RepoRoot != filepath.Join("/base/repos", "work") {
-		t.Errorf("work RepoRoot = %q, want /base/repos/work", work.RepoRoot)
-	}
-	// Config category without repo_root also derives.
-	if c, _ := resolveCategory("custom"); c.RepoRoot != filepath.Join("/base/repos", "custom") {
-		t.Errorf("custom RepoRoot = %q, want /base/repos/custom", c.RepoRoot)
-	}
-	// Explicit repo_root is preserved, not derived.
-	if p, _ := resolveCategory("pinned"); p.RepoRoot != "/explicit" {
-		t.Errorf("pinned RepoRoot = %q, want /explicit", p.RepoRoot)
-	}
-}
-
-func TestResolveCategoryBuiltins(t *testing.T) {
-	configCategories = map[string]Category{}
-	categoryDefaults = Category{}
-	for _, name := range []string{"work", "personal", "oss"} {
-		if _, ok := resolveCategory(name); !ok {
-			t.Errorf("builtin category %q not resolvable", name)
-		}
-	}
-	if _, ok := resolveCategory("does-not-exist"); ok {
-		t.Error("unknown category resolved unexpectedly")
 	}
 }

@@ -125,51 +125,66 @@ and `feature/foo` still map to names that collide on a case-insensitive
 filesystem. Avoid case-only branch differences, or place the repository and
 worktree root on a case-sensitive filesystem.
 
-## Categories (for `wt clone`)
+## Clone placement (for `wt clone`)
 
-`wt clone` places a cloned repository into the canonical location for a
-**category** — an organizational context that groups repositories and carries
-an auth profile. Three categories ship built in (`work`, `personal`, `oss`).
-
-Canonical clones live under a single top-level `repo_root` (default
-`~/dev/repos`), and each category's location defaults to
-`<repo_root>/<category-name>` — so relocating everything is one setting:
+`wt clone` acquires a repository you don't have yet and puts it in a
+predictable spot. Two settings decide where:
 
 ```toml
-# Base for all canonical clones (default: ~/dev/repos).
+# Base for all clones (default: ~/dev/repos).
 repo_root = "~/dev/repos"
 
-# Categories only need to override what differs from the defaults.
-[categories.work]
-gh_auth      = "work"    # gh account (gh auth switch --user); repo_root -> <repo_root>/work
-git_protocol = "ssh"     # ssh|https for owner/repo -> clone URL
-
-[categories.personal]
-gh_auth = "personal"     # repo_root -> <repo_root>/personal
-
-[categories.client]
-repo_root = "~/clients/acme/src"   # explicit override, ignores the base
-glab_host = "gitlab.acme.com"
-
-# Reserved for future use.
-default_category = "personal"
-
-# Placement layout for cloned repos. Variables: {.category.RepoRoot},
-# {.repo.Host}, {.repo.Owner}, {.repo.Name}, {.branch}.
+# Placement layout. Variables: {.repoRoot}, {.repo.Host}, {.repo.Owner},
+# {.repo.Name}, {.branch}, {.env.VARNAME}.
 # {.branch} is the remote's default branch (via git ls-remote, fallback "main").
-# Default: owner/repo/branch. Add {.repo.Host} for multi-forge categories.
-repo_pattern = "{.category.RepoRoot}/{.repo.Owner}/{.repo.Name}/{.branch}"
+repo_pattern = "{.repoRoot}/{.repo.Host}/{.repo.Owner}/{.repo.Name}/{.branch}"
 ```
 
-`wt clone work timvw/wt` then clones into
-`~/dev/repos/work/timvw/wt/main`, switching the active `gh` account to
-`work` and resolving the clone URL over `ssh`. A full git URL is used as-is; an
-explicit destination argument overrides the layout. The repository is left on
-its default branch, ready to inspect — add a worktree later with the usual
-`wt` commands.
+`wt clone timvw/wt` then clones into `~/dev/repos/github.com/timvw/wt/main`.
+A full git URL is used as-is; an explicit destination argument overrides the
+layout entirely. The repository is left on its default branch, ready to
+inspect.
 
-The base is also settable via the `WT_REPO_ROOT` environment variable, which
-overrides the config file.
+The trailing `{.branch}` is deliberate: it makes the clone look like any other
+worktree of that repo, so a later `wt create feat/x` can drop a sibling next to
+it instead of nesting inside it. Drop it if you prefer a bare
+`<owner>/<repo>` checkout.
+
+Both settings are also settable via environment variables — `WT_REPO_ROOT` and
+`WT_REPO_PATTERN` — which override the config file. Neither is read from a
+repo-level `.wt.toml`: `wt clone` targets a repository other than the one you
+are standing in, so letting that repo's config redirect the destination (or run
+clone hooks) would be wrong.
+
+### Grouping clones ("categories")
+
+There is no built-in notion of work/personal/oss. If you want that grouping,
+express it yourself with an environment variable in the pattern:
+
+```toml
+repo_pattern = "{.repoRoot}/{.env.WT_CATEGORY}/{.repo.Owner}/{.repo.Name}/{.branch}"
+```
+
+```bash
+export WT_CATEGORY=personal          # default, e.g. in your shell rc
+WT_CATEGORY=work wt clone acme/api   # ~/dev/repos/work/acme/api/main
+wt clone timvw/wt                    # ~/dev/repos/personal/timvw/wt/main
+```
+
+The variable must exist: referencing one that is unset is an error (that is
+what catches `{.env.HOEM}` typos), so give it a default in your shell rc.
+Setting it to the empty string is fine — the segment collapses away rather than
+leaving an empty directory level, so `WT_CATEGORY= wt clone timvw/wt` lands in
+`~/dev/repos/timvw/wt/main`.
+
+Auth works the same way. `wt clone` resolves `owner/repo` through whichever
+account `gh`/`glab` is already using, so select the account the way those tools
+intend — `GH_CONFIG_DIR`, `GH_TOKEN`, `GLAB_HOST` — rather than having `wt`
+mutate their global state:
+
+```bash
+GH_CONFIG_DIR=~/.config/gh-work wt clone acme/api
+```
 
 ## Hooks
 

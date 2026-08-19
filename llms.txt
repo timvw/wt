@@ -11,7 +11,7 @@ What wt is
 Section A: Using wt (installed tool consumers)
 - Use this section if you are helping someone USE wt, not modify this repository.
 - Primary commands:
-  - wt clone <category> <owner/repo|url> [dest] (alias: wt cl) — acquire the main repo into a category's repo_root
+  - wt clone <owner/repo|url> [dest] (alias: wt cl) — acquire the main repo under repo_root
   - wt create <branch> [base-branch]
   - wt checkout <branch> (alias: wt co)
   - wt cd <branch> (alias: wt sw) — switch to an existing worktree; never creates one
@@ -41,9 +41,11 @@ Section B: Contributing to wt (project authors/maintainers)
 
 Configuration and hooks
 - Config file: ~/.config/wt/config.toml (or WT_CONFIG / --config)
-- Key settings: root, strategy, pattern, separator, categories, repo_pattern, default_category
-- Env overrides: WORKTREE_ROOT, WORKTREE_STRATEGY, WORKTREE_PATTERN, WORKTREE_SEPARATOR
-- Categories (for wt clone): [categories.<name>] with repo_root, gh_auth, git_protocol, glab_host; builtins work/personal/oss
+- Key settings: root, strategy, pattern, separator, repo_root, repo_pattern
+- Env overrides: WORKTREE_ROOT, WORKTREE_STRATEGY, WORKTREE_PATTERN, WORKTREE_SEPARATOR, WT_REPO_ROOT, WT_REPO_PATTERN
+- Clone placement (wt clone): repo_root (default ~/dev/repos) + repo_pattern (default {.repoRoot}/{.repo.Host}/{.repo.Owner}/{.repo.Name}/{.branch})
+- There is no built-in category concept: add a grouping segment yourself via {.env.VARNAME} in repo_pattern
+- repo_root, repo_pattern and clone hooks are NOT read from a repo-level .wt.toml (clone targets another repository)
 - Supported hooks: pre/post create, checkout, remove, pr, mr, clone
 - Hook env vars: WT_PATH, WT_BRANCH, WT_MAIN, WT_REPO_NAME, WT_REPO_HOST, WT_REPO_OWNER
 - Disable hooks: WT_HOOKS_DISABLED=1

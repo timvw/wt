@@ -50,15 +50,13 @@ var configShowCmd = &cobra.Command{
 					"status": configStatus,
 				},
 				"effective": map[string]any{
-					"root":             map[string]string{"value": worktreeRoot, "source": configSources.Root},
-					"repo_root":        map[string]string{"value": reposRoot, "source": configSources.RepoRoot},
-					"strategy":         map[string]string{"value": worktreeStrategy, "source": configSources.Strategy},
-					"pattern":          map[string]string{"value": pattern, "source": configSources.Pattern},
-					"separator":        map[string]string{"value": worktreeSeparator, "source": configSources.Separator},
-					"repo_pattern":     map[string]string{"value": repoPattern, "source": configSources.RepoPattern},
-					"default_category": map[string]string{"value": configDefaultCategory, "source": configSources.DefaultCategory},
+					"root":         map[string]string{"value": worktreeRoot, "source": configSources.Root},
+					"repo_root":    map[string]string{"value": reposRoot, "source": configSources.RepoRoot},
+					"strategy":     map[string]string{"value": worktreeStrategy, "source": configSources.Strategy},
+					"pattern":      map[string]string{"value": pattern, "source": configSources.Pattern},
+					"separator":    map[string]string{"value": worktreeSeparator, "source": configSources.Separator},
+					"repo_pattern": map[string]string{"value": repoPattern, "source": configSources.RepoPattern},
 				},
-				"categories": collectCategoriesForDisplay(),
 			}
 			if configRepoFound {
 				data["repo_config"] = map[string]string{
@@ -74,51 +72,28 @@ var configShowCmd = &cobra.Command{
 			fmt.Printf("Repo config: %s (found)\n", configRepoPath)
 		}
 		fmt.Println()
+		rows := []struct{ key, value, source string }{
+			{"root", worktreeRoot, configSources.Root},
+			{"repo_root", reposRoot, configSources.RepoRoot},
+			{"strategy", worktreeStrategy, configSources.Strategy},
+			{"pattern", pattern, configSources.Pattern},
+			{"separator", fmt.Sprintf("%q", worktreeSeparator), configSources.Separator},
+			{"repo_pattern", repoPattern, configSources.RepoPattern},
+		}
+		// Size the value column to the widest value (min 40) so long patterns
+		// don't push their source marker out of the column.
+		width := 40
+		for _, r := range rows {
+			if len(r.value) > width {
+				width = len(r.value)
+			}
+		}
 		fmt.Printf("Effective configuration:\n")
-		fmt.Printf("  %-16s = %-40s (%s)\n", "root", worktreeRoot, configSources.Root)
-		fmt.Printf("  %-16s = %-40s (%s)\n", "repo_root", reposRoot, configSources.RepoRoot)
-		fmt.Printf("  %-16s = %-40s (%s)\n", "strategy", worktreeStrategy, configSources.Strategy)
-		fmt.Printf("  %-16s = %-40s (%s)\n", "pattern", pattern, configSources.Pattern)
-		fmt.Printf("  %-16s = %-40s (%s)\n", "separator", fmt.Sprintf("%q", worktreeSeparator), configSources.Separator)
-		fmt.Printf("  %-16s = %-40s (%s)\n", "repo_pattern", repoPattern, configSources.RepoPattern)
-		fmt.Printf("  %-16s = %-40s (%s)\n", "default_category", displayOrNone(configDefaultCategory), configSources.DefaultCategory)
-
-		fmt.Println()
-		fmt.Printf("Categories (used by wt clone):\n")
-		for _, c := range collectCategoriesForDisplay() {
-			fmt.Printf("  %-12s repo_root=%s gh_auth=%s (%s)\n", c["name"], displayOrNone(c["repo_root"]), displayOrNone(c["gh_auth"]), c["defined_in"])
+		for _, r := range rows {
+			fmt.Printf("  %-16s = %-*s (%s)\n", r.key, width, r.value, r.source)
 		}
 		return nil
 	},
-}
-
-// collectCategoriesForDisplay resolves every known category (config + builtin)
-// for introspection, marking where each is defined.
-func collectCategoriesForDisplay() []map[string]string {
-	var out []map[string]string
-	for _, name := range knownCategoryNames() {
-		definedIn := "builtin"
-		if _, ok := configCategories[name]; ok {
-			definedIn = "config"
-		}
-		cat, _ := resolveCategory(name)
-		cat, _ = expandCategoryTemplates(cat, name)
-		out = append(out, map[string]string{
-			"name":       name,
-			"repo_root":  cat.RepoRoot,
-			"gh_auth":    cat.GHAuth,
-			"defined_in": definedIn,
-		})
-	}
-	return out
-}
-
-// displayOrNone returns s, or "(none)" when empty.
-func displayOrNone(s string) string {
-	if s == "" {
-		return "(none)"
-	}
-	return s
 }
 
 func configShowPatternValue() string {

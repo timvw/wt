@@ -318,8 +318,6 @@ func TestLoadWorktreeConfig(t *testing.T) {
 	origConfigFileFound := configFileFound
 	origConfigSources := configSources
 	origReposRoot := reposRoot
-	origCategories := configCategories
-	origDefaultCategory := configDefaultCategory
 	origRepoPattern := repoPattern
 	origEnvRoot := os.Getenv("WORKTREE_ROOT")
 	origEnvStrategy := os.Getenv("WORKTREE_STRATEGY")
@@ -335,8 +333,6 @@ func TestLoadWorktreeConfig(t *testing.T) {
 		configFileFound = origConfigFileFound
 		configSources = origConfigSources
 		reposRoot = origReposRoot
-		configCategories = origCategories
-		configDefaultCategory = origDefaultCategory
 		repoPattern = origRepoPattern
 		os.Setenv("WORKTREE_ROOT", origEnvRoot)
 		os.Setenv("WORKTREE_STRATEGY", origEnvStrategy)
@@ -372,20 +368,11 @@ func TestLoadWorktreeConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("loads categories, repo_pattern, default_category", func(t *testing.T) {
+	t.Run("loads repo_root and repo_pattern", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		cfgPath := filepath.Join(tmpDir, "config.toml")
 		cfgContent := `repo_root = "/custom/base"
-default_category = "personal"
-repo_pattern = "{.category.RepoRoot}/{.repo.Name}"
-
-[categories.work]
-repo_root = "/custom/work"
-gh_auth = "work-acct"
-git_protocol = "https"
-
-[categories.personal]
-gh_auth = "personal-acct"
+repo_pattern = "{.repoRoot}/{.repo.Name}"
 `
 		if err := os.WriteFile(cfgPath, []byte(cfgContent), 0o644); err != nil {
 			t.Fatal(err)
@@ -399,40 +386,35 @@ gh_auth = "personal-acct"
 
 		loadWorktreeConfig()
 
-		work, ok := configCategories["work"]
-		if !ok {
-			t.Fatal("expected category 'work' to be loaded")
-		}
-		if work.RepoRoot != "/custom/work" || work.GHAuth != "work-acct" || work.GitProtocol != "https" {
-			t.Errorf("work category = %+v, want repo_root=/custom/work gh_auth=work-acct git_protocol=https", work)
-		}
-		if _, ok := configCategories["personal"]; !ok {
-			t.Error("expected category 'personal' to be loaded")
-		}
 		if reposRoot != "/custom/base" {
 			t.Errorf("reposRoot = %q, want /custom/base", reposRoot)
 		}
 		if configSources.RepoRoot != "config file" {
 			t.Errorf("configSources.RepoRoot = %q, want 'config file'", configSources.RepoRoot)
 		}
-		// personal has no repo_root -> derives from base at resolve time.
-		if cat, _ := resolveCategory("personal"); cat.RepoRoot != filepath.Join("/custom/base", "personal") {
-			t.Errorf("personal derived RepoRoot = %q, want /custom/base/personal", cat.RepoRoot)
-		}
-		if configDefaultCategory != "personal" {
-			t.Errorf("configDefaultCategory = %q, want personal", configDefaultCategory)
-		}
-		if repoPattern != "{.category.RepoRoot}/{.repo.Name}" {
+		if repoPattern != "{.repoRoot}/{.repo.Name}" {
 			t.Errorf("repoPattern = %q, want custom pattern", repoPattern)
-		}
-		if configSources.Categories != "config file" {
-			t.Errorf("configSources.Categories = %q, want 'config file'", configSources.Categories)
 		}
 		if configSources.RepoPattern != "config file" {
 			t.Errorf("configSources.RepoPattern = %q, want 'config file'", configSources.RepoPattern)
 		}
-		if configSources.DefaultCategory != "config file" {
-			t.Errorf("configSources.DefaultCategory = %q, want 'config file'", configSources.DefaultCategory)
+	})
+
+	t.Run("defaults repo_root and repo_pattern when unset", func(t *testing.T) {
+		os.Setenv("WORKTREE_ROOT", "")
+		os.Setenv("WORKTREE_STRATEGY", "")
+		os.Setenv("WORKTREE_PATTERN", "")
+		os.Setenv("WT_CONFIG", "/nonexistent/config.toml")
+		configFlag = ""
+
+		loadWorktreeConfig()
+
+		home, _ := os.UserHomeDir()
+		if want := filepath.Join(home, "dev", "repos"); reposRoot != want {
+			t.Errorf("reposRoot = %q, want %q", reposRoot, want)
+		}
+		if repoPattern != defaultRepoPattern {
+			t.Errorf("repoPattern = %q, want %q", repoPattern, defaultRepoPattern)
 		}
 	})
 

@@ -16,7 +16,7 @@ wt is a fast Git worktree helper written in Go. It wraps `git worktree` with a c
 
 | Command | Purpose |
 |---------|---------|
-| `wt clone <category> <owner/repo\|url> [dest]` | Clone a repo into a category's canonical location (host/owner/repo), on its default branch |
+| `wt clone <owner/repo\|url> [dest]` | Clone a repo under `repo_root` (host/owner/repo/branch), on its default branch |
 | `wt create <branch> [base]` | Create a new branch in a worktree (defaults to main/master as base) |
 | `wt co <branch>` | Checkout an existing branch in a new worktree |
 | `wt co` | Interactive: fuzzy-search from available branches |

@@ -13,15 +13,13 @@ import (
 
 // Config represents the wt configuration file structure.
 type Config struct {
-	Root            string              `toml:"root"`
-	RepoRoot        string              `toml:"repo_root"`
-	Strategy        string              `toml:"strategy"`
-	Pattern         string              `toml:"pattern"`
-	Separator       string              `toml:"separator"`
-	Hooks           Hooks               `toml:"hooks"`
-	Categories      map[string]Category `toml:"categories"`
-	DefaultCategory string              `toml:"default_category"`
-	RepoPattern     string              `toml:"repo_pattern"`
+	Root        string `toml:"root"`
+	RepoRoot    string `toml:"repo_root"`
+	Strategy    string `toml:"strategy"`
+	Pattern     string `toml:"pattern"`
+	Separator   string `toml:"separator"`
+	Hooks       Hooks  `toml:"hooks"`
+	RepoPattern string `toml:"repo_pattern"`
 }
 
 // Hooks holds pre/post command hook commands.
@@ -42,14 +40,12 @@ type Hooks struct {
 
 // configSource tracks where each config value came from.
 type configSource struct {
-	Root            string
-	RepoRoot        string
-	Strategy        string
-	Pattern         string
-	Separator       string
-	Categories      string
-	DefaultCategory string
-	RepoPattern     string
+	Root        string
+	RepoRoot    string
+	Strategy    string
+	Pattern     string
+	Separator   string
+	RepoPattern string
 }
 
 // configFilePath is the resolved path to the config file (set during loading).
@@ -70,15 +66,12 @@ var configSources configSource
 // worktreeHooks holds the loaded hook configuration.
 var worktreeHooks Hooks
 
-// Category configuration, loaded by loadWorktreeConfig.
+// Clone placement configuration, loaded by loadWorktreeConfig.
 var (
 	// reposRoot is the base directory for canonical clones (wt clone).
-	// A category's repo_root defaults to reposRoot/<category-name>.
-	reposRoot             string
-	configCategories      = map[string]Category{}
-	categoryDefaults      Category
-	configDefaultCategory string
-	repoPattern           string
+	reposRoot string
+	// repoPattern is the placement layout for canonical clones.
+	repoPattern string
 )
 
 // configFlag is the --config flag value (set by cobra).
@@ -106,7 +99,6 @@ const defaultConfigTemplate = `# wt configuration file
 # root = "~/dev/worktrees"
 
 # Base directory for canonical clones created by 'wt clone' (default: ~/dev/repos).
-# Each category's repo_root defaults to <repo_root>/<category-name>.
 # repo_root = "~/dev/repos"
 
 # Worktree placement strategy
@@ -130,14 +122,18 @@ const defaultConfigTemplate = `# wt configuration file
 # strategy = "custom"
 # pattern = "{.worktreeRoot}/{.env.FEATURE}/{.repo.Name}"
 
-# Placement layout for cloned repos. Variables: {.category.RepoRoot},
+# Placement layout for repos cloned by 'wt clone'. Variables: {.repoRoot},
 # {.repo.Host}, {.repo.Owner}, {.repo.Name}, {.branch}, {.env.VARNAME}.
-# Default uses owner/repo/branch layout; {.branch} is the remote's default branch
-# (queried via git ls-remote, fallback "main"). Add {.repo.Host} for multi-forge.
-# NOTE: keep this above any [categories.*] sections — TOML assigns keys to the
-#       nearest preceding section header, so placing repo_pattern after a
-#       [categories.x] block silently stores it there instead of top-level.
-# repo_pattern = "{.category.RepoRoot}/{.repo.Owner}/{.repo.Name}/{.branch}"
+# {.branch} is the remote's default branch (via git ls-remote, fallback "main"),
+# which makes the clone a valid main-worktree slot for sibling strategies.
+# repo_pattern = "{.repoRoot}/{.repo.Host}/{.repo.Owner}/{.repo.Name}/{.branch}"
+
+# Example: add your own grouping level (a "category", a client, a year) with an
+# environment variable, then override it per invocation:
+#   WT_CATEGORY=work wt clone o/r
+# Give it a default in your shell rc: referencing an unset variable is an error,
+# while an empty value just collapses the segment away.
+# repo_pattern = "{.repoRoot}/{.env.WT_CATEGORY}/{.repo.Owner}/{.repo.Name}/{.branch}"
 
 # Hooks — run commands before/after wt operations
 # Available env vars in hooks: $WT_PATH, $WT_BRANCH, $WT_MAIN,
@@ -151,22 +147,6 @@ const defaultConfigTemplate = `# wt configuration file
 # post_checkout = ["cd \"$WT_PATH\" && npm install"]
 # pre_remove = ["echo \"Removing $WT_PATH\""]
 # post_clone = ["cd \"$WT_PATH\" && git status"]
-
-# Categories — organizational contexts that "wt clone" places repos into.
-# A category's repo_root defaults to <repo_root>/<category-name> (see above);
-# override it below only when a category needs a different location. Builtin
-# categories: work, personal, oss.
-# [categories.work]
-# repo_root    = "~/work/src"  # optional; defaults to <repo_root>/work
-# gh_auth      = "work"        # gh account (gh auth switch --user)
-# git_protocol = "ssh"         # ssh|https for owner/repo -> clone URL
-# glab_host    = ""            # glab --hostname for GitLab instances
-#
-# [categories.personal]
-# gh_auth = "personal"         # repo_root defaults to <repo_root>/personal
-#
-# Default category (reserved for future use).
-# default_category = "personal"
 `
 
 // configDir returns the directory where wt config files are stored.
@@ -209,23 +189,17 @@ func loadWorktreeConfig() {
 	worktreeSeparator = "/"
 
 	configSources = configSource{
-		Root:            "default",
-		RepoRoot:        "default",
-		Strategy:        "default",
-		Pattern:         "default",
-		Separator:       "default",
-		Categories:      "default",
-		DefaultCategory: "default",
-		RepoPattern:     "default",
+		Root:        "default",
+		RepoRoot:    "default",
+		Strategy:    "default",
+		Pattern:     "default",
+		Separator:   "default",
+		RepoPattern: "default",
 	}
 
 	// Reset hooks
 	worktreeHooks = Hooks{}
 
-	// Reset categories (builtins are provided by builtinCategories()).
-	configCategories = map[string]Category{}
-	categoryDefaults = Category{}
-	configDefaultCategory = ""
 	repoPattern = defaultRepoPattern
 
 	// 2. Load config file
@@ -256,14 +230,6 @@ func loadWorktreeConfig() {
 				worktreeSeparator = cfg.Separator
 				configSources.Separator = "config file"
 			}
-			if len(cfg.Categories) > 0 {
-				configCategories = cfg.Categories
-				configSources.Categories = "config file"
-			}
-			if cfg.DefaultCategory != "" {
-				configDefaultCategory = cfg.DefaultCategory
-				configSources.DefaultCategory = "config file"
-			}
 			if cfg.RepoPattern != "" {
 				repoPattern = strings.TrimSpace(cfg.RepoPattern)
 				configSources.RepoPattern = "config file"
@@ -272,7 +238,10 @@ func loadWorktreeConfig() {
 		}
 	}
 
-	// 3. Load repo-level .wt.toml (overrides global config, but NOT root)
+	// 3. Load repo-level .wt.toml (overrides global config, but NOT root and
+	//    NOT the clone settings). `wt clone` acquires a repository unrelated to
+	//    whichever one you happen to be standing in, so letting that repo's
+	//    .wt.toml redirect the destination or run clone hooks would be wrong.
 	configRepoPath = ""
 	configRepoFound = false
 
@@ -283,7 +252,8 @@ func loadWorktreeConfig() {
 			configRepoFound = true
 			var repoCfg Config
 			if _, err := toml.DecodeFile(repoConfigPath, &repoCfg); err == nil {
-				// root is intentionally NOT loaded from repo config
+				// root, repo_root and repo_pattern are intentionally NOT loaded
+				// from repo config
 				if repoCfg.Strategy != "" {
 					worktreeStrategy = strings.ToLower(strings.TrimSpace(repoCfg.Strategy))
 					configSources.Strategy = "repo config"
@@ -295,18 +265,6 @@ func loadWorktreeConfig() {
 				if repoCfg.Separator != "" {
 					worktreeSeparator = repoCfg.Separator
 					configSources.Separator = "repo config"
-				}
-				if len(repoCfg.Categories) > 0 {
-					configCategories = repoCfg.Categories
-					configSources.Categories = "repo config"
-				}
-				if repoCfg.DefaultCategory != "" {
-					configDefaultCategory = repoCfg.DefaultCategory
-					configSources.DefaultCategory = "repo config"
-				}
-				if repoCfg.RepoPattern != "" {
-					repoPattern = strings.TrimSpace(repoCfg.RepoPattern)
-					configSources.RepoPattern = "repo config"
 				}
 				// Merge hooks: repo hooks override per-hook type, unset hooks keep global values
 				if len(repoCfg.Hooks.PreCreate) > 0 {
@@ -339,12 +297,8 @@ func loadWorktreeConfig() {
 				if len(repoCfg.Hooks.PostMR) > 0 {
 					worktreeHooks.PostMR = repoCfg.Hooks.PostMR
 				}
-				if len(repoCfg.Hooks.PreClone) > 0 {
-					worktreeHooks.PreClone = repoCfg.Hooks.PreClone
-				}
-				if len(repoCfg.Hooks.PostClone) > 0 {
-					worktreeHooks.PostClone = repoCfg.Hooks.PostClone
-				}
+				// pre_clone/post_clone are deliberately not merged from repo
+				// config: clone targets a different repository than this one.
 			}
 		}
 	}
@@ -357,6 +311,10 @@ func loadWorktreeConfig() {
 	if v := os.Getenv("WT_REPO_ROOT"); v != "" {
 		reposRoot = expandHome(v)
 		configSources.RepoRoot = "env: WT_REPO_ROOT"
+	}
+	if v := os.Getenv("WT_REPO_PATTERN"); v != "" {
+		repoPattern = strings.TrimSpace(v)
+		configSources.RepoPattern = "env: WT_REPO_PATTERN"
 	}
 	if v := os.Getenv("WORKTREE_STRATEGY"); v != "" {
 		worktreeStrategy = strings.ToLower(strings.TrimSpace(v))
