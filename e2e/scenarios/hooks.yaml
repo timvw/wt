@@ -175,3 +175,45 @@ scenarios:
       - run: test -d "$TEST_DIR/blocked-clone" && echo "EXISTS" || echo "ABSENT"
         expect:
           output_contains: "ABSENT"
+
+  - name: repo_wt_toml_hooks_are_not_trusted_by_default
+    description: Hooks from a committed .wt.toml do not run until approved (issue #129)
+    skip_shells: [powershell, pwsh]  # hook body and steps use POSIX shell syntax
+    skip_shellenv: true
+    setup:
+      - create_file:
+          path: .wt.toml
+          content: "[hooks]\npost_create = [\"touch $WT_PATH/.repo-hook-ran\"]\n"
+      - git_add: .wt.toml
+      - git_commit: "add .wt.toml with a hook"
+    steps:
+      # XDG_CONFIG_HOME keeps the trust store out of the developer's real one.
+      - run: XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN create untrusted-hook-branch
+        expect:
+          exit_code: 0
+          output_contains: "not trusted"
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/untrusted-hook-branch/.repo-hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
+        expect:
+          output_contains: "HOOK_MISSING"
+
+  - name: repo_wt_toml_hooks_run_after_wt_trust
+    description: wt trust approves the repo's .wt.toml so its hooks run
+    skip_shells: [powershell, pwsh]  # hook body and steps use POSIX shell syntax
+    skip_shellenv: true
+    setup:
+      - create_file:
+          path: .wt.toml
+          content: "[hooks]\npost_create = [\"touch $WT_PATH/.repo-hook-ran\"]\n"
+      - git_add: .wt.toml
+      - git_commit: "add .wt.toml with a hook"
+    steps:
+      - run: XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN trust
+        expect:
+          exit_code: 0
+          output_contains: "Trusted"
+      - run: XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN create trusted-hook-branch
+        expect:
+          exit_code: 0
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/trusted-hook-branch/.repo-hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
+        expect:
+          output_contains: "HOOK_RAN"

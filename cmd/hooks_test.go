@@ -201,6 +201,7 @@ func TestAdaptHookEnv(t *testing.T) {
 // actually run. On Unix this is the status quo; the value is that it pins the
 // contract runHooks has to keep on Windows too.
 func TestRunHooksUsesPOSIXShell(t *testing.T) {
+	withUserOwnedHooks(t)
 	if _, _, posix := hookShell(runtime.GOOS, exec.LookPath); !posix {
 		t.Skip("no POSIX shell selected in this environment")
 	}

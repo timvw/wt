@@ -2,40 +2,92 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
+	"unicode"
+
+	"github.com/manifoldco/promptui"
+	"golang.org/x/term"
 )
 
-// getHooks returns the hook commands for a given hook name.
+// hookEvents lists every hook event in the order they appear in documentation
+// and in approval prompts.
+var hookEvents = []string{
+	"pre_create", "post_create",
+	"pre_checkout", "post_checkout",
+	"pre_remove", "post_remove",
+	"pre_pr", "post_pr",
+	"pre_mr", "post_mr",
+	"pre_clone", "post_clone",
+}
+
+// getHooks returns the effective hook commands for a given hook name.
 func getHooks(hookName string) []string {
+	return hooksOf(worktreeHooks, hookName)
+}
+
+// setHooks replaces the commands a Hooks value holds for a given hook name.
+func setHooks(h *Hooks, hookName string, cmds []string) {
 	switch hookName {
 	case "pre_create":
-		return worktreeHooks.PreCreate
+		h.PreCreate = cmds
 	case "post_create":
-		return worktreeHooks.PostCreate
+		h.PostCreate = cmds
 	case "pre_checkout":
-		return worktreeHooks.PreCheckout
+		h.PreCheckout = cmds
 	case "post_checkout":
-		return worktreeHooks.PostCheckout
+		h.PostCheckout = cmds
 	case "pre_remove":
-		return worktreeHooks.PreRemove
+		h.PreRemove = cmds
 	case "post_remove":
-		return worktreeHooks.PostRemove
+		h.PostRemove = cmds
 	case "pre_pr":
-		return worktreeHooks.PrePR
+		h.PrePR = cmds
 	case "post_pr":
-		return worktreeHooks.PostPR
+		h.PostPR = cmds
 	case "pre_mr":
-		return worktreeHooks.PreMR
+		h.PreMR = cmds
 	case "post_mr":
-		return worktreeHooks.PostMR
+		h.PostMR = cmds
 	case "pre_clone":
-		return worktreeHooks.PreClone
+		h.PreClone = cmds
 	case "post_clone":
-		return worktreeHooks.PostClone
+		h.PostClone = cmds
+	}
+}
+
+// hooksOf returns the commands a Hooks value holds for a given hook name.
+func hooksOf(h Hooks, hookName string) []string {
+	switch hookName {
+	case "pre_create":
+		return h.PreCreate
+	case "post_create":
+		return h.PostCreate
+	case "pre_checkout":
+		return h.PreCheckout
+	case "post_checkout":
+		return h.PostCheckout
+	case "pre_remove":
+		return h.PreRemove
+	case "post_remove":
+		return h.PostRemove
+	case "pre_pr":
+		return h.PrePR
+	case "post_pr":
+		return h.PostPR
+	case "pre_mr":
+		return h.PreMR
+	case "post_mr":
+		return h.PostMR
+	case "pre_clone":
+		return h.PreClone
+	case "post_clone":
+		return h.PostClone
 	default:
 		return nil
 	}
@@ -119,14 +171,311 @@ func toPOSIXPath(p string) string {
 	return strings.ReplaceAll(p, `\`, "/")
 }
 
+// Hook approval policies, settable via hooks_policy in the user's config file or
+// WT_HOOKS_POLICY. Never read from the repo-level .wt.toml — a repository being
+// able to choose how much wt scrutinises that same repository's hooks would put
+// the lock on the inside of the door.
+const (
+	// hookPolicyPromptUntrusted runs user-owned hooks as before and requires an
+	// approval for hooks that came from the repository's committed .wt.toml.
+	hookPolicyPromptUntrusted = "prompt-untrusted"
+	// hookPolicyPromptAll confirms every hook batch, whatever supplied it.
+	hookPolicyPromptAll = "prompt-all"
+	// hookPolicyTrustedOnly never prompts: already-trusted and user-owned hooks
+	// run, anything needing approval is skipped. For CI and scripts.
+	hookPolicyTrustedOnly = "trusted-only"
+	// hookPolicyOff runs no hooks at all.
+	hookPolicyOff = "off"
+)
+
+// Where a hook event's commands came from.
+const (
+	hookSourceConfigFile = "config file"
+	hookSourceRepoConfig = "repo config"
+)
+
+// hookEntry is one command with the event it belongs to, for display.
+type hookEntry struct {
+	Event string
+	Cmd   string
+}
+
+// repoHookCommands lists every command the repo-level .wt.toml contributed.
+func repoHookCommands() []hookEntry {
+	var entries []hookEntry
+	for _, event := range hookEvents {
+		if hookSources[event] != hookSourceRepoConfig {
+			continue
+		}
+		for _, cmd := range hooksOf(repoConfigHooks, event) {
+			entries = append(entries, hookEntry{Event: event, Cmd: cmd})
+		}
+	}
+	return entries
+}
+
+// effectiveHooksPolicy resolves the policy from env then config, defaulting to
+// prompt-untrusted.
+//
+// An unrecognised value is discarded rather than honoured, and the *next*
+// candidate is consulted: `WT_HOOKS_POLICY=promt-all` is a typo, not a request
+// to drop back to the default and run the user's hooks unprompted when their
+// config file says prompt-all. Only when nothing valid is configured anywhere
+// does the default apply.
+func effectiveHooksPolicy() string {
+	policy, _ := resolveHooksPolicy()
+	return policy
+}
+
+// resolveHooksPolicy is effectiveHooksPolicy, also reporting where the answer
+// came from so `wt config show` can explain why hooks are being prompted for.
+//
+// hooks_policy is deliberately not read from git config, unlike the placement
+// settings: .git/config belongs to the repository, and a repository choosing how
+// closely wt scrutinises its own hooks is the thing this whole mechanism exists
+// to prevent.
+func resolveHooksPolicy() (policy, source string) {
+	if os.Getenv("WT_HOOKS_DISABLED") == "1" {
+		return hookPolicyOff, "env: WT_HOOKS_DISABLED"
+	}
+	candidates := []struct{ value, source string }{
+		{strings.ToLower(strings.TrimSpace(os.Getenv("WT_HOOKS_POLICY"))), "env: WT_HOOKS_POLICY"},
+		{hooksPolicy, configSources.HooksPolicy},
+	}
+	for _, c := range candidates {
+		switch c.value {
+		case hookPolicyPromptUntrusted, hookPolicyPromptAll, hookPolicyTrustedOnly, hookPolicyOff:
+			return c.value, c.source
+		case "":
+			continue
+		default:
+			fmt.Fprintf(os.Stderr, "⚠ ignoring unknown hooks policy %q\n", c.value)
+			continue
+		}
+	}
+	return hookPolicyPromptUntrusted, "default"
+}
+
+// hooksInteractive reports whether we can put an approval prompt in front of a
+// human. Both stdin and stderr have to be a terminal: prompts render on stderr
+// (see promptOutput) and stdout is claimed by the shell integration, so a
+// redirected stdout says nothing about whether anyone is watching.
+func hooksInteractive() bool {
+	if isJSONOutput() {
+		return false
+	}
+	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stderr.Fd()))
+}
+
+// approveHooks decides whether a hook batch may run.
+//
+// Denial is always "skip and warn", never "abort the operation" — including for
+// pre-hooks, whose failures normally stop everything. Refusing to create a
+// worktree because a repository you just cloned asked to run a command you
+// declined would make the safe answer the expensive one.
+func approveHooks(hookName string, hookCommands []string) bool {
+	policy := effectiveHooksPolicy()
+	if policy == hookPolicyOff {
+		return false
+	}
+
+	fromRepo := hookSources[hookName] == hookSourceRepoConfig
+	if !fromRepo && policy != hookPolicyPromptAll {
+		return true
+	}
+
+	// Checked before anything that can fail. The escape hatch says "approve
+	// every batch"; a trust store that has been corrupted or made unreadable is
+	// exactly the situation where an unattended run needs it to mean that.
+	if os.Getenv("WT_HOOKS_APPROVE_ALL") == "1" {
+		return true
+	}
+
+	var trust repoHookTrust
+	if fromRepo {
+		var err error
+		trust, err = currentRepoHookTrust()
+		switch {
+		case err != nil && policy == hookPolicyPromptAll:
+			// Under prompt-all the store does not decide anything: every batch
+			// is put to the user regardless, and no answer is persisted. Losing
+			// the hooks because a file that would not have been consulted is
+			// unreadable would be failing closed on nothing.
+			fmt.Fprintf(os.Stderr, "⚠ could not read hook trust: %v\n", err)
+			trust = repoHookTrust{file: configRepoPath}
+		case err != nil:
+			fmt.Fprintf(os.Stderr, "⚠ skipping %s hooks from .wt.toml: %v\n", hookName, err)
+			return false
+		case trust.trusted && policy != hookPolicyPromptAll:
+			return true
+		}
+	}
+
+	// What to put on screen. For a repo-supplied batch that is every command the
+	// file contributes, not just the ones about to run: approving persists trust
+	// for the whole .wt.toml, so a benign post_create must not be able to buy
+	// silent consent for a pre_remove the user never saw.
+	entries := hookEntriesFor(hookName, hookCommands)
+	if fromRepo {
+		// Never fall through to an empty list: a prompt showing no commands,
+		// while commands are queued to run, is worse than showing only the
+		// batch at hand.
+		if all := repoHookCommands(); len(all) > 0 {
+			entries = all
+		}
+	}
+
+	if policy == hookPolicyTrustedOnly || !hooksInteractive() {
+		printHookApprovalRequest(os.Stderr, entries, hookName, trust)
+		// Say what would actually help. 'wt trust' is only advice under a policy
+		// that stops asking once something is trusted; under prompt-all there is
+		// nothing to record that would let this run through.
+		switch {
+		case offersTrust(fromRepo, policy):
+			fmt.Fprintf(os.Stderr, "  Skipped. Run 'wt trust' in this repository to approve them.\n\n")
+		case policy == hookPolicyTrustedOnly:
+			fmt.Fprintf(os.Stderr, "  Skipped: hooks_policy is %q, which never prompts.\n"+
+				"  Change hooks_policy or set WT_HOOKS_APPROVE_ALL=1.\n\n", policy)
+		default:
+			fmt.Fprintf(os.Stderr, "  Skipped: there is no terminal to ask on.\n"+
+				"  Run interactively or set WT_HOOKS_APPROVE_ALL=1.\n\n")
+		}
+		return false
+	}
+
+	return promptHookApproval(entries, hookName, offersTrust(fromRepo, policy), trust)
+}
+
+// hookEntriesFor pairs a batch of commands with their event, for display.
+func hookEntriesFor(hookName string, hookCommands []string) []hookEntry {
+	entries := make([]hookEntry, 0, len(hookCommands))
+	for _, cmd := range hookCommands {
+		entries = append(entries, hookEntry{Event: hookName, Cmd: cmd})
+	}
+	return entries
+}
+
+// printHookApprovalRequest shows exactly what is being asked for. The commands
+// are printed verbatim and unabridged: an approval prompt that summarises is an
+// approval prompt that lies.
+//
+// running is the event about to fire, marked with an arrow. The other lines are
+// what the same approval would also cover later.
+func printHookApprovalRequest(w io.Writer, entries []hookEntry, running string, trust repoHookTrust) {
+	if trust.file != "" {
+		state := "not trusted"
+		if trust.trusted {
+			state = "trusted"
+		}
+		_, _ = fmt.Fprintf(w, "\n⚠ These commands come from %s (%s):\n\n", displayText(trust.file), state)
+	} else {
+		_, _ = fmt.Fprintf(w, "\n⚠ wt is about to run hook commands:\n\n")
+	}
+	laterEvent := false
+	for _, e := range entries {
+		marker := "  "
+		if e.Event == running {
+			marker = "→ "
+		} else {
+			laterEvent = true
+		}
+		_, _ = fmt.Fprintf(w, "  %s[%s] %s\n", marker, e.Event, displayText(e.Cmd))
+	}
+	// Only worth saying when there is a "rest" that a later run would reach, and
+	// only where trusting is on offer — which is exactly the repo-file case.
+	if running != "" && laterEvent && trust.file != "" {
+		_, _ = fmt.Fprintf(w, "\n  → runs now; trusting the file covers the rest too.\n")
+	}
+	_, _ = fmt.Fprintln(w)
+}
+
+// displayText renders repository-supplied text for a terminal, escaping
+// anything that is not printable.
+//
+// The commands, and the path they were read from, come from a checkout wt did
+// not create, and this prompt is the one place the user decides whether to
+// execute them. Printed raw, a string containing ESC[2J, a carriage return or a
+// right-to-left override could erase the lines above it, overwrite itself, or
+// read as something other than what would run — an approval prompt that can be
+// redrawn by the thing it is asking about is not one.
+func displayText(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsPrint(r) {
+			b.WriteRune(r)
+			continue
+		}
+		// QuoteRune gives the familiar \n, \t, \x1b and \u202e forms; the
+		// surrounding single quotes are not wanted mid-line.
+		q := strconv.QuoteRune(r)
+		b.WriteString(q[1 : len(q)-1])
+	}
+	return b.String()
+}
+
+// offersTrust reports whether the prompt should offer to remember the answer.
+//
+// Only for repo-supplied hooks, and only when it would change the next run.
+// Under prompt-all it would not: that policy prompts for trusted hooks too, so
+// an option promising "until it changes" would be one the user is asked again
+// in spite of.
+func offersTrust(fromRepo bool, policy string) bool {
+	return fromRepo && policy != hookPolicyPromptAll
+}
+
+// promptHookApproval asks the user, defaulting to the safe answer: the first
+// item is what an accidental Enter selects.
+func promptHookApproval(entries []hookEntry, running string, fromRepo bool, trust repoHookTrust) bool {
+	const (
+		itemSkip  = "Skip these commands"
+		itemOnce  = "Run once"
+		itemTrust = "Run, and trust this .wt.toml until it changes"
+	)
+
+	printHookApprovalRequest(os.Stderr, entries, running, trust)
+
+	items := []string{itemSkip, itemOnce}
+	if fromRepo {
+		items = append(items, itemTrust)
+	}
+
+	prompt := promptui.Select{
+		Label:  "Run these hooks?",
+		Items:  items,
+		Stdout: promptOutput(),
+	}
+	_, choice, err := prompt.Run()
+	if err != nil {
+		// Interrupted or unreadable: treat as declined.
+		fmt.Fprintln(os.Stderr, "  Skipped.")
+		return false
+	}
+
+	switch choice {
+	case itemTrust:
+		if err := trustCurrentRepo(trust); err != nil {
+			// The commands were approved for this run regardless; failing to
+			// persist that only means being asked again next time.
+			fmt.Fprintf(os.Stderr, "⚠ could not record trust: %v\n", err)
+		}
+		return true
+	case itemOnce:
+		return true
+	default:
+		return false
+	}
+}
+
 // runHooks executes hook commands. For pre-hooks (hookName starts with "pre_"),
 // any command failure aborts the operation. For post-hooks, failures are warned
 // but do not fail the overall operation.
+//
+// Commands the user has not approved are not run; see approveHooks.
 func runHooks(hookName string, hookCommands []string, env map[string]string) error {
-	if os.Getenv("WT_HOOKS_DISABLED") == "1" {
+	if len(hookCommands) == 0 {
 		return nil
 	}
-	if len(hookCommands) == 0 {
+	if !approveHooks(hookName, hookCommands) {
 		return nil
 	}
 

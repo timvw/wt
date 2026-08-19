@@ -37,6 +37,7 @@ var configShowCmd = &cobra.Command{
 	Short: "Show effective configuration with sources",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		pattern := configShowPatternValue()
+		hooksPolicyValue, hooksPolicySource := resolveHooksPolicy()
 
 		configStatus := "not found"
 		if configFileFound {
@@ -56,6 +57,7 @@ var configShowCmd = &cobra.Command{
 					"pattern":      map[string]string{"value": pattern, "source": configSources.Pattern},
 					"separator":    map[string]string{"value": worktreeSeparator, "source": configSources.Separator},
 					"repo_pattern": map[string]string{"value": repoPattern, "source": configSources.RepoPattern},
+					"hooks_policy": map[string]string{"value": hooksPolicyValue, "source": hooksPolicySource},
 				},
 			}
 			if configRepoFound {
@@ -79,6 +81,7 @@ var configShowCmd = &cobra.Command{
 			{"pattern", pattern, configSources.Pattern},
 			{"separator", fmt.Sprintf("%q", worktreeSeparator), configSources.Separator},
 			{"repo_pattern", repoPattern, configSources.RepoPattern},
+			{"hooks_policy", hooksPolicyValue, hooksPolicySource},
 		}
 		// Size the value column to the widest value (min 40) so long patterns
 		// don't push their source marker out of the column.

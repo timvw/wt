@@ -143,6 +143,22 @@ git config --local wt.strategy sibling-repo    # this repo only
 git config --global wt.root ~/projects/worktrees
 ```
 
+### Hook trust
+
+A repo's `.wt.toml` is committed, so its `[hooks]` are supplied by the repository, not by you.
+`wt` asks before running them and remembers your answer per file:
+
+```bash
+wt trust                          # approve this repository's .wt.toml hooks
+wt trust --list                   # show every approval on this machine
+wt untrust                        # revoke this repository's approval
+```
+
+The approval is pinned to the file's contents, so an edit — or a `git pull` that adds a hook —
+asks again. Non-interactive runs (scripts, CI, `--format json`) decline, unless you opt out with
+`WT_HOOKS_APPROVE_ALL=1`. Set `hooks_policy = "prompt-all"` to confirm *every* hook, including
+your own. See [Hook trust](docs/configuration.md#hook-trust).
+
 On case-insensitive filesystems such as the default macOS APFS setup, mixed-case branch
 prefixes can produce confusing worktree paths. For example, `Feature/foo` and
 `feature/bar` both need a first-level directory that macOS treats as the same name.

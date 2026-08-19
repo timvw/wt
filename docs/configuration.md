@@ -108,10 +108,11 @@ $ wt config show
 Config file: ~/.config/wt/config.toml (found)
 
 Effective configuration:
-  root       = /Users/you/dev/worktrees        (default)
-  strategy   = sibling-repo                    (git config (local))
-  pattern    = {.repo.Main}/../{.branch}       (default)
-  separator  = "/"                             (config file)
+  root          = /Users/you/dev/worktrees     (default)
+  strategy      = sibling-repo                 (git config (local))
+  pattern       = {.repo.Main}/../{.branch}    (default)
+  separator     = "/"                          (config file)
+  hooks_policy  = prompt-untrusted             (default)
 ```
 
 ## Strategies & Patterns
@@ -290,7 +291,81 @@ Checkout hooks (`pre_checkout` / `post_checkout`) run both when a new worktree i
 - **Pre-hooks** abort the operation if any command exits non-zero
 - **Post-hooks** print a warning on failure but do not fail the `wt` command
 - Each hook is a list of shell commands. `wt` spawns the shell itself, so the shell you are sitting in does not decide what runs them — see [Which shell runs a hook](#which-shell-runs-a-hook)
+- Hooks that came from a repository's committed `.wt.toml` need your approval before they run — see [Hook trust](#hook-trust)
 - Set `WT_HOOKS_DISABLED=1` to skip all hooks (useful for scripting or CI)
+
+## Hook trust
+
+`.wt.toml` lives in the working tree, so it is normally committed and travels
+with the repository. That makes its `[hooks]` table something the *repository*
+supplies rather than something you wrote: without a gate, cloning an untrusted
+repo and running `wt create` in it would execute whatever commands that repo
+asked for.
+
+So `wt` does not run them until you approve them:
+
+```console
+$ wt create feat/x
+
+⚠ These commands come from /home/you/src/acme/.wt.toml (not trusted):
+
+    [post_create] cd "$WT_PATH" && npm install
+
+? Run these hooks?
+  ▸ Skip these commands
+    Run once
+    Run, and trust this .wt.toml until it changes
+```
+
+With no terminal to ask on — scripts, CI, `--format json` — the answer is
+"skip" unless `WT_HOOKS_APPROVE_ALL=1` is set, and `wt` says so on stderr rather
+than failing the command.
+
+Approve ahead of time, or review what is approved:
+
+```bash
+wt trust          # approve this repository's .wt.toml
+wt trust --list   # every approval on this machine
+wt untrust        # revoke this repository's approval
+```
+
+An approval is pinned to the file's contents and to the repository. Editing
+`.wt.toml` — including a `git pull` that adds a hook, or checking out a branch
+whose `.wt.toml` differs — invalidates it and `wt` asks again. An identical
+`.wt.toml` in a *different* repository is not covered either: `make setup` is
+only as safe as the Makefile next to it.
+
+Approvals are stored in `~/.config/wt/trust.toml` (`$XDG_CONFIG_HOME/wt/` or
+`%APPDATA%\wt\` if set). Deleting that file revokes everything.
+
+Hooks from your **own** config file are not gated — you wrote them.
+
+**Requiring approval for every hook:**
+
+```toml
+hooks_policy = "prompt-untrusted"   # default
+```
+
+| Value | Behaviour |
+| --- | --- |
+| `prompt-untrusted` | Your own hooks run; hooks from a repo's `.wt.toml` need approval |
+| `prompt-all` | Every hook batch is shown and confirmed, whatever supplied it |
+| `trusted-only` | Never prompts: already-trusted and own hooks run, anything else is skipped |
+| `off` | No hooks run at all (same as `WT_HOOKS_DISABLED=1`) |
+
+`prompt-all` covers what trust alone does not: your own
+`post_checkout = ["cd $WT_PATH && npm install"]` runs whatever lifecycle
+scripts are in the `package.json` of whichever repository you happen to be
+standing in.
+
+Override per invocation with `WT_HOOKS_POLICY`. `hooks_policy` is read from
+your config file only — never from a repo-level `.wt.toml`, since a repository
+choosing how closely `wt` scrutinises that same repository's hooks would defeat
+the point.
+
+For automation you control, `WT_HOOKS_APPROVE_ALL=1` approves every batch
+without asking. It bypasses the untrusted-repo check too, so do not export it
+in your shell rc.
 
 **Which shell runs a hook:**
 
