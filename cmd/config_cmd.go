@@ -50,10 +50,12 @@ var configShowCmd = &cobra.Command{
 					"status": configStatus,
 				},
 				"effective": map[string]any{
-					"root":      map[string]string{"value": worktreeRoot, "source": configSources.Root},
-					"strategy":  map[string]string{"value": worktreeStrategy, "source": configSources.Strategy},
-					"pattern":   map[string]string{"value": pattern, "source": configSources.Pattern},
-					"separator": map[string]string{"value": worktreeSeparator, "source": configSources.Separator},
+					"root":         map[string]string{"value": worktreeRoot, "source": configSources.Root},
+					"repo_root":    map[string]string{"value": reposRoot, "source": configSources.RepoRoot},
+					"strategy":     map[string]string{"value": worktreeStrategy, "source": configSources.Strategy},
+					"pattern":      map[string]string{"value": pattern, "source": configSources.Pattern},
+					"separator":    map[string]string{"value": worktreeSeparator, "source": configSources.Separator},
+					"repo_pattern": map[string]string{"value": repoPattern, "source": configSources.RepoPattern},
 				},
 			}
 			if configRepoFound {
@@ -70,11 +72,26 @@ var configShowCmd = &cobra.Command{
 			fmt.Printf("Repo config: %s (found)\n", configRepoPath)
 		}
 		fmt.Println()
+		rows := []struct{ key, value, source string }{
+			{"root", worktreeRoot, configSources.Root},
+			{"repo_root", reposRoot, configSources.RepoRoot},
+			{"strategy", worktreeStrategy, configSources.Strategy},
+			{"pattern", pattern, configSources.Pattern},
+			{"separator", fmt.Sprintf("%q", worktreeSeparator), configSources.Separator},
+			{"repo_pattern", repoPattern, configSources.RepoPattern},
+		}
+		// Size the value column to the widest value (min 40) so long patterns
+		// don't push their source marker out of the column.
+		width := 40
+		for _, r := range rows {
+			if len(r.value) > width {
+				width = len(r.value)
+			}
+		}
 		fmt.Printf("Effective configuration:\n")
-		fmt.Printf("  %-10s = %-40s (%s)\n", "root", worktreeRoot, configSources.Root)
-		fmt.Printf("  %-10s = %-40s (%s)\n", "strategy", worktreeStrategy, configSources.Strategy)
-		fmt.Printf("  %-10s = %-40s (%s)\n", "pattern", pattern, configSources.Pattern)
-		fmt.Printf("  %-10s = %-40s (%s)\n", "separator", fmt.Sprintf("%q", worktreeSeparator), configSources.Separator)
+		for _, r := range rows {
+			fmt.Printf("  %-16s = %-*s (%s)\n", r.key, width, r.value, r.source)
+		}
 		return nil
 	},
 }

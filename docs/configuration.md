@@ -125,6 +125,67 @@ and `feature/foo` still map to names that collide on a case-insensitive
 filesystem. Avoid case-only branch differences, or place the repository and
 worktree root on a case-sensitive filesystem.
 
+## Clone placement (for `wt clone`)
+
+`wt clone` acquires a repository you don't have yet and puts it in a
+predictable spot. Two settings decide where:
+
+```toml
+# Base for all clones (default: ~/dev/repos).
+repo_root = "~/dev/repos"
+
+# Placement layout. Variables: {.repoRoot}, {.repo.Host}, {.repo.Owner},
+# {.repo.Name}, {.branch}, {.env.VARNAME}.
+# {.branch} is the remote's default branch (via git ls-remote, fallback "main").
+repo_pattern = "{.repoRoot}/{.repo.Host}/{.repo.Owner}/{.repo.Name}/{.branch}"
+```
+
+`wt clone timvw/wt` then clones into `~/dev/repos/github.com/timvw/wt/main`.
+A full git URL is used as-is; an explicit destination argument overrides the
+layout entirely. The repository is left on its default branch, ready to
+inspect.
+
+The trailing `{.branch}` is deliberate: it makes the clone look like any other
+worktree of that repo, so a later `wt create feat/x` can drop a sibling next to
+it instead of nesting inside it. Drop it if you prefer a bare
+`<owner>/<repo>` checkout.
+
+Both settings are also settable via environment variables — `WT_REPO_ROOT` and
+`WT_REPO_PATTERN` — which override the config file. Neither is read from a
+repo-level `.wt.toml`: `wt clone` targets a repository other than the one you
+are standing in, so letting that repo's config redirect the destination (or run
+clone hooks) would be wrong.
+
+### Grouping clones ("categories")
+
+There is no built-in notion of work/personal/oss. If you want that grouping,
+express it yourself with an environment variable in the pattern:
+
+```toml
+repo_pattern = "{.repoRoot}/{.env.WT_CATEGORY}/{.repo.Owner}/{.repo.Name}/{.branch}"
+```
+
+```bash
+export WT_CATEGORY=personal          # default, e.g. in your shell rc
+WT_CATEGORY=work wt clone acme/api   # ~/dev/repos/work/acme/api/main
+wt clone timvw/wt                    # ~/dev/repos/personal/timvw/wt/main
+```
+
+The variable must exist: referencing one that is unset is an error (that is
+what catches `{.env.HOEM}` typos), so give it a default in your shell rc.
+Setting it to the empty string is fine — the segment collapses away rather than
+leaving an empty directory level, so `WT_CATEGORY= wt clone timvw/wt` lands in
+`~/dev/repos/timvw/wt/main`.
+
+Auth works the same way. `wt clone` resolves `owner/repo` through whichever
+account `gh`/`glab` is already using, so select the account the way those tools
+intend — `GH_CONFIG_DIR`, `GH_TOKEN`, `GLAB_HOST` — rather than having `wt`
+mutate their global state:
+
+```bash
+GH_CONFIG_DIR=~/.config/gh-work wt clone acme/api
+```
+
 ## Hooks
 
 Hooks let you run custom commands before or after `wt` operations. Define them in the `[hooks]` section of your config file:
@@ -140,6 +201,7 @@ Hooks let you run custom commands before or after `wt` operations. Define them i
 | `pre_remove` / `post_remove` | Before/after `wt remove` (alias `wt rm`) |
 | `pre_pr` / `post_pr` | Before/after `wt pr` |
 | `pre_mr` / `post_mr` | Before/after `wt mr` |
+| `pre_clone` / `post_clone` | Before/after `wt clone` |
 
 Checkout hooks (`pre_checkout` / `post_checkout`) run both when a new worktree is created **and** when checking out an existing worktree. Create and remove hooks run only when a worktree is actually created or removed.
 

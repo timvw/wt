@@ -317,6 +317,8 @@ func TestLoadWorktreeConfig(t *testing.T) {
 	origConfigFilePath := configFilePath
 	origConfigFileFound := configFileFound
 	origConfigSources := configSources
+	origReposRoot := reposRoot
+	origRepoPattern := repoPattern
 	origEnvRoot := os.Getenv("WORKTREE_ROOT")
 	origEnvStrategy := os.Getenv("WORKTREE_STRATEGY")
 	origEnvPattern := os.Getenv("WORKTREE_PATTERN")
@@ -330,6 +332,8 @@ func TestLoadWorktreeConfig(t *testing.T) {
 		configFilePath = origConfigFilePath
 		configFileFound = origConfigFileFound
 		configSources = origConfigSources
+		reposRoot = origReposRoot
+		repoPattern = origRepoPattern
 		os.Setenv("WORKTREE_ROOT", origEnvRoot)
 		os.Setenv("WORKTREE_STRATEGY", origEnvStrategy)
 		os.Setenv("WORKTREE_PATTERN", origEnvPattern)
@@ -361,6 +365,56 @@ func TestLoadWorktreeConfig(t *testing.T) {
 		}
 		if configSources.Root != "default" {
 			t.Errorf("configSources.Root = %q, want default", configSources.Root)
+		}
+	})
+
+	t.Run("loads repo_root and repo_pattern", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfgPath := filepath.Join(tmpDir, "config.toml")
+		cfgContent := `repo_root = "/custom/base"
+repo_pattern = "{.repoRoot}/{.repo.Name}"
+`
+		if err := os.WriteFile(cfgPath, []byte(cfgContent), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		os.Setenv("WORKTREE_ROOT", "")
+		os.Setenv("WORKTREE_STRATEGY", "")
+		os.Setenv("WORKTREE_PATTERN", "")
+		os.Setenv("WT_CONFIG", cfgPath)
+		configFlag = ""
+
+		loadWorktreeConfig()
+
+		if reposRoot != "/custom/base" {
+			t.Errorf("reposRoot = %q, want /custom/base", reposRoot)
+		}
+		if configSources.RepoRoot != "config file" {
+			t.Errorf("configSources.RepoRoot = %q, want 'config file'", configSources.RepoRoot)
+		}
+		if repoPattern != "{.repoRoot}/{.repo.Name}" {
+			t.Errorf("repoPattern = %q, want custom pattern", repoPattern)
+		}
+		if configSources.RepoPattern != "config file" {
+			t.Errorf("configSources.RepoPattern = %q, want 'config file'", configSources.RepoPattern)
+		}
+	})
+
+	t.Run("defaults repo_root and repo_pattern when unset", func(t *testing.T) {
+		os.Setenv("WORKTREE_ROOT", "")
+		os.Setenv("WORKTREE_STRATEGY", "")
+		os.Setenv("WORKTREE_PATTERN", "")
+		os.Setenv("WT_CONFIG", "/nonexistent/config.toml")
+		configFlag = ""
+
+		loadWorktreeConfig()
+
+		home, _ := os.UserHomeDir()
+		if want := filepath.Join(home, "dev", "repos"); reposRoot != want {
+			t.Errorf("reposRoot = %q, want %q", reposRoot, want)
+		}
+		if repoPattern != defaultRepoPattern {
+			t.Errorf("repoPattern = %q, want %q", repoPattern, defaultRepoPattern)
 		}
 	})
 

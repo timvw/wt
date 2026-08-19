@@ -1,0 +1,52 @@
+# E2E tests for `wt clone` command
+name: clone
+description: Test cloning a repository into its configured repo_root location
+
+scenarios:
+  - name: clone_local_path_without_dest_fails
+    description: A source with no owner/name cannot be placed automatically
+    skip_shells: [powershell, pwsh] # scenario uses POSIX/fish $REPO_DIR expansion
+    skip_shellenv: true # run raw binary to capture the stderr message
+    steps:
+      - run: $WT_BIN clone "$REPO_DIR"
+        expect:
+          exit_code: 1
+          output_contains: "pass an explicit destination"
+
+  - name: clone_reports_destination
+    description: Clone prints the destination it created
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true # capture stdout; auto-cd is covered separately
+    steps:
+      - run: $WT_BIN clone "$REPO_DIR" "$TEST_DIR/reported"
+        expect:
+          exit_code: 0
+          output_contains: "Cloned to:"
+
+  - name: clone_auto_cd_and_branch
+    description: Clone auto-navigates into the clone, left on a real branch
+    skip_shells: [powershell, pwsh]
+    steps:
+      # No output assertion here: the harness runs auto-cd steps directly so the
+      # wrapper's cd affects the shell (an output check would run it in a subshell).
+      - run: wt clone "$REPO_DIR" "$TEST_DIR/inspect"
+        expect:
+          exit_code: 0
+          cwd_ends_with: /inspect
+      - run: git rev-parse --abbrev-ref HEAD
+        expect:
+          exit_code: 0
+          output_not_contains: "HEAD" # on a real branch, not detached
+
+  - name: clone_dest_conflict_fails
+    description: Refuses to clone into a non-empty destination
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: mkdir -p "$TEST_DIR/occupied" && touch "$TEST_DIR/occupied/file"
+        expect:
+          exit_code: 0
+      - run: $WT_BIN clone "$REPO_DIR" "$TEST_DIR/occupied"
+        expect:
+          exit_code: 1
+          output_contains: "already exists and is not empty"

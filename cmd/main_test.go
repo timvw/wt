@@ -391,6 +391,13 @@ func TestParseRemoteURLNegative(t *testing.T) {
 		{name: "HTTPS single component", input: "https://github.com/user"},
 		{name: "HTTPS trailing slash only", input: "https://github.com/"},
 		{name: "SCP single component", input: "git@github.com:repo.git"},
+		// git only reads host:path as scp-like when the colon precedes any
+		// slash, and treats a single character before it as a Windows drive.
+		// Local paths must not parse as remotes whose host is a path component.
+		{name: "Windows drive path", input: `C:/Users/runner/test-repo`},
+		{name: "Windows drive path backslashes", input: `C:\Users\runner\test-repo`},
+		{name: "Relative path with colon", input: "../escape:owner/repo.git"},
+		{name: "Absolute path with colon", input: "/srv/git:owner/repo.git"},
 	}
 
 	for _, tt := range tests {
@@ -1261,6 +1268,8 @@ func TestGetHooks(t *testing.T) {
 		PostPR:       []string{"echo post-pr"},
 		PreMR:        []string{"echo pre-mr"},
 		PostMR:       []string{"echo post-mr"},
+		PreClone:     []string{"echo pre-clone"},
+		PostClone:    []string{"echo post-clone"},
 	}
 
 	tests := []struct {
@@ -1278,6 +1287,8 @@ func TestGetHooks(t *testing.T) {
 		{"post_pr", "post_pr", []string{"echo post-pr"}},
 		{"pre_mr", "pre_mr", []string{"echo pre-mr"}},
 		{"post_mr", "post_mr", []string{"echo post-mr"}},
+		{"pre_clone", "pre_clone", []string{"echo pre-clone"}},
+		{"post_clone", "post_clone", []string{"echo post-clone"}},
 		{"unknown returns nil", "unknown", nil},
 		{"empty string returns nil", "", nil},
 	}

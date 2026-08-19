@@ -32,6 +32,10 @@ func getHooks(hookName string) []string {
 		return worktreeHooks.PreMR
 	case "post_mr":
 		return worktreeHooks.PostMR
+	case "pre_clone":
+		return worktreeHooks.PreClone
+	case "post_clone":
+		return worktreeHooks.PostClone
 	default:
 		return nil
 	}

@@ -15,11 +15,12 @@ Inspired by [haacked/dotfiles/tree-me](https://github.com/haacked/dotfiles/blob/
 ## Features
 
 - Configurable worktree strategies: `global`, `sibling-repo`, `parent-branches`, and more
+- **Clone into organized locations** — `wt clone` acquires a repo under `repo_root` (`<host>/<owner>/<repo>/<branch>`), ready to inspect
 - Simple commands for common worktree operations
 - **Interactive selection menus** with fuzzy matching for checkout, cd, remove, pr, and mr commands
 - GitHub PR support via `wt pr` command (uses `gh` CLI) — checks out the PR's actual branch name
 - GitLab MR support via `wt mr` command (uses `glab` CLI) — checks out the MR's actual branch name
-- **Pre/post command hooks** — run custom scripts on create/checkout/remove (e.g. [launch AI assistants](docs/examples.md#ai-assistants-and-editors), [share build caches](docs/examples.md#shared-build-cache-across-worktrees), [assign dev server ports](docs/examples.md#deterministic-dev-server-port-per-worktree), [copy `.env`](docs/examples.md#copy-env-to-new-worktrees), [init submodules](docs/examples.md#git-submodules-in-worktrees))
+- **Pre/post command hooks** — run custom scripts on create/checkout/remove/clone (e.g. [launch AI assistants](docs/examples.md#ai-assistants-and-editors), [share build caches](docs/examples.md#shared-build-cache-across-worktrees), [assign dev server ports](docs/examples.md#deterministic-dev-server-port-per-worktree), [copy `.env`](docs/examples.md#copy-env-to-new-worktrees), [init submodules](docs/examples.md#git-submodules-in-worktrees))
 - **Stale worktree detection** — find worktrees with deleted remote branches or inactive commits (`wt cleanup --stale`)
 - **Color-coded status output** — green (clean), red (dirty), yellow (ahead/behind), bold cyan (current); respects `NO_COLOR=1` and auto-strips colors when piped
 - **CI/CD status integration** — `wt status --ci` shows pipeline status (✓/✗/●) per branch via `gh` or `glab` CLI
@@ -37,6 +38,32 @@ wt init                      # configure shell integration
 See [docs/installation.md](docs/installation.md) for all platforms (Scoop, WinGet, Linux packages, from source).
 
 ## Usage
+
+### Clone
+
+```bash
+# Acquire the main repository, ready to inspect. Placed under repo_root as
+# <repo_root>/<host>/<owner>/<repo>/<default-branch>, left on its default branch
+# (that trailing segment makes the clone a normal worktree slot, so wt create
+# later puts siblings next to it).
+wt clone timvw/wt                              # owner/repo resolved via gh/glab
+wt clone git@github.com:me/dotfiles.git        # full URL used as-is
+wt clone acme/api ~/src/api                    # explicit destination
+```
+
+Two settings control placement: `repo_root` (default `~/dev/repos`) and
+`repo_pattern`. Grouping levels like "work" vs "personal" are yours to define —
+put an env var in the pattern:
+
+```toml
+repo_pattern = "{.repoRoot}/{.env.WT_CATEGORY}/{.repo.Owner}/{.repo.Name}/{.branch}"
+```
+
+```bash
+export WT_CATEGORY=personal          # default, e.g. in your shell rc
+WT_CATEGORY=work wt clone acme/api   # ~/dev/repos/work/acme/api/main
+wt clone timvw/wt                    # ~/dev/repos/personal/timvw/wt/main
+```
 
 ### Checkout & Create
 

@@ -175,7 +175,7 @@ func parseRemoteURL(remoteURL string) (repoInfo, bool) {
 		return repoInfo{Host: host, Owner: owner, Name: repo}, true
 	}
 
-	if scpLike := strings.SplitN(trimmed, ":", 2); len(scpLike) == 2 {
+	if scpLike := strings.SplitN(trimmed, ":", 2); len(scpLike) == 2 && isSCPLikeHost(scpLike[0]) {
 		hostPart := scpLike[0]
 		path := scpLike[1]
 		if atIdx := strings.LastIndex(hostPart, "@"); atIdx != -1 {
@@ -192,6 +192,22 @@ func parseRemoteURL(remoteURL string) (repoInfo, bool) {
 	}
 
 	return repoInfo{}, false
+}
+
+// isSCPLikeHost reports whether the part before the first colon can be the host
+// of an scp-like remote ("git@host:owner/repo.git"), following git's own rules:
+// the colon must come before any slash, and a single character before it is a
+// Windows drive letter, not a host. Without this, a local path such as
+// "C:/src/repo" or "../rel:name/repo" parses as a remote whose host is the
+// leading path component.
+func isSCPLikeHost(hostPart string) bool {
+	if strings.ContainsAny(hostPart, `/\`) {
+		return false
+	}
+	if atIdx := strings.LastIndex(hostPart, "@"); atIdx != -1 {
+		hostPart = hostPart[atIdx+1:]
+	}
+	return len(hostPart) > 1
 }
 
 type RemoteType int

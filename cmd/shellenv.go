@@ -90,7 +90,7 @@ function wt {
 Register-ArgumentCompleter -CommandName wt -ScriptBlock {
     param($commandName, $wordToComplete, $commandAst, $fakeBoundParameters)
 
-    $commands = @('checkout', 'co', 'cd', 'sw', 'create', 'default', 'pr', 'mr', 'list', 'ls', 'remove', 'rm', 'status', 'cleanup', 'migrate', 'prune', 'help', 'shellenv', 'init', 'info', 'config', 'examples', 'version')
+    $commands = @('checkout', 'co', 'cd', 'sw', 'clone', 'cl', 'create', 'default', 'pr', 'mr', 'list', 'ls', 'remove', 'rm', 'status', 'cleanup', 'migrate', 'prune', 'help', 'shellenv', 'init', 'info', 'config', 'examples', 'version')
 
     # Get the position in the command line
     $position = $commandAst.CommandElements.Count - 1
@@ -222,7 +222,7 @@ if [ -n "$BASH_VERSION" ]; then
         COMPREPLY=()
         cur="${COMP_WORDS[COMP_CWORD]}"
         prev="${COMP_WORDS[COMP_CWORD-1]}"
-        commands="checkout co cd sw create default pr mr list ls remove rm status cleanup migrate prune help shellenv init info config examples version"
+        commands="checkout co cd sw clone cl create default pr mr list ls remove rm status cleanup migrate prune help shellenv init info config examples version"
 
         # Complete commands if first argument
         if [ $COMP_CWORD -eq 1 ]; then
@@ -269,6 +269,8 @@ if [ -n "$ZSH_VERSION" ]; then
             'co:Checkout existing branch in new worktree'
             'cd:Switch to an existing worktree'
             'sw:Switch to an existing worktree'
+            'clone:Clone a repository into a category location'
+            'cl:Clone a repository into a category location'
             'create:Create new branch in worktree'
             'default:Navigate to the main worktree'
             'pr:Checkout GitHub PR in worktree'
@@ -432,6 +434,8 @@ complete -c wt -n "__fish_use_subcommand" -a "checkout" -d "Checkout existing br
 complete -c wt -n "__fish_use_subcommand" -a "co" -d "Checkout existing branch in new worktree"
 complete -c wt -n "__fish_use_subcommand" -a "cd" -d "Switch to an existing worktree"
 complete -c wt -n "__fish_use_subcommand" -a "sw" -d "Switch to an existing worktree"
+complete -c wt -n "__fish_use_subcommand" -a "clone" -d "Clone a repository into a category location"
+complete -c wt -n "__fish_use_subcommand" -a "cl" -d "Clone a repository into a category location"
 complete -c wt -n "__fish_use_subcommand" -a "create" -d "Create new branch in worktree"
 complete -c wt -n "__fish_use_subcommand" -a "default" -d "Navigate to the main worktree"
 complete -c wt -n "__fish_use_subcommand" -a "pr" -d "Checkout GitHub PR in worktree"
