@@ -831,7 +831,7 @@ func generatePowerShellScript(wtBinary string, scenario Scenario, verbose, showO
 	// harness-only variant that pre-joined the lines hid #130: the shipped
 	// line failed on Windows PowerShell 5.1 while CI stayed green.
 	if !scenario.SkipShellenv {
-		sb.WriteString("& $env:WT_BIN shellenv | Out-String | Invoke-Expression\n")
+		sb.WriteString("& $env:WT_BIN shellenv powershell | Out-String | Invoke-Expression\n")
 	}
 
 	// Test steps

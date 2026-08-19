@@ -331,14 +331,14 @@ func TestPowerShellSetupLineHasNoDrift(t *testing.T) {
 	}
 
 	// The literal shipped to users, and the repeats that must match it. The
-	// E2E harness substitutes $env:WT_BIN for the binary under test, so only
-	// the pipeline tail is compared there.
+	// E2E harness invokes the binary under test as $env:WT_BIN rather than by
+	// name, so everything after "wt " is compared there.
 	sources := []struct {
 		path string
 		want string
 	}{
 		{"../docs/installation.md", powershellSetupLine},
-		{"../e2e/run.go", "shellenv | Out-String | Invoke-Expression"},
+		{"../e2e/run.go", strings.TrimPrefix(powershellSetupLine, "wt ")},
 	}
 	for _, src := range sources {
 		data, err := os.ReadFile(src.path)
