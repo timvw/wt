@@ -49,6 +49,7 @@ Configuration and hooks
   (--config / WT_CONFIG select which TOML file is loaded; they are not a precedence level)
 - Clone placement (wt clone): repo_root (default ~/dev/repos) + repo_pattern (default {.repoRoot}/{.repo.Host}/{.repo.Owner}/{.repo.Name}/{.branch})
 - There is no built-in category concept: add a grouping segment yourself via {.env.VARNAME} in repo_pattern
+- Environment variable defaults: {.env.VARNAME:-fallback} uses "fallback" when VARNAME is unset; {.env.VARNAME} without :- still errors on missing (catches typos)
 - Supported hooks: pre/post create, checkout, remove, pr, mr, clone
 - Hook env vars: WT_PATH, WT_BRANCH, WT_MAIN, WT_REPO_NAME, WT_REPO_HOST, WT_REPO_OWNER
 - Disable hooks: WT_HOOKS_DISABLED=1

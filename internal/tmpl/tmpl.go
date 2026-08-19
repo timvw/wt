@@ -10,14 +10,26 @@ import (
 
 // Render executes pattern as a Go template with "{" "}" delimiters against ctx.
 // Empty pattern returns "". Missing keys are an error.
+//
+// Bash-style defaults are supported for environment-variable references:
+//
+//	{.env.X:-fallback}   → uses "fallback" when X is unset
+//	{.env.X:-}           → uses "" when X is unset
+//	{.env.X}             → errors when X is unset (unchanged behaviour)
+//
+// The default value may contain any character except "}".
 func Render(pattern string, ctx any) (string, error) {
 	if pattern == "" {
 		return "", nil
 	}
+	processed := expandDefaults(pattern)
 	tpl, err := template.New("wt").
 		Delims("{", "}").
 		Option("missingkey=error").
-		Parse(pattern)
+		Funcs(template.FuncMap{
+			"envOr": envOr,
+		}).
+		Parse(processed)
 	if err != nil {
 		return "", fmt.Errorf("invalid pattern %q: %w", pattern, err)
 	}
@@ -26,6 +38,76 @@ func Render(pattern string, ctx any) (string, error) {
 		return "", fmt.Errorf("render %q: %w", pattern, err)
 	}
 	return buf.String(), nil
+}
+
+// envOr returns env[key] when present, otherwise fallback.
+func envOr(key, fallback string, env map[string]string) string {
+	if v, ok := env[key]; ok {
+		return v
+	}
+	return fallback
+}
+
+// expandDefaults rewrites bash-style defaults in env references:
+//
+//	{.env.VAR:-fallback}  →  {envOr "VAR" "fallback" .env}
+//	{.env.VAR:-}          →  {envOr "VAR" "" .env}
+//
+// Plain {.env.VAR} references (no ":-") are left untouched so that
+// missingkey=error still catches misspelled variable names.
+func expandDefaults(pattern string) string {
+	const prefix = "{.env."
+	// Fast path: nothing to rewrite.
+	if !strings.Contains(pattern, ":-") {
+		return pattern
+	}
+
+	var buf strings.Builder
+	buf.Grow(len(pattern))
+	i := 0
+	for i < len(pattern) {
+		// Look for the {.env. prefix.
+		if i+len(prefix) < len(pattern) && pattern[i:i+len(prefix)] == prefix {
+			// Read the variable name ([A-Za-z_][A-Za-z0-9_]*).
+			j := i + len(prefix)
+			nameStart := j
+			for j < len(pattern) && isEnvVarChar(pattern[j]) {
+				j++
+			}
+			name := pattern[nameStart:j]
+			// Must have a non-empty name followed by ":-".
+			if len(name) > 0 && j+1 < len(pattern) && pattern[j] == ':' && pattern[j+1] == '-' {
+				// Consume the default up to the next unescaped '}'.
+				k := j + 2
+				end := strings.IndexByte(pattern[k:], '}')
+				if end >= 0 {
+					def := pattern[k : k+end]
+					buf.WriteString(`{envOr "`)
+					buf.WriteString(name)
+					buf.WriteString(`" "`)
+					buf.WriteString(escapeGoString(def))
+					buf.WriteString(`" .env}`)
+					i = k + end + 1
+					continue
+				}
+			}
+		}
+		buf.WriteByte(pattern[i])
+		i++
+	}
+	return buf.String()
+}
+
+func isEnvVarChar(b byte) bool {
+	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_'
+}
+
+// escapeGoString escapes double-quotes and backslashes inside a Go
+// template string literal so the value can be embedded between "…".
+func escapeGoString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return s
 }
 
 // Transform replaces "/" and "\" in s with sep. Apply to user-supplied value
