@@ -85,6 +85,16 @@ jobs:
           go-version: '1.26'
           cache: true
 
+      # The fish wrapper tests execute the generated integration script for
+      # real and skip themselves when fish is absent, which the runners' default
+      # image is. Without this the no-script(1) fallback (#131) is unit-tested
+      # nowhere.
+      - name: Install fish (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fish
+
       - name: Run unit tests
         if: matrix.os == 'linux'
         run: go test -short -v -race -coverprofile=coverage.out ./...

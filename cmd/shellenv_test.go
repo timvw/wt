@@ -268,6 +268,9 @@ func TestFishShellenvScript(t *testing.T) {
 		"__wt_complete_branches",
 		"__wt_complete_worktree_branches",
 		"mktemp -t wt.XXXXXX",
+		// The fallback for hosts without script(1) (#131). Behaviour is covered
+		// by the wrapper tests; this catches its removal where fish is absent.
+		"if not type -q script",
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("fishShellenvScript() missing %q", want)
