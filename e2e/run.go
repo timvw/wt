@@ -825,10 +825,13 @@ func generatePowerShellScript(wtBinary string, scenario Scenario, verbose, showO
 		}
 	}
 
-	// Source shellenv unless skipped
+	// Source shellenv unless skipped. This must stay byte-for-byte the form
+	// documented in `wt shellenv --help`, docs/installation.md and written by
+	// `wt init` (modulo $env:WT_BIN for the binary under test). An earlier
+	// harness-only variant that pre-joined the lines hid #130: the shipped
+	// line failed on Windows PowerShell 5.1 while CI stayed green.
 	if !scenario.SkipShellenv {
-		sb.WriteString("$shellenv = & $env:WT_BIN shellenv\n")
-		sb.WriteString("Invoke-Expression ($shellenv -join \"`n\")\n")
+		sb.WriteString("& $env:WT_BIN shellenv | Out-String | Invoke-Expression\n")
 	}
 
 	// Test steps

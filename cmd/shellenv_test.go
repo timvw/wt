@@ -314,3 +314,50 @@ func TestShellenvFishOutput(t *testing.T) {
 		t.Error("shellenv should auto-detect fish via $SHELL and output fish script")
 	}
 }
+
+// TestPowerShellSetupLineHasNoDrift pins the documented PowerShell setup to the
+// form that actually works, and checks every place that repeats it.
+//
+// Regression test for #130: the shipped line used the subexpression form
+// Invoke-Expression (& wt shellenv powershell), which fails on Windows
+// PowerShell 5.1 because shellenv's multi-line output becomes an Object[] that
+// Invoke-Expression's [string] -Command parameter refuses. CI missed it because
+// the E2E harness sourced shellenv via a variant of its own.
+func TestPowerShellSetupLineHasNoDrift(t *testing.T) {
+	const broken = "Invoke-Expression (&"
+
+	if got := powershellSetupLine; got != "wt shellenv powershell | Out-String | Invoke-Expression" {
+		t.Fatalf("powershellSetupLine changed to %q; verify it works on Windows PowerShell 5.1 before updating this test", got)
+	}
+
+	// The literal shipped to users, and the repeats that must match it. The
+	// E2E harness substitutes $env:WT_BIN for the binary under test, so only
+	// the pipeline tail is compared there.
+	sources := []struct {
+		path string
+		want string
+	}{
+		{"../docs/installation.md", powershellSetupLine},
+		{"../e2e/run.go", "shellenv | Out-String | Invoke-Expression"},
+	}
+	for _, src := range sources {
+		data, err := os.ReadFile(src.path)
+		if err != nil {
+			t.Fatalf("read %s: %v", src.path, err)
+		}
+		content := string(data)
+		if !strings.Contains(content, src.want) {
+			t.Errorf("%s does not contain %q", src.path, src.want)
+		}
+		if strings.Contains(content, broken) {
+			t.Errorf("%s still uses the subexpression form %q, which fails on Windows PowerShell 5.1", src.path, broken)
+		}
+	}
+
+	if !strings.Contains(shellenvCmd.Long, powershellSetupLine) {
+		t.Errorf("shellenv help text does not contain %q", powershellSetupLine)
+	}
+	if !strings.Contains(getShellConfigContent("powershell"), powershellSetupLine) {
+		t.Errorf("wt init powershell block does not contain %q", powershellSetupLine)
+	}
+}

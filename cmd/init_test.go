@@ -311,7 +311,7 @@ func TestGetShellConfigContent(t *testing.T) {
 		{
 			name:     "powershell content",
 			shell:    "powershell",
-			contains: []string{markerStart, markerEnd, "wt shellenv powershell", "Invoke-Expression"},
+			contains: []string{markerStart, markerEnd, powershellSetupLine},
 		},
 		{
 			name:  "unsupported shell returns empty",
