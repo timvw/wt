@@ -69,11 +69,11 @@ var infoCmd = &cobra.Command{
 					{"name": "inside-dotdir", "pattern": "{.repo.Main}/.worktrees/{.branch}"},
 					{"name": "custom", "pattern": "requires pattern setting"},
 				},
-				"pattern_variables": []string{"{.repo.Name}", "{.repo.Main}", "{.repo.Owner}", "{.repo.Host}", "{.branch}", "{.worktreeRoot}", "{.env.VARNAME}"},
+				"pattern_variables": []string{"{.repo.Name}", "{.repo.Main}", "{.repo.Owner}", "{.repo.Host}", "{.branch}", "{.worktreeRoot}", "{.env.VARNAME}", "{.env.VARNAME:-default}"},
 				"hooks":             hooks,
 				"repo_pattern": map[string]any{
 					"value":     repoPattern,
-					"variables": []string{"{.repoRoot}", "{.repo.Host}", "{.repo.Owner}", "{.repo.Name}", "{.branch}", "{.env.VARNAME}"},
+					"variables": []string{"{.repoRoot}", "{.repo.Host}", "{.repo.Owner}", "{.repo.Name}", "{.branch}", "{.env.VARNAME}", "{.env.VARNAME:-default}"},
 				},
 			})
 		}
@@ -99,17 +99,18 @@ Strategies:
   inside-dotdir    -> {.repo.Main}/.worktrees/{.branch}
   custom           -> requires pattern setting
 
-Pattern variables: {.repo.Name}, {.repo.Main}, {.repo.Owner}, {.repo.Host}, {.branch}, {.worktreeRoot}, {.env.VARNAME}
+Pattern variables: {.repo.Name}, {.repo.Main}, {.repo.Owner}, {.repo.Host}, {.branch}, {.worktreeRoot}, {.env.VARNAME}, {.env.VARNAME:-default}
 Note: The separator setting controls how "/" and "\" in value variables are replaced.
       Default "/" preserves slashes (nested dirs). Set to "-" or "_" for flat paths.
       Path variables ({.repo.Main}, {.worktreeRoot}) are never transformed.
 Note: {.env.VARNAME} accesses the environment variable VARNAME (e.g. {.env.HOME}).
+      {.env.VARNAME:-fallback} uses "fallback" when VARNAME is unset.
 `, configFilePath, configStatus, repoLine, worktreeStrategy, pattern, worktreeRoot, worktreeSeparator)
 
 		// Show clone placement (used by wt clone)
 		fmt.Printf("Repo root (wt clone):    %s\n", reposRoot)
 		fmt.Printf("Repo pattern (wt clone): %s\n", repoPattern)
-		fmt.Println("Repo pattern variables: {.repoRoot}, {.repo.Host}, {.repo.Owner}, {.repo.Name}, {.branch}, {.env.VARNAME}")
+		fmt.Println("Repo pattern variables: {.repoRoot}, {.repo.Host}, {.repo.Owner}, {.repo.Name}, {.branch}, {.env.VARNAME}, {.env.VARNAME:-default}")
 		fmt.Println()
 
 		// Show configured hooks
