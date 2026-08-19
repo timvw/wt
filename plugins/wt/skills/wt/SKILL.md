@@ -55,8 +55,10 @@ The `pattern` setting controls the path template. Variables: `{root}`, `{repo}`,
 
 - Config file: `~/.config/wt/config.toml` (or `WT_CONFIG` / `--config`)
 - Per-repo override: `.wt.toml` in the repo root
+- Git config: `git config --local wt.strategy sibling-repo` (also `wt.root`, `wt.pattern`, `wt.separator`; scalars only, no hooks)
 - Key settings: `root`, `strategy`, `pattern`, `separator`
 - Env overrides: `WORKTREE_ROOT`, `WORKTREE_STRATEGY`, `WORKTREE_PATTERN`, `WORKTREE_SEPARATOR`
+- Precedence (highest first): env > local git config > `.wt.toml` > config file > global git config > defaults
 
 ## Hooks
 

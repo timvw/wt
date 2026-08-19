@@ -34,16 +34,85 @@ strategy = "sibling-repo"
 # pattern = "{.worktreeRoot}/{.repo.Name}/{.branch}"
 ```
 
+## Per-repo config (`.wt.toml`)
+
+Place a `.wt.toml` in a repository root to override the global config for that
+repository. It uses the same format, and is meant for **project policy** —
+settings you are happy to commit and share with everyone working on the repo.
+
+```toml
+# <repo>/.wt.toml
+strategy = "sibling-repo"
+
+[hooks]
+post_checkout = ["cd \"$WT_PATH\" && npm install"]
+```
+
+Two differences from the global config file:
+
+- `root` is ignored. Worktree roots are a property of your machine, not of the
+  project, so a repo cannot dictate where your worktrees land.
+- Hooks are merged **per hook**: a hook the repo config does not set keeps the
+  value from the global config file.
+
+## Git config
+
+`wt` also reads its settings from `git config`, which is useful for **personal,
+machine-local** settings you do not want to commit — the reason it outranks
+`.wt.toml`:
+
+```bash
+# Just this repo (.git/config — never committed)
+git config --local wt.strategy sibling-repo
+
+# All repos (~/.gitconfig)
+git config --global wt.root ~/projects/worktrees
+```
+
+| Key | Equivalent |
+| --- | --- |
+| `wt.root` | `root` |
+| `wt.repo_root` | `repo_root` |
+| `wt.strategy` | `strategy` |
+| `wt.pattern` | `pattern` |
+| `wt.separator` | `separator` |
+| `wt.repo_pattern` | `repo_pattern` |
+
+Notes:
+
+- **Hooks are not read from git config.** Use a config file for those.
+- Unlike `.wt.toml`, local git config **may** set `wt.root`: it is your own
+  local state rather than project policy arriving through a pull request.
+- Linked worktrees share the main repository's `.git/config`, so `--local`
+  settings apply from every worktree of that repo.
+
 ## Precedence
 
 Configuration values are resolved in this order (highest priority first):
 
-1. **CLI flags** (`--config`)
-2. **Environment variables** (`WORKTREE_ROOT`, `WORKTREE_STRATEGY`, `WORKTREE_PATTERN`, `WORKTREE_SEPARATOR`)
-3. **Config file** (`~/.config/wt/config.toml`)
-4. **Built-in defaults**
+1. **Environment variables** (`WORKTREE_ROOT`, `WORKTREE_STRATEGY`, `WORKTREE_PATTERN`, `WORKTREE_SEPARATOR`, `WT_REPO_ROOT`, `WT_REPO_PATTERN`)
+2. **Local git config** (`.git/config`, via `git config --local wt.*`)
+3. **Repo config file** (`<repo>/.wt.toml`)
+4. **Config file** (`~/.config/wt/config.toml`)
+5. **Global git config** (`~/.gitconfig`, via `git config --global wt.*`)
+6. **Built-in defaults**
 
-Run `wt config show` to see the effective value and source of each setting.
+`--config` and `WT_CONFIG` are not a precedence level of their own: they select
+*which* TOML file is loaded at level 4. Values in that file are still overridden
+by `.wt.toml`, local git config, and environment variables.
+
+Run `wt config show` to see the effective value and source of each setting:
+
+```console
+$ wt config show
+Config file: ~/.config/wt/config.toml (found)
+
+Effective configuration:
+  root       = /Users/you/dev/worktrees        (default)
+  strategy   = sibling-repo                    (git config (local))
+  pattern    = {.repo.Main}/../{.branch}       (default)
+  separator  = "/"                             (config file)
+```
 
 ## Strategies & Patterns
 
