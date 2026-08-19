@@ -153,12 +153,14 @@ scenarios:
     skip_os: [windows]
     skip_shellenv: true
     steps:
-      # The exact name depends on the runner's init.defaultBranch, so only
-      # assert that WT_BRANCH is populated rather than a specific value.
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_clone = ["printf %%s \\"$WT_BRANCH\\" > $WT_PATH/.clone-branch"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN clone "$REPO_DIR" "$TEST_DIR/branch-dest"
+      # The exact name depends on the runner's init.defaultBranch, so the hook
+      # only records whether WT_BRANCH is populated. "x$WT_BRANCH != x" rather
+      # than "test -n": an unquoted empty expansion would leave test -n a single
+      # argument, which is true, and the assertion would pass vacuously.
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_clone = ["test x$WT_BRANCH != x && touch $WT_PATH/.branch-set"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN clone "$REPO_DIR" "$TEST_DIR/branch-dest"
         expect:
           exit_code: 0
-      - run: test -s "$TEST_DIR/branch-dest/.clone-branch" && echo "BRANCH_SET" || echo "BRANCH_EMPTY"
+      - run: test -f "$TEST_DIR/branch-dest/.branch-set" && echo "BRANCH_SET" || echo "BRANCH_EMPTY"
         expect:
           output_contains: "BRANCH_SET"
 
