@@ -152,12 +152,11 @@ func TestRepoPlacementPathRequiresRepoInfo(t *testing.T) {
 func TestRepoPlacementPathRejectsTraversal(t *testing.T) {
 	withCloneConfig(t, defaultRepoPattern)
 
-	// Escapes via the path, and via the host: an scp-like source parses
-	// everything before the colon as the host.
+	// Escapes via the path, and via the host — url.Parse accepts ".." as a
+	// hostname, and the default pattern renders {.repo.Host}.
 	for _, src := range []string{
 		"https://github.com/../../../tmp/pwn.git",
 		"https://../owner/repo.git",
-		"../escape:owner/repo.git",
 	} {
 		info, ok := parseRemoteURL(src)
 		if !ok {
@@ -166,6 +165,12 @@ func TestRepoPlacementPathRejectsTraversal(t *testing.T) {
 		if _, err := repoPlacementPath(info, "main"); err == nil {
 			t.Errorf("expected error for %q, got nil", src)
 		}
+	}
+
+	// Belt and braces: even if a caller hands over a traversing host directly,
+	// placement refuses rather than rendering it.
+	if _, err := repoPlacementPath(repoInfo{Host: "../escape", Owner: "o", Name: "r"}, "main"); err == nil {
+		t.Error("expected error for host containing \"..\", got nil")
 	}
 
 	// The same guard applies to the branch segment.
