@@ -69,11 +69,16 @@ func repoPlacementPath(info repoInfo, branch string) (string, error) {
 	}
 
 	path := expandHome(filepath.FromSlash(rendered))
-	// A pattern that omits {.repoRoot} renders a relative path, which would
-	// otherwise clone into the caller's current directory. Anchor it under the
+	// A pattern that omits {.repoRoot} renders a path relative to the caller's
+	// current directory, which is never what a clone wants. Anchor it under the
 	// repo root, the same way renderWorktreePath anchors relative worktree
 	// patterns under the worktree root.
-	if !filepath.IsAbs(path) {
+	//
+	// Keyed on the pattern rather than on IsAbs(path): a repo_root that is
+	// relative, or rooted-but-driveless on Windows ("\data\repos"), renders a
+	// path that IsAbs rejects, and anchoring it would prepend the root a second
+	// time. If the pattern named {.repoRoot}, it is already anchored.
+	if !strings.Contains(pattern, "{.repoRoot}") && !filepath.IsAbs(path) {
 		path = filepath.Join(reposRoot, path)
 	}
 	return filepath.Clean(path), nil

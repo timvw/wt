@@ -45,27 +45,30 @@ func TestLooksLikeGHNameWithOwner(t *testing.T) {
 	}
 }
 
-// withCloneConfig sets the clone placement globals for a test and restores them.
-func withCloneConfig(t *testing.T, root, pattern string) {
+// withCloneConfig points the clone placement globals at a fresh temp directory
+// for the duration of a test and returns that root. t.TempDir keeps the root
+// absolute on every platform, which a hard-coded "/tmp/repos" is not on Windows.
+func withCloneConfig(t *testing.T, pattern string) string {
 	t.Helper()
 	origRoot, origPattern, origSep := reposRoot, repoPattern, worktreeSeparator
 	t.Cleanup(func() {
 		reposRoot, repoPattern, worktreeSeparator = origRoot, origPattern, origSep
 	})
-	reposRoot = root
+	reposRoot = t.TempDir()
 	repoPattern = pattern
 	worktreeSeparator = "/"
+	return reposRoot
 }
 
 func TestRepoPlacementPathDefault(t *testing.T) {
-	withCloneConfig(t, filepath.FromSlash("/tmp/repos"), defaultRepoPattern)
+	root := withCloneConfig(t, defaultRepoPattern)
 	info := repoInfo{Host: "github.com", Owner: "timvw", Name: "wt"}
 
 	got, err := repoPlacementPath(info, "main")
 	if err != nil {
 		t.Fatalf("repoPlacementPath: %v", err)
 	}
-	want := filepath.FromSlash("/tmp/repos/github.com/timvw/wt/main")
+	want := filepath.Join(root, "github.com", "timvw", "wt", "main")
 	if got != want {
 		t.Errorf("repoPlacementPath = %q, want %q", got, want)
 	}
@@ -74,7 +77,7 @@ func TestRepoPlacementPathDefault(t *testing.T) {
 // The env-var escape hatch is what replaces a built-in "category" concept:
 // users add their own grouping level through repo_pattern.
 func TestRepoPlacementPathEnvCategory(t *testing.T) {
-	withCloneConfig(t, filepath.FromSlash("/tmp/repos"), "{.repoRoot}/{.env.WT_TEST_CATEGORY}/{.repo.Owner}/{.repo.Name}/{.branch}")
+	root := withCloneConfig(t, "{.repoRoot}/{.env.WT_TEST_CATEGORY}/{.repo.Owner}/{.repo.Name}/{.branch}")
 	info := repoInfo{Host: "github.com", Owner: "acme", Name: "api"}
 
 	t.Setenv("WT_TEST_CATEGORY", "work")
@@ -82,7 +85,7 @@ func TestRepoPlacementPathEnvCategory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("repoPlacementPath: %v", err)
 	}
-	want := filepath.FromSlash("/tmp/repos/work/acme/api/main")
+	want := filepath.Join(root, "work", "acme", "api", "main")
 	if got != want {
 		t.Errorf("repoPlacementPath = %q, want %q", got, want)
 	}
@@ -93,7 +96,7 @@ func TestRepoPlacementPathEnvCategory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("repoPlacementPath (empty category): %v", err)
 	}
-	want = filepath.FromSlash("/tmp/repos/acme/api/main")
+	want = filepath.Join(root, "acme", "api", "main")
 	if got != want {
 		t.Errorf("repoPlacementPath with empty category = %q, want %q", got, want)
 	}
@@ -101,7 +104,7 @@ func TestRepoPlacementPathEnvCategory(t *testing.T) {
 
 // A pattern that omits {.repoRoot} must not clone into the caller's cwd.
 func TestRepoPlacementPathAnchorsRelativePattern(t *testing.T) {
-	withCloneConfig(t, filepath.FromSlash("/tmp/repos"), "{.repo.Owner}/{.repo.Name}")
+	root := withCloneConfig(t, "{.repo.Owner}/{.repo.Name}")
 	info := repoInfo{Host: "github.com", Owner: "timvw", Name: "wt"}
 
 	got, err := repoPlacementPath(info, "main")
@@ -111,14 +114,32 @@ func TestRepoPlacementPathAnchorsRelativePattern(t *testing.T) {
 	if !filepath.IsAbs(got) {
 		t.Fatalf("repoPlacementPath returned relative path %q", got)
 	}
-	want := filepath.FromSlash("/tmp/repos/timvw/wt")
+	want := filepath.Join(root, "timvw", "wt")
+	if got != want {
+		t.Errorf("repoPlacementPath = %q, want %q", got, want)
+	}
+}
+
+// A repo_root that filepath.IsAbs rejects — a relative one, or the Windows
+// rooted-but-driveless "\data\repos" — must not get prepended a second time
+// when the pattern already renders it.
+func TestRepoPlacementPathDoesNotDoubleAnchor(t *testing.T) {
+	withCloneConfig(t, defaultRepoPattern)
+	reposRoot = filepath.FromSlash("relative/repos")
+	info := repoInfo{Host: "github.com", Owner: "timvw", Name: "wt"}
+
+	got, err := repoPlacementPath(info, "main")
+	if err != nil {
+		t.Fatalf("repoPlacementPath: %v", err)
+	}
+	want := filepath.Join("relative", "repos", "github.com", "timvw", "wt", "main")
 	if got != want {
 		t.Errorf("repoPlacementPath = %q, want %q", got, want)
 	}
 }
 
 func TestRepoPlacementPathRequiresRepoInfo(t *testing.T) {
-	withCloneConfig(t, filepath.FromSlash("/tmp/repos"), defaultRepoPattern)
+	withCloneConfig(t, defaultRepoPattern)
 	// Missing owner (e.g. a local path source) must error, prompting for an
 	// explicit destination instead of producing a malformed path.
 	if _, err := repoPlacementPath(repoInfo{Name: "wt"}, "main"); err == nil {
@@ -129,7 +150,7 @@ func TestRepoPlacementPathRequiresRepoInfo(t *testing.T) {
 // A URL pasted from an untrusted source must not walk the clone out of
 // repo_root: https://host/../../../tmp/pwn.git parses to owner "../../../tmp".
 func TestRepoPlacementPathRejectsTraversal(t *testing.T) {
-	withCloneConfig(t, filepath.FromSlash("/tmp/repos"), defaultRepoPattern)
+	withCloneConfig(t, defaultRepoPattern)
 
 	// Escapes via the path, and via the host: an scp-like source parses
 	// everything before the colon as the host.
