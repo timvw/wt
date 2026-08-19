@@ -41,11 +41,14 @@ Section B: Contributing to wt (project authors/maintainers)
 
 Configuration and hooks
 - Config file: ~/.config/wt/config.toml (or WT_CONFIG / --config)
+- Per-repo override: .wt.toml in the repo root (project policy; ignores root, repo_root, repo_pattern, clone hooks)
+- Git config: wt.root, wt.repo_root, wt.strategy, wt.pattern, wt.separator, wt.repo_pattern via git config --local/--global (scalars only, no hooks)
 - Key settings: root, strategy, pattern, separator, repo_root, repo_pattern
 - Env overrides: WORKTREE_ROOT, WORKTREE_STRATEGY, WORKTREE_PATTERN, WORKTREE_SEPARATOR, WT_REPO_ROOT, WT_REPO_PATTERN
+- Precedence (highest first): env > local git config > .wt.toml > config file > global git config > defaults
+  (--config / WT_CONFIG select which TOML file is loaded; they are not a precedence level)
 - Clone placement (wt clone): repo_root (default ~/dev/repos) + repo_pattern (default {.repoRoot}/{.repo.Host}/{.repo.Owner}/{.repo.Name}/{.branch})
 - There is no built-in category concept: add a grouping segment yourself via {.env.VARNAME} in repo_pattern
-- repo_root, repo_pattern and clone hooks are NOT read from a repo-level .wt.toml (clone targets another repository)
 - Supported hooks: pre/post create, checkout, remove, pr, mr, clone
 - Hook env vars: WT_PATH, WT_BRANCH, WT_MAIN, WT_REPO_NAME, WT_REPO_HOST, WT_REPO_OWNER
 - Disable hooks: WT_HOOKS_DISABLED=1

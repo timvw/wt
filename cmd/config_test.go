@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -319,6 +320,7 @@ func TestLoadWorktreeConfig(t *testing.T) {
 	origConfigSources := configSources
 	origReposRoot := reposRoot
 	origRepoPattern := repoPattern
+	origGitConfigFn := gitConfigFn
 	origEnvRoot := os.Getenv("WORKTREE_ROOT")
 	origEnvStrategy := os.Getenv("WORKTREE_STRATEGY")
 	origEnvPattern := os.Getenv("WORKTREE_PATTERN")
@@ -334,11 +336,16 @@ func TestLoadWorktreeConfig(t *testing.T) {
 		configSources = origConfigSources
 		reposRoot = origReposRoot
 		repoPattern = origRepoPattern
+		gitConfigFn = origGitConfigFn
 		os.Setenv("WORKTREE_ROOT", origEnvRoot)
 		os.Setenv("WORKTREE_STRATEGY", origEnvStrategy)
 		os.Setenv("WORKTREE_PATTERN", origEnvPattern)
 		os.Setenv("WT_CONFIG", origEnvConfig)
 	})
+
+	// Isolate from the developer's real git config: a contributor with wt.*
+	// keys in ~/.gitconfig would otherwise fail these tests.
+	gitConfigFn = func(gitConfigScope) map[string]string { return nil }
 
 	t.Run("loads defaults when no config file", func(t *testing.T) {
 		os.Setenv("WORKTREE_ROOT", "")
@@ -579,6 +586,9 @@ func TestLoadWorktreeConfigRepoConfig(t *testing.T) {
 	origRepoPath := configRepoPath
 	origRepoFound := configRepoFound
 	origGitRepoRootFn := gitRepoRootFn
+	origGitConfigFn := gitConfigFn
+	origReposRoot := reposRoot
+	origRepoPattern := repoPattern
 	origEnvRoot := os.Getenv("WORKTREE_ROOT")
 	origEnvStrategy := os.Getenv("WORKTREE_STRATEGY")
 	origEnvPattern := os.Getenv("WORKTREE_PATTERN")
@@ -598,6 +608,9 @@ func TestLoadWorktreeConfigRepoConfig(t *testing.T) {
 		configRepoPath = origRepoPath
 		configRepoFound = origRepoFound
 		gitRepoRootFn = origGitRepoRootFn
+		gitConfigFn = origGitConfigFn
+		reposRoot = origReposRoot
+		repoPattern = origRepoPattern
 		os.Setenv("WORKTREE_ROOT", origEnvRoot)
 		os.Setenv("WORKTREE_STRATEGY", origEnvStrategy)
 		os.Setenv("WORKTREE_PATTERN", origEnvPattern)
@@ -616,6 +629,8 @@ func TestLoadWorktreeConfigRepoConfig(t *testing.T) {
 		os.Unsetenv("WORKTREE_SEPARATOR")
 		os.Setenv("WT_CONFIG", "/nonexistent/config.toml")
 		configFlag = ""
+		// Isolate from the developer's real git config.
+		gitConfigFn = func(gitConfigScope) map[string]string { return nil }
 	}
 
 	t.Run("repo config overrides global config", func(t *testing.T) {
@@ -805,6 +820,407 @@ post_create = ["npm install"]
 	})
 }
 
+func TestLoadWorktreeConfigGitConfig(t *testing.T) {
+	// Save original state
+	origRoot := worktreeRoot
+	origStrategy := worktreeStrategy
+	origPattern := worktreePattern
+	origSeparator := worktreeSeparator
+	origConfigFlag := configFlag
+	origConfigFilePath := configFilePath
+	origConfigFileFound := configFileFound
+	origConfigSources := configSources
+	origHooks := worktreeHooks
+	origRepoPath := configRepoPath
+	origRepoFound := configRepoFound
+	origGitRepoRootFn := gitRepoRootFn
+	origGitConfigFn := gitConfigFn
+	origReposRoot := reposRoot
+	origRepoPattern := repoPattern
+	origEnvRoot := os.Getenv("WORKTREE_ROOT")
+	origEnvStrategy := os.Getenv("WORKTREE_STRATEGY")
+	origEnvPattern := os.Getenv("WORKTREE_PATTERN")
+	origEnvSeparator, envSepSet := os.LookupEnv("WORKTREE_SEPARATOR")
+	origEnvConfig := os.Getenv("WT_CONFIG")
+
+	t.Cleanup(func() {
+		worktreeRoot = origRoot
+		worktreeStrategy = origStrategy
+		worktreePattern = origPattern
+		worktreeSeparator = origSeparator
+		configFlag = origConfigFlag
+		configFilePath = origConfigFilePath
+		configFileFound = origConfigFileFound
+		configSources = origConfigSources
+		worktreeHooks = origHooks
+		configRepoPath = origRepoPath
+		configRepoFound = origRepoFound
+		gitRepoRootFn = origGitRepoRootFn
+		gitConfigFn = origGitConfigFn
+		reposRoot = origReposRoot
+		repoPattern = origRepoPattern
+		os.Setenv("WORKTREE_ROOT", origEnvRoot)
+		os.Setenv("WORKTREE_STRATEGY", origEnvStrategy)
+		os.Setenv("WORKTREE_PATTERN", origEnvPattern)
+		if envSepSet {
+			os.Setenv("WORKTREE_SEPARATOR", origEnvSeparator)
+		} else {
+			os.Unsetenv("WORKTREE_SEPARATOR")
+		}
+		os.Setenv("WT_CONFIG", origEnvConfig)
+	})
+
+	clearEnv := func() {
+		os.Setenv("WORKTREE_ROOT", "")
+		os.Setenv("WORKTREE_STRATEGY", "")
+		os.Setenv("WORKTREE_PATTERN", "")
+		os.Unsetenv("WORKTREE_SEPARATOR")
+		os.Setenv("WT_CONFIG", "/nonexistent/config.toml")
+		configFlag = ""
+		gitRepoRootFn = func() (string, error) { return t.TempDir(), nil }
+		gitConfigFn = func(gitConfigScope) map[string]string { return nil }
+	}
+
+	// stubGitConfig serves per-scope values to the loader.
+	stubGitConfig := func(global, local map[string]string) {
+		gitConfigFn = func(scope gitConfigScope) map[string]string {
+			switch scope {
+			case gitScopeGlobal:
+				return global
+			case gitScopeLocal:
+				return local
+			}
+			return nil
+		}
+	}
+
+	t.Run("global git config applies over defaults", func(t *testing.T) {
+		clearEnv()
+		stubGitConfig(map[string]string{
+			"wt.root":      "/from/global/git",
+			"wt.strategy":  "sibling-repo",
+			"wt.pattern":   "{.worktreeRoot}/global-git/{.branch}",
+			"wt.separator": "-",
+		}, nil)
+
+		loadWorktreeConfig()
+
+		if worktreeRoot != "/from/global/git" {
+			t.Errorf("worktreeRoot = %q, want /from/global/git", worktreeRoot)
+		}
+		if worktreeStrategy != "sibling-repo" {
+			t.Errorf("worktreeStrategy = %q, want sibling-repo", worktreeStrategy)
+		}
+		if worktreeSeparator != "-" {
+			t.Errorf("worktreeSeparator = %q, want -", worktreeSeparator)
+		}
+		if configSources.Root != "git config (global)" {
+			t.Errorf("configSources.Root = %q, want git config (global)", configSources.Root)
+		}
+	})
+
+	t.Run("config file overrides global git config", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfgPath := filepath.Join(tmpDir, "config.toml")
+		if err := os.WriteFile(cfgPath, []byte(`strategy = "parent-branches"
+`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		clearEnv()
+		os.Setenv("WT_CONFIG", cfgPath)
+		stubGitConfig(map[string]string{"wt.strategy": "sibling-repo"}, nil)
+
+		loadWorktreeConfig()
+
+		if worktreeStrategy != "parent-branches" {
+			t.Errorf("worktreeStrategy = %q, want parent-branches (config file wins)", worktreeStrategy)
+		}
+		if configSources.Strategy != "config file" {
+			t.Errorf("configSources.Strategy = %q, want config file", configSources.Strategy)
+		}
+	})
+
+	t.Run("local git config overrides repo .wt.toml", func(t *testing.T) {
+		repoDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(repoDir, ".wt.toml"), []byte(`strategy = "parent-worktrees"
+separator = "_"
+`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		clearEnv()
+		gitRepoRootFn = func() (string, error) { return repoDir, nil }
+		stubGitConfig(nil, map[string]string{"wt.strategy": "sibling-repo"})
+
+		loadWorktreeConfig()
+
+		if worktreeStrategy != "sibling-repo" {
+			t.Errorf("worktreeStrategy = %q, want sibling-repo (local git wins over .wt.toml)", worktreeStrategy)
+		}
+		if configSources.Strategy != "git config (local)" {
+			t.Errorf("configSources.Strategy = %q, want git config (local)", configSources.Strategy)
+		}
+		// .wt.toml still supplies settings local git config does not set.
+		if worktreeSeparator != "_" {
+			t.Errorf("worktreeSeparator = %q, want _ (from .wt.toml)", worktreeSeparator)
+		}
+		if configSources.Separator != "repo config" {
+			t.Errorf("configSources.Separator = %q, want repo config", configSources.Separator)
+		}
+	})
+
+	t.Run("local git config overrides global git config", func(t *testing.T) {
+		clearEnv()
+		stubGitConfig(
+			map[string]string{"wt.strategy": "sibling-repo", "wt.root": "/from/global/git"},
+			map[string]string{"wt.strategy": "parent-branches"},
+		)
+
+		loadWorktreeConfig()
+
+		if worktreeStrategy != "parent-branches" {
+			t.Errorf("worktreeStrategy = %q, want parent-branches", worktreeStrategy)
+		}
+		// global still supplies root, which local does not set
+		if worktreeRoot != "/from/global/git" {
+			t.Errorf("worktreeRoot = %q, want /from/global/git", worktreeRoot)
+		}
+		if configSources.Root != "git config (global)" {
+			t.Errorf("configSources.Root = %q, want git config (global)", configSources.Root)
+		}
+	})
+
+	t.Run("env vars override local git config", func(t *testing.T) {
+		clearEnv()
+		stubGitConfig(nil, map[string]string{"wt.strategy": "sibling-repo"})
+		os.Setenv("WORKTREE_STRATEGY", "parent-branches")
+
+		loadWorktreeConfig()
+
+		if worktreeStrategy != "parent-branches" {
+			t.Errorf("worktreeStrategy = %q, want parent-branches", worktreeStrategy)
+		}
+		if configSources.Strategy != "env: WORKTREE_STRATEGY" {
+			t.Errorf("configSources.Strategy = %q, want env: WORKTREE_STRATEGY", configSources.Strategy)
+		}
+	})
+
+	t.Run("local git config may set root unlike .wt.toml", func(t *testing.T) {
+		repoDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(repoDir, ".wt.toml"), []byte(`root = "/ignored/from/wt/toml"
+`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		clearEnv()
+		gitRepoRootFn = func() (string, error) { return repoDir, nil }
+		stubGitConfig(nil, map[string]string{"wt.root": "/from/local/git"})
+
+		loadWorktreeConfig()
+
+		if worktreeRoot != "/from/local/git" {
+			t.Errorf("worktreeRoot = %q, want /from/local/git", worktreeRoot)
+		}
+	})
+
+	t.Run("no wt keys leaves other sources untouched", func(t *testing.T) {
+		clearEnv()
+		stubGitConfig(map[string]string{}, map[string]string{})
+
+		loadWorktreeConfig()
+
+		home, _ := os.UserHomeDir()
+		if worktreeRoot != filepath.Join(home, "dev", "worktrees") {
+			t.Errorf("worktreeRoot = %q, want default", worktreeRoot)
+		}
+		if configSources.Strategy != "default" {
+			t.Errorf("configSources.Strategy = %q, want default", configSources.Strategy)
+		}
+	})
+
+	t.Run("blank values are ignored but empty separator applies", func(t *testing.T) {
+		clearEnv()
+		stubGitConfig(nil, map[string]string{
+			"wt.root":      "   ",
+			"wt.strategy":  "",
+			"wt.separator": "",
+		})
+
+		loadWorktreeConfig()
+
+		home, _ := os.UserHomeDir()
+		if worktreeRoot != filepath.Join(home, "dev", "worktrees") {
+			t.Errorf("worktreeRoot = %q, want default (blank ignored)", worktreeRoot)
+		}
+		if worktreeStrategy != "global" {
+			t.Errorf("worktreeStrategy = %q, want global (blank ignored)", worktreeStrategy)
+		}
+		// An explicitly empty separator is meaningful, matching WORKTREE_SEPARATOR.
+		if worktreeSeparator != "" {
+			t.Errorf("worktreeSeparator = %q, want empty", worktreeSeparator)
+		}
+		if configSources.Separator != "git config (local)" {
+			t.Errorf("configSources.Separator = %q, want git config (local)", configSources.Separator)
+		}
+	})
+
+	t.Run("strategy is normalised to lowercase", func(t *testing.T) {
+		clearEnv()
+		stubGitConfig(nil, map[string]string{"wt.strategy": "  Sibling-Repo  "})
+
+		loadWorktreeConfig()
+
+		if worktreeStrategy != "sibling-repo" {
+			t.Errorf("worktreeStrategy = %q, want sibling-repo", worktreeStrategy)
+		}
+	})
+
+	t.Run("hooks are not read from git config", func(t *testing.T) {
+		clearEnv()
+		stubGitConfig(nil, map[string]string{"wt.hooks.post-create": "echo nope"})
+
+		loadWorktreeConfig()
+
+		if len(worktreeHooks.PostCreate) != 0 {
+			t.Errorf("worktreeHooks.PostCreate = %v, want empty (hooks are out of scope)", worktreeHooks.PostCreate)
+		}
+	})
+}
+
+func TestDefaultGitConfigParsing(t *testing.T) {
+	// Exercises the real `git config` invocation against a scratch repository,
+	// covering the parsing that the stubbed tests above skip.
+	repoDir := t.TempDir()
+
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+
+	run("init", "-q", ".")
+	run("config", "--local", "wt.pattern", "{.worktreeRoot}/with spaces/{.branch}")
+	run("config", "--local", "unrelated.key", "ignored")
+	// Multi-valued key: git lists values in file order, and the last one is
+	// what `git config --get` would resolve to.
+	run("config", "--local", "wt.strategy", "parent-branches")
+	run("config", "--add", "wt.strategy", "sibling-repo")
+	// Keys are matched case-insensitively by git, which reports the canonical
+	// lowercase name.
+	run("config", "--local", "wt.SEPARATOR", "-")
+	// A subsection key must not collide with the scalar settings.
+	run("config", "--local", "wt.hooks.post-create", "echo hi")
+
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(origDir) })
+
+	values := defaultGitConfig(gitScopeLocal)
+
+	// Last value wins for a multi-valued key.
+	if values["wt.strategy"] != "sibling-repo" {
+		t.Errorf("wt.strategy = %q, want sibling-repo (last value)", values["wt.strategy"])
+	}
+	// Values containing spaces must survive record splitting.
+	if values["wt.pattern"] != "{.worktreeRoot}/with spaces/{.branch}" {
+		t.Errorf("wt.pattern = %q, want the pattern with spaces intact", values["wt.pattern"])
+	}
+	// Key case is normalised.
+	if values["wt.separator"] != "-" {
+		t.Errorf("wt.separator = %q, want -", values["wt.separator"])
+	}
+	if _, ok := values["unrelated.key"]; ok {
+		t.Error("unrelated.key should not be returned")
+	}
+	// A subsection key is returned but must not be mistaken for a scalar.
+	if _, ok := values["wt.separator.extra"]; ok {
+		t.Error("unexpected key wt.separator.extra")
+	}
+	if v := values["wt.hooks.post-create"]; v != "echo hi" {
+		t.Errorf("wt.hooks.post-create = %q, want it parsed but unused", v)
+	}
+}
+
+func TestDefaultGitConfigMultilineAndValuelessKeys(t *testing.T) {
+	// git config values may contain newlines, and a key may be present with no
+	// value at all. Both must survive parsing without corrupting neighbours.
+	repoDir := t.TempDir()
+
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+
+	run("init", "-q", ".")
+	run("config", "--local", "wt.pattern", "line-one\nline-two")
+	run("config", "--local", "wt.strategy", "sibling-repo")
+
+	// A valueless key can only be written by editing the file directly.
+	cfgPath := filepath.Join(repoDir, ".git", "config")
+	existing, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, append(existing, []byte("\tseparator\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(origDir) })
+
+	values := defaultGitConfig(gitScopeLocal)
+
+	if values["wt.pattern"] != "line-one\nline-two" {
+		t.Errorf("wt.pattern = %q, want the embedded newline preserved", values["wt.pattern"])
+	}
+	// The multi-line value must not swallow the key that follows it.
+	if values["wt.strategy"] != "sibling-repo" {
+		t.Errorf("wt.strategy = %q, want sibling-repo", values["wt.strategy"])
+	}
+	// A valueless key is treated as unset, not as an empty string.
+	if _, ok := values["wt.separator"]; ok {
+		t.Errorf("wt.separator = %q, want absent for a valueless key", values["wt.separator"])
+	}
+}
+
+func TestDefaultGitConfigOutsideRepo(t *testing.T) {
+	// Outside a repository, --local is an error; it must degrade to "nothing
+	// configured" rather than failing the command.
+	tmpDir := t.TempDir()
+
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(origDir) })
+
+	if values := defaultGitConfig(gitScopeLocal); len(values) != 0 {
+		t.Errorf("defaultGitConfig(local) = %v, want empty outside a repo", values)
+	}
+}
+
 func TestConfigShowPatternParityBetweenTextAndJSON_Config(t *testing.T) {
 	origRoot := worktreeRoot
 	origStrategy := worktreeStrategy
@@ -814,6 +1230,8 @@ func TestConfigShowPatternParityBetweenTextAndJSON_Config(t *testing.T) {
 	origConfigFileFound := configFileFound
 	origConfigSources := configSources
 	origOutputFormat := outputFormat
+	origReposRoot := reposRoot
+	origRepoPattern := repoPattern
 
 	t.Cleanup(func() {
 		worktreeRoot = origRoot
@@ -824,6 +1242,8 @@ func TestConfigShowPatternParityBetweenTextAndJSON_Config(t *testing.T) {
 		configFileFound = origConfigFileFound
 		configSources = origConfigSources
 		outputFormat = origOutputFormat
+		reposRoot = origReposRoot
+		repoPattern = origRepoPattern
 	})
 
 	runConfigShow := func(t *testing.T, format string) string {
@@ -895,10 +1315,12 @@ func TestConfigShowPatternParityBetweenTextAndJSON_Config(t *testing.T) {
 			configFilePath = "/tmp/config.toml"
 			configFileFound = true
 			configSources = configSource{
-				Root:      "config file",
-				Strategy:  "config file",
-				Pattern:   tt.patternSource,
-				Separator: "default",
+				Root:        "config file",
+				RepoRoot:    "default",
+				Strategy:    "config file",
+				Pattern:     tt.patternSource,
+				Separator:   "default",
+				RepoPattern: "default",
 			}
 
 			textOut := runConfigShow(t, "text")

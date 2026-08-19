@@ -362,7 +362,33 @@ func envWithShell(shell string) []string {
 			env = append(env, kv)
 		}
 	}
-	return append(env, "SHELL="+shell)
+	env = append(env, "SHELL="+shell)
+	return append(env, isolationEnv()...)
+}
+
+// isolationEnv keeps scenarios independent of the machine running them, by
+// pointing every ambient configuration source at a directory that does not
+// exist. Both git and wt treat missing config files as empty.
+//
+//   - GIT_CONFIG_GLOBAL/SYSTEM: wt reads wt.* keys from git config, so a
+//     contributor with (say) wt.strategy in ~/.gitconfig would otherwise fail
+//     every scenario asserting a default value.
+//   - XDG_CONFIG_HOME: wt's own config file is looked up here first on all
+//     platforms (see configDir), so a contributor with a real
+//     ~/.config/wt/config.toml would otherwise fail the scenarios that assert
+//     no config file is found.
+//
+// GIT_CONFIG_GLOBAL/SYSTEM require git 2.32 (2021). GIT_CONFIG_NOSYSTEM works
+// on every version, so it is set as well to cover the system scope on older
+// git; the global scope is only isolated from 2.32 onwards.
+func isolationEnv() []string {
+	absent := filepath.Join(os.TempDir(), "wt-e2e-absent-config")
+	return []string{
+		"GIT_CONFIG_GLOBAL=" + filepath.Join(absent, "gitconfig"),
+		"GIT_CONFIG_SYSTEM=" + filepath.Join(absent, "gitconfig"),
+		"GIT_CONFIG_NOSYSTEM=1",
+		"XDG_CONFIG_HOME=" + absent,
+	}
 }
 
 func runScenario(wtBinary, shell, fileName string, scenario Scenario, verbose, showOutput, keepTmp bool) Result {
@@ -382,6 +408,7 @@ func runScenario(wtBinary, shell, fileName string, scenario Scenario, verbose, s
 	var cmd *exec.Cmd
 	if shell == "powershell" || shell == "pwsh" {
 		cmd = exec.Command(shell, "-NoProfile", "-Command", script)
+		cmd.Env = append(os.Environ(), isolationEnv()...)
 	} else {
 		cmd = exec.Command(posixShellCommand(shell), "-c", script)
 		// Override $SHELL to match the interpreter running this script.

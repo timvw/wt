@@ -93,3 +93,82 @@ scenarios:
         expect:
           exit_code: 0
           output_contains: "parent-branches"
+
+  - name: config_git_local_applies
+    description: Local git config supplies wt settings
+    skip_shellenv: true
+    steps:
+      - run: git config --local wt.strategy sibling-repo
+        expect:
+          exit_code: 0
+      - run: $WT_BIN config show
+        expect:
+          exit_code: 0
+          output_contains: "git config (local)"
+
+  - name: config_git_local_overrides_config_file
+    description: Local git config outranks a conflicting value in the config file
+    skip_shellenv: true
+    # Writes a config file with shell redirection, so POSIX shells only. The
+    # precedence under test is platform-independent.
+    skip_shells: [powershell, pwsh]
+    steps:
+      - run: printf 'strategy = "parent-worktrees"\n' > "$TEST_DIR/gc-cfg.toml"
+        expect:
+          exit_code: 0
+      # Without the git config key, the config file value must win.
+      - run: $WT_BIN --config "$TEST_DIR_NATIVE/gc-cfg.toml" config show
+        expect:
+          exit_code: 0
+          output_contains: "parent-worktrees"
+      - run: git config --local wt.strategy sibling-repo
+        expect:
+          exit_code: 0
+      - run: $WT_BIN --config "$TEST_DIR_NATIVE/gc-cfg.toml" config show
+        expect:
+          exit_code: 0
+          output_contains: "git config (local)"
+          output_not_contains: "parent-worktrees"
+
+  - name: config_env_overrides_git_local
+    description: Environment variables outrank local git config
+    skip_shellenv: true
+    steps:
+      - run: git config --local wt.strategy sibling-repo
+        expect:
+          exit_code: 0
+      - run: $WT_BIN config show
+        env:
+          WORKTREE_STRATEGY: parent-branches
+        expect:
+          exit_code: 0
+          output_contains: "parent-branches"
+          output_not_contains: "git config (local)"
+
+  - name: config_git_local_sets_root
+    description: Local git config may set root, unlike repo .wt.toml
+    skip_shellenv: true
+    steps:
+      - run: git config --local wt.root /tmp/wt-e2e-from-git-config
+        expect:
+          exit_code: 0
+      # WORKTREE_ROOT is exported by the harness and outranks git config, so
+      # clear it to observe the git config value.
+      - run: $WT_BIN config show
+        env:
+          WORKTREE_ROOT: ""
+        expect:
+          exit_code: 0
+          output_contains: "wt-e2e-from-git-config"
+
+  - name: config_no_wt_keys_uses_defaults
+    description: A repo without wt.* git config keys falls back to defaults
+    skip_shellenv: true
+    steps:
+      - run: git config --local unrelated.key value
+        expect:
+          exit_code: 0
+      - run: $WT_BIN config show
+        expect:
+          exit_code: 0
+          output_not_contains: "git config"

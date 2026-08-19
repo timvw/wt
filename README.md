@@ -25,6 +25,7 @@ Inspired by [haacked/dotfiles/tree-me](https://github.com/haacked/dotfiles/blob/
 - **Color-coded status output** — green (clean), red (dirty), yellow (ahead/behind), bold cyan (current); respects `NO_COLOR=1` and auto-strips colors when piped
 - **CI/CD status integration** — `wt status --ci` shows pipeline status (✓/✗/●) per branch via `gh` or `glab` CLI
 - **Per-repo `.wt.toml` config** — override global settings (strategy, hooks, etc.) on a per-repository basis
+- **`git config` support** — keep personal settings in `.git/config` or `~/.gitconfig`, with no extra file to gitignore
 - Shell integration with auto-cd functionality
 - Tab completion for Bash, Zsh, and Fish
 
@@ -133,10 +134,13 @@ wt --help                         # show help
 
 ```bash
 wt info                           # show active strategy, pattern, variables
-wt config show                    # show effective config with sources (global + repo .wt.toml)
+wt config show                    # show effective config with sources
 wt config init                    # create a default config file
 wt config path                    # print the config file path
 # Place a .wt.toml in a repo root to override global config for that repo
+# Or keep it out of the working tree entirely, in git config:
+git config --local wt.strategy sibling-repo    # this repo only
+git config --global wt.root ~/projects/worktrees
 ```
 
 On case-insensitive filesystems such as the default macOS APFS setup, mixed-case branch
@@ -195,7 +199,7 @@ See [docs/examples.md](docs/examples.md#ai-assistants-and-editors) for hooks tha
 
 | Topic | Description |
 | --- | --- |
-| [Configuration](docs/configuration.md) | Config file, strategies, patterns, separator, hooks, per-repo `.wt.toml` |
+| [Configuration](docs/configuration.md) | Config file, git config, strategies, patterns, separator, hooks, per-repo `.wt.toml` |
 | [Examples](docs/examples.md) | Claude Code + tmux, multi-repo workflows, environment variables |
 | [Installation](docs/installation.md) | All platforms, shell integration, building from source |
 | [Development](docs/development.md) | Building, testing, running from source |

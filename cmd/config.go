@@ -91,6 +91,100 @@ func defaultGitRepoRoot() (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
+// gitConfigScope identifies which git config file a value came from.
+type gitConfigScope string
+
+const (
+	gitScopeGlobal gitConfigScope = "global"
+	gitScopeLocal  gitConfigScope = "local"
+)
+
+// gitConfigFn reads the wt.* keys from a single git config scope.
+// It is a variable so tests can inject a fake implementation.
+var gitConfigFn = defaultGitConfig
+
+// defaultGitConfig reads wt.* keys from the given git config scope.
+//
+// Only the last value of each key is kept: git config returns multi-valued keys
+// in lowest-to-highest precedence order, and for scalar settings the final one
+// is the effective value.
+//
+// A missing scope is not an error. `git config --get-regexp` exits 1 when no key
+// matches, and exits with other non-zero codes when the scope is unavailable
+// (for example --local outside a repository). Both mean "nothing configured
+// here", so any error yields an empty map rather than failing the command. This
+// matches how a malformed config file is treated on the TOML path, which is
+// also skipped rather than reported.
+func defaultGitConfig(scope gitConfigScope) map[string]string {
+	// --null makes the output unambiguous: records are NUL-separated and the
+	// key is separated from its value by a newline, so values containing
+	// spaces or newlines survive intact. A key set with no value at all has no
+	// newline in its record, which is how it is told apart from an empty one.
+	cmd := exec.Command("git", "config", "--"+string(scope), "--null", "--get-regexp", `^wt\.`)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+
+	values := make(map[string]string)
+	for _, record := range strings.Split(string(output), "\x00") {
+		if record == "" {
+			continue
+		}
+		key, value, hasValue := strings.Cut(record, "\n")
+		if !hasValue {
+			// `[wt]\n\tseparator` with no "=": git reports it as valueless.
+			// There is no scalar setting for which that is meaningful, so it
+			// is treated as unset rather than as an empty string.
+			continue
+		}
+		// git lowercases the section and the variable name, but preserves the
+		// case of any subsection. Only the fully lowercase keys are read, so
+		// normalising here keeps lookups simple.
+		values[strings.ToLower(key)] = value
+	}
+	return values
+}
+
+// applyGitConfig applies wt.* scalar settings from one git config scope.
+// Hooks are intentionally not read from git config: representing lists is
+// possible via multi-valued keys, but the merge semantics (replace vs append,
+// and how to clear inherited hooks) are not settled for the TOML sources
+// either, so git config stays scalar-only.
+func applyGitConfig(scope gitConfigScope, sourceLabel string) {
+	values := gitConfigFn(scope)
+	if len(values) == 0 {
+		return
+	}
+
+	if v := strings.TrimSpace(values["wt.root"]); v != "" {
+		worktreeRoot = expandHome(v)
+		configSources.Root = sourceLabel
+	}
+	if v := strings.TrimSpace(values["wt.repo_root"]); v != "" {
+		reposRoot = expandHome(v)
+		configSources.RepoRoot = sourceLabel
+	}
+	if v := strings.TrimSpace(values["wt.strategy"]); v != "" {
+		worktreeStrategy = strings.ToLower(v)
+		configSources.Strategy = sourceLabel
+	}
+	if v := strings.TrimSpace(values["wt.pattern"]); v != "" {
+		worktreePattern = v
+		configSources.Pattern = sourceLabel
+	}
+	// separator is applied even when empty: an empty separator is a meaningful
+	// value, matching how WORKTREE_SEPARATOR is handled.
+	if v, ok := values["wt.separator"]; ok {
+		worktreeSeparator = v
+		configSources.Separator = sourceLabel
+	}
+	if v := strings.TrimSpace(values["wt.repo_pattern"]); v != "" {
+		repoPattern = v
+		configSources.RepoPattern = sourceLabel
+	}
+}
+
 // defaultConfigTemplate is the content written by `wt config init`.
 const defaultConfigTemplate = `# wt configuration file
 # See: https://github.com/timvw/wt#configuration
@@ -175,8 +269,16 @@ func resolveConfigPath(flagValue string) string {
 	return filepath.Join(configDir(), "config.toml")
 }
 
-// loadWorktreeConfig loads configuration from file and environment variables.
-// Precedence: env vars > config file > defaults.
+// loadWorktreeConfig loads configuration from git config, files and environment
+// variables.
+//
+// Precedence, highest first:
+//
+//	env vars > local git config > repo .wt.toml > config file > global git
+//	config > defaults
+//
+// --config and WT_CONFIG are not a precedence layer of their own: they select
+// which TOML file is loaded, and its values still sit below .wt.toml and env.
 func loadWorktreeConfig() {
 	// 1. Start with defaults
 	home, _ := os.UserHomeDir()
@@ -202,7 +304,11 @@ func loadWorktreeConfig() {
 
 	repoPattern = defaultRepoPattern
 
-	// 2. Load config file
+	// 2. Global git config (~/.gitconfig) — the broadest fallback, below wt's
+	// own config file.
+	applyGitConfig(gitScopeGlobal, "git config (global)")
+
+	// 3. Load config file
 	configFilePath = resolveConfigPath(configFlag)
 	configFileFound = false
 
@@ -238,7 +344,7 @@ func loadWorktreeConfig() {
 		}
 	}
 
-	// 3. Load repo-level .wt.toml (overrides global config, but NOT root and
+	// 4. Load repo-level .wt.toml (overrides global config, but NOT root and
 	//    NOT the clone settings). `wt clone` acquires a repository unrelated to
 	//    whichever one you happen to be standing in, so letting that repo's
 	//    .wt.toml redirect the destination or run clone hooks would be wrong.
@@ -303,7 +409,16 @@ func loadWorktreeConfig() {
 		}
 	}
 
-	// 4. Environment variables override config file and repo config
+	// 5. Local git config (.git/config) — personal, machine-local settings that
+	// are not committed, so they outrank the committed .wt.toml. Unlike
+	// .wt.toml, this may set root: it is user-controlled local state rather
+	// than project policy arriving via a pull request.
+	//
+	// Linked worktrees share the main repository's .git/config, so a value set
+	// once in the main checkout applies from every worktree of that repo.
+	applyGitConfig(gitScopeLocal, "git config (local)")
+
+	// 6. Environment variables override every file-based source
 	if v := os.Getenv("WORKTREE_ROOT"); v != "" {
 		worktreeRoot = v
 		configSources.Root = "env: WORKTREE_ROOT"
