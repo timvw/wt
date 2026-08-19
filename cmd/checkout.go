@@ -36,6 +36,7 @@ var checkoutCmd = &cobra.Command{
 				Items:             branches,
 				Searcher:          fuzzy.Searcher(branches),
 				StartInSearchMode: true,
+				Stdout:            promptOutput(),
 			}
 			_, result, err := prompt.Run()
 			if err != nil {

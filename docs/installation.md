@@ -169,6 +169,8 @@ wt init powershell   # from PowerShell
 ```
 
 Git Bash does not ship `script(1)`, so the integration falls back to a non-PTY mode
-there. Auto-`cd` and tab completion work; the interactive selection menus
-(`wt checkout` with no arguments) need a TTY and are unavailable — pass a branch name
-explicitly instead.
+there: instead of running `wt` under a PTY, the wrapper redirects its stdout to a
+temporary file and replays it afterwards. Auto-`cd`, tab completion and the
+interactive selection menus (`wt checkout` with no arguments) all work — your
+terminal stays connected to `wt`'s stdin and stderr, which is where the menus are
+drawn. Only stdout is captured, and it carries nothing but the command's own output.
