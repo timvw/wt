@@ -32,6 +32,26 @@ import (
 // order to run once script(1) has been hidden from PATH.
 var scriptlessToolchain = []string{"git", "grep", "sed", "mktemp", "cat", "tail", "rm", "uname"}
 
+// requireTool locates a prerequisite, skipping the test when it is missing on a
+// developer machine but failing outright in CI.
+//
+// A regression test that silently skips is indistinguishable from one that
+// passes, which would leave #124 unguarded exactly where it was reported.
+func requireTool(t *testing.T, tool string) string {
+	t.Helper()
+
+	path, err := exec.LookPath(tool)
+	if err == nil {
+		return path
+	}
+	if os.Getenv("CI") != "" || os.Getenv("GITHUB_ACTIONS") != "" {
+		t.Fatalf("%s is required to run the #124 regression test in CI, "+
+			"but was not found on PATH: %v", tool, err)
+	}
+	t.Skipf("%s not available, skipping", tool)
+	return ""
+}
+
 // shQuote wraps a value so a POSIX shell reads it literally, whatever spaces or
 // metacharacters a temp directory happens to contain.
 func shQuote(s string) string {
@@ -74,10 +94,7 @@ func scriptlessPATHExpr(t *testing.T, binDir string) string {
 
 	shim := t.TempDir()
 	for _, tool := range scriptlessToolchain {
-		src, err := exec.LookPath(tool)
-		if err != nil {
-			t.Skipf("%s not available, cannot build a scriptless PATH", tool)
-		}
+		src := requireTool(t, tool)
 		if err := os.Symlink(src, filepath.Join(shim, tool)); err != nil {
 			t.Fatalf("failed to link %s into shim PATH: %v", tool, err)
 		}
@@ -94,9 +111,7 @@ func TestInteractivePromptVisibleWithoutScript(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping interactive e2e test in short mode")
 	}
-	if _, err := exec.LookPath("bash"); err != nil {
-		t.Skip("bash not available, skipping bash interactive test")
-	}
+	requireTool(t, "bash")
 
 	tmpDir := t.TempDir()
 	repoDir := filepath.Join(tmpDir, "test-repo")
