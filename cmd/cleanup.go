@@ -188,6 +188,7 @@ Examples:
 				prompt := promptui.Prompt{
 					Label:     fmt.Sprintf("Remove worktree for %s branch '%s'", c.Reason, c.Branch),
 					IsConfirm: true,
+					Stdout:    promptOutput(),
 				}
 				_, err := prompt.Run()
 				if err != nil {

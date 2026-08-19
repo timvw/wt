@@ -53,6 +53,7 @@ never lists branches that do not have one.`,
 			Items:             labels,
 			Searcher:          fuzzy.Searcher(labels),
 			StartInSearchMode: true,
+			Stdout:            promptOutput(),
 		}
 		index, _, err := prompt.Run()
 		if err != nil {

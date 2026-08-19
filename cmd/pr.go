@@ -46,6 +46,7 @@ Examples:
 				Items:             labels,
 				Searcher:          fuzzy.Searcher(labels),
 				StartInSearchMode: true,
+				Stdout:            promptOutput(),
 			}
 			idx, _, err := prompt.Run()
 			if err != nil {
@@ -95,6 +96,7 @@ Examples:
 				Items:             labels,
 				Searcher:          fuzzy.Searcher(labels),
 				StartInSearchMode: true,
+				Stdout:            promptOutput(),
 			}
 			idx, _, err := prompt.Run()
 			if err != nil {

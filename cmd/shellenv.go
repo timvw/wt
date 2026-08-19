@@ -167,14 +167,16 @@ func writeBashZshShellenv() {
     # script(1) may be missing entirely, and its syntax differs (macOS vs Linux)
     if ! command -v script >/dev/null 2>&1; then
         # No script(1) available (Git Bash on Windows does not ship it, nor do
-        # some minimal containers). Interactive prompts that require a TTY will
-        # not work here, but ordinary commands and auto-cd do.
+        # some minimal containers), so there is no PTY to hand the command.
+        # Prompts still work: stdin remains the terminal, and wt renders them to
+        # stderr, which is left alone below. Routing them to stdout instead is
+        # what made the branch selector invisible on Git Bash (issue #124).
         #
         # stdout is redirected and replayed rather than piped through tee: a
         # pipeline would make $? tee's status, and PIPESTATUS/pipestatus are
         # clobbered by the next command run — including the test needed to pick
         # between the two shells' spellings. stderr is left alone so errors
-        # still stream live.
+        # and prompts still stream live.
         command wt "$@" > "$log_file"
         exit_code=$?
         cat "$log_file"
