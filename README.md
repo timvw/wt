@@ -65,6 +65,10 @@ WT_CATEGORY=work wt clone acme/api   # ~/dev/repos/work/acme/api/main
 wt clone timvw/wt                    # ~/dev/repos/personal/timvw/wt/main (default)
 ```
 
+To set the category per directory instead of per command, use
+[direnv](https://direnv.net) — see
+[Setting the category per directory](docs/configuration.md#setting-the-category-per-directory).
+
 ### Checkout & Create
 
 ```bash
