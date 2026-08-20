@@ -16,6 +16,30 @@ just e2e-zsh
 just e2e-shells bash,zsh
 ```
 
+## The Binary Under Test
+
+By default the runner **builds `wt` from the working tree** into a temporary
+directory and tests that. Whatever you have edited is what gets exercised, and
+the build is thrown away afterwards.
+
+Pass `--wt` to test a binary you supply instead:
+
+```bash
+go run e2e/run.go --wt=bin/wt
+```
+
+CI uses this to exercise the cross-compiled release artefact it just built.
+
+There is deliberately no auto-detection: the runner will not pick up a
+pre-existing `bin/wt`, and it will not fall back to a `wt` on `PATH`. Both used
+to happen silently, and both let a run report on a binary unrelated to the
+source being tested — `bin/` is gitignored, so a stale build survives a rebase,
+and the `PATH` fallback finds a system-wide install. That produces failures
+which are not real and, worse, passes that hide a regression. See issue #141.
+
+The run prints which binary it used and how it got it, so a surprising result is
+traceable to the artefact that produced it.
+
 ## Structure
 
 ```
@@ -30,6 +54,7 @@ e2e/
 │   ├── shellenv.yaml
 │   └── ...             # and more
 ├── run.go              # Go orchestrator
+├── run_test.go         # Unit tests for the orchestrator itself
 └── README.md
 ```
 
@@ -107,16 +132,18 @@ scenarios:
 
 ## How It Works
 
-1. `run.go` parses YAML scenarios
-2. For each scenario × shell combination:
+1. `run.go` resolves the binary under test (build from the working tree, or `--wt`)
+2. It parses the YAML scenarios
+3. For each scenario × shell combination:
    - Generate shell script (POSIX or PowerShell)
    - Execute in subprocess
    - Check assertions
-3. Report pass/fail summary
+4. Report pass/fail summary
 
 ## CI Integration
 
-The CI workflow runs `go run e2e/run.go` with the appropriate shell for each OS:
+The CI workflow runs `go run e2e/run.go --wt=<artefact>` with the appropriate
+shell for each OS:
 
 | OS | Shells |
 |----|--------|
