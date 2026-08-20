@@ -754,6 +754,47 @@ func TestSelectedEmptyDirectoryIsCreated(t *testing.T) {
 	}
 }
 
+// "Tracked files are never copied" has to hold for the destination as well.
+// The candidates are the *source's* ignored files, but the branch being copied
+// into can track the same path — and --force is not licence to replace a
+// committed file with somebody's untracked one.
+func TestForceDoesNotOverwriteAPathTrackedInTheDestination(t *testing.T) {
+	src := newFilesRepo(t, "*.env\n")
+	writeFile(t, filepath.Join(src, "app.env"), "UNTRACKED=1")
+
+	// The destination tracks app.env on its own branch.
+	dst := filepath.Join(t.TempDir(), "worktree")
+	setupTestRepo(t, dst)
+	writeFile(t, filepath.Join(dst, "app.env"), "COMMITTED=1")
+	runGitCommand(t, dst, "add", "app.env")
+	runGitCommand(t, dst, "commit", "-m", "track app.env")
+
+	setFileConfig(t, []string{"*.env"}, nil, nil, false)
+
+	dry, err := runFileCopy(src, dst, copyOptions{Force: true, DryRun: true})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	result, err := runFileCopy(src, dst, copyOptions{Force: true})
+	if err != nil {
+		t.Fatalf("runFileCopy: %v", err)
+	}
+
+	if got := readFile(t, filepath.Join(dst, "app.env")); got != "COMMITTED=1" {
+		t.Errorf("app.env = %q, want the tracked content untouched", got)
+	}
+	if result.Summary.Copied != 0 || result.Summary.Skipped != 1 {
+		t.Errorf("summary = %+v, want one skip and no copy (%+v)", result.Summary, result.Files)
+	}
+	if !strings.Contains(result.Files[0].Reason, "tracked") {
+		t.Errorf("reason = %q, want it to name the tracked destination", result.Files[0].Reason)
+	}
+	// And the preview said so too.
+	if len(dry.Files) != 1 || dry.Files[0].Action != result.Files[0].Action {
+		t.Errorf("dry %+v, real %+v", dry.Files, result.Files)
+	}
+}
+
 // A directory that cannot be created is reported, not discarded: a run whose
 // whole content is one directory would otherwise say "nothing to copy" while
 // having produced nothing.

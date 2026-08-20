@@ -502,6 +502,11 @@ An existing destination file is **skipped, never overwritten**, unless you pass
 destination whose parent directory is a symlink is refused outright rather than
 written through — a worktree can legitimately contain a tracked symlink.
 
+Even `--force` stops at a file the destination branch **tracks**: candidates are
+the source worktree's ignored files, and one branch's untracked `.env` is no
+reason to clobber another branch's committed one. Those paths are reported as
+skipped with the reason `tracked by git in the destination`.
+
 ### `wt copy`
 
 The same materialisation on demand — after adding a pattern, or after the source

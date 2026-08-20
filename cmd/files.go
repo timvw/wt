@@ -404,6 +404,33 @@ func isTrackedPath(root, rel string) bool {
 	return len(strings.TrimRight(string(out), "\x00")) > 0
 }
 
+// trackedPaths returns every path git tracks in root.
+//
+// The copy side needs this for the destination rather than the source: the
+// candidates are the *source's* ignored files, but the branch being copied into
+// may well track a path the source only ignores — a repo that ships .env.example
+// as .env on one branch and gitignores it on another. Overwriting that under
+// --force would replace a committed file with somebody's untracked one.
+//
+// One listing of the whole index beats a call per path here, because --force can
+// collide on thousands of files where a link list has a handful.
+func trackedPaths(root string) map[string]bool {
+	out, err := exec.Command("git", "-C", root, "ls-files", "-z", "--full-name").Output()
+	if err != nil {
+		// Not a repository, or git failing for any other reason. That is not
+		// evidence that anything is tracked, and the other guards still apply.
+		return nil
+	}
+
+	tracked := make(map[string]bool)
+	for _, path := range strings.Split(string(out), "\x00") {
+		if path != "" {
+			tracked[path] = true
+		}
+	}
+	return tracked
+}
+
 // registeredWorktreePaths returns every worktree git knows about, as absolute
 // cleaned paths.
 //
@@ -640,12 +667,19 @@ func copyPlannedFiles(src, dst string, plan copyPlan, opts copyOptions) []fileRe
 		return dirFailures
 	}
 
+	// Only --force can reach a path that already exists in the destination, so
+	// that is the only case that has to know what the destination tracks.
+	var destTracked map[string]bool
+	if opts.Force {
+		destTracked = trackedPaths(dst)
+	}
+
 	files, collisions := dropCaseCollisions(dst, plan.files)
 	results := make([]fileResult, len(files))
 
 	if opts.DryRun {
 		for i, rel := range files {
-			results[i] = dryRunResult(src, dst, rel, opts.Force)
+			results[i] = dryRunResult(src, dst, rel, opts.Force, destTracked)
 		}
 		results = append(results, collisions...)
 		return append(results, dirFailures...)
@@ -670,7 +704,7 @@ func copyPlannedFiles(src, dst string, plan copyPlan, opts copyOptions) []fileRe
 				if i >= len(files) {
 					return
 				}
-				results[i] = copyOne(src, dst, files[i], opts.Force)
+				results[i] = copyOne(src, dst, files[i], opts.Force, destTracked)
 				progress.done()
 			}
 		}()
@@ -713,7 +747,7 @@ func createPlannedDirs(src, dst string, dirs []string, dryRun bool) []fileResult
 }
 
 // copyOne materialises a single relative path.
-func copyOne(src, dst, rel string, force bool) fileResult {
+func copyOne(src, dst, rel string, force bool, destTracked map[string]bool) fileResult {
 	srcPath := filepath.Join(src, filepath.FromSlash(rel))
 	dstPath := filepath.Join(dst, filepath.FromSlash(rel))
 
@@ -735,6 +769,12 @@ func copyOne(src, dst, rel string, force bool) fileResult {
 		if !force {
 			// F6: an existing destination is never overwritten silently.
 			return fileResult{Path: rel, Action: fileActionSkipped, Reason: "exists"}
+		}
+		// F5 holds for the destination too: a path the source only ignores can
+		// be tracked on the branch being copied into, and --force is not
+		// licence to overwrite a committed file with an untracked one.
+		if destTracked[rel] {
+			return fileResult{Path: rel, Action: fileActionSkipped, Reason: "tracked by git in the destination"}
 		}
 		if info, statErr := os.Lstat(dstPath); statErr == nil && info.IsDir() {
 			// Replacing a real directory with a file is beyond what --force
@@ -792,7 +832,7 @@ func forceCopyOver(srcPath, dstPath string) (fileops.Method, error) {
 }
 
 // dryRunResult predicts what copyOne would do, without touching anything.
-func dryRunResult(src, dst, rel string, force bool) fileResult {
+func dryRunResult(src, dst, rel string, force bool, destTracked map[string]bool) fileResult {
 	dstPath := filepath.Join(dst, filepath.FromSlash(rel))
 	srcPath := filepath.Join(src, filepath.FromSlash(rel))
 
@@ -812,6 +852,8 @@ func dryRunResult(src, dst, rel string, force bool) fileResult {
 		switch {
 		case !force:
 			return fileResult{Path: rel, Action: fileActionSkipped, Reason: "exists"}
+		case destTracked[rel]:
+			return fileResult{Path: rel, Action: fileActionSkipped, Reason: "tracked by git in the destination"}
 		case existing.IsDir():
 			return fileResult{Path: rel, Action: fileActionFailed, Reason: "destination is a directory"}
 		}
