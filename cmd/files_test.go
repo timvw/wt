@@ -657,6 +657,22 @@ func TestUnreadableFileFailsWithoutAbortingTheRun(t *testing.T) {
 	}
 }
 
+// The read-only probe has to give the same answer as the write probe it stands
+// in for, whatever this machine's filesystem happens to be.
+func TestCaseInsensitiveWorktreeAgreesWithTheWriteProbe(t *testing.T) {
+	dst := newDestination(t)
+
+	if got, want := caseInsensitiveWorktree(dst), filesystemCaseInsensitive(dst); got != want {
+		t.Errorf("caseInsensitiveWorktree = %v, filesystemCaseInsensitive = %v", got, want)
+	}
+
+	before := listTree(t, dst)
+	caseInsensitiveWorktree(dst)
+	if after := listTree(t, dst); !equalStrings(before, after) {
+		t.Errorf("the probe wrote to the worktree:\nbefore %v\nafter  %v", before, after)
+	}
+}
+
 func TestCaseInsensitiveCollisionIsReportedNotOverwritten(t *testing.T) {
 	dst := newDestination(t)
 	if !filesystemCaseInsensitive(dst) {
@@ -773,7 +789,8 @@ func TestDryRunMatchesTheRealRun(t *testing.T) {
 
 	setFileConfig(t, []string{"*.env"}, nil, nil, false)
 
-	before := listTree(t, src)
+	beforeSrc := listTree(t, src)
+	beforeDst := listTree(t, dst)
 
 	dry, err := runFileCopy(src, dst, copyOptions{DryRun: true})
 	if err != nil {
@@ -782,10 +799,14 @@ func TestDryRunMatchesTheRealRun(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(dst, "app.env")); !os.IsNotExist(err) {
 		t.Fatal("the dry run created a file")
 	}
-	// "Change nothing" has to include the source worktree, which may well be
-	// read-only: the reflink probe must not write there to predict the method.
-	if after := listTree(t, src); !equalStrings(before, after) {
-		t.Errorf("the dry run touched the source worktree:\nbefore %v\nafter  %v", before, after)
+	// "Change nothing" covers both trees. The source may well be read-only, so
+	// neither the reflink probe nor the case-sensitivity probe may write there
+	// — and the destination has to come out byte-identical as well.
+	if after := listTree(t, src); !equalStrings(beforeSrc, after) {
+		t.Errorf("the dry run touched the source worktree:\nbefore %v\nafter  %v", beforeSrc, after)
+	}
+	if after := listTree(t, dst); !equalStrings(beforeDst, after) {
+		t.Errorf("the dry run touched the destination worktree:\nbefore %v\nafter  %v", beforeDst, after)
 	}
 
 	real, err := runFileCopy(src, dst, copyOptions{})

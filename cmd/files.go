@@ -777,8 +777,52 @@ func reflinkAvailable(src, dst string) bool {
 // dropCaseCollisions removes paths that would collide on a case-insensitive
 // filesystem, reporting them rather than letting one silently land on top of
 // the other.
+// caseInsensitiveWorktree reports whether dst is on a case-insensitive
+// filesystem, without writing to it.
+//
+// filesystemCaseInsensitive answers the same question by creating a temp file,
+// which is fine where it is already used but not here: this runs on the
+// --dry-run path too, and "show what would happen, change nothing" has to mean
+// it. A worktree always has entries to flip the case of, so the probe reduces
+// to two Lstats; the write probe is kept only as a fallback for the case where
+// the directory cannot be read or holds nothing with a cased letter.
+func caseInsensitiveWorktree(dst string) bool {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		return false
+	}
+
+	entries, err := os.ReadDir(dst)
+	if err != nil {
+		return filesystemCaseInsensitive(dst)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		alt := strings.ToUpper(name)
+		if alt == name {
+			alt = strings.ToLower(name)
+		}
+		if alt == name {
+			// Digits and punctuation only; nothing to learn from this one.
+			continue
+		}
+
+		original, err := os.Lstat(filepath.Join(dst, name))
+		if err != nil {
+			continue
+		}
+		flipped, err := os.Lstat(filepath.Join(dst, alt))
+		if err != nil {
+			return false
+		}
+		// Both names may exist as distinct files on a case-sensitive
+		// filesystem, so identity is the question, not existence.
+		return os.SameFile(original, flipped)
+	}
+	return filesystemCaseInsensitive(dst)
+}
+
 func dropCaseCollisions(dst string, files []string) ([]string, []fileResult) {
-	if !filesystemCaseInsensitive(dst) {
+	if !caseInsensitiveWorktree(dst) {
 		return files, nil
 	}
 
