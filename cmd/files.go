@@ -247,6 +247,14 @@ func validateFilePatterns(cfg fileConfig) error {
 					group.key, p.Pattern, p.Source, group.key)
 			}
 			body := strings.TrimPrefix(p.Pattern, "!")
+			// A blank line in a .gitignore is nothing at all, and the parser
+			// treats it that way — but an empty string in a TOML list is a
+			// mistake, and so is a lone "!". Both would otherwise be dropped
+			// without a word.
+			if strings.TrimSpace(body) == "" {
+				return fmt.Errorf("[files] %s pattern %q (from %s) is empty; it would match nothing",
+					group.key, p.Pattern, p.Source)
+			}
 			if hasDotDotSegment(body) {
 				return fmt.Errorf("[files] %s pattern %q (from %s) contains a %q path segment; patterns must stay inside the worktree",
 					group.key, p.Pattern, p.Source, "..")

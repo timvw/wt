@@ -68,16 +68,27 @@ var checkoutCmd = &cobra.Command{
 				return fmt.Errorf("pre-checkout hook failed: %w", err)
 			}
 
+			// This path runs post_checkout too, so it owes the same ordering:
+			// a hook that expects the .env has to find it whether the worktree
+			// was made just now or last week. Re-running the copy on a worktree
+			// that already has everything is a no-op — existing destinations
+			// are skipped, never overwritten.
+			files := materialiseFiles(info, existingPath, noCopyFiles)
+
 			// Run post-checkout hooks (warn only)
 			_ = runHooks("post_checkout", getHooks("post_checkout"), hookEnv)
 
 			if isJSONOutput() {
-				return emitJSONSuccess(cmd, map[string]any{
+				data := map[string]any{
 					"status":      "exists",
 					"branch":      branch,
 					"path":        existingPath,
 					"navigate_to": existingPath,
-				})
+				}
+				if files != nil {
+					data["files"] = files
+				}
+				return emitJSONSuccess(cmd, data)
 			}
 			fmt.Printf("✓ Worktree already exists: %s\n", existingPath)
 			printCDMarker(existingPath)

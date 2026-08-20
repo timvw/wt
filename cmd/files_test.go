@@ -270,6 +270,30 @@ func TestExcludeAlsoAppliesToLink(t *testing.T) {
 	}
 }
 
+// A blank entry is dropped on the way in — .worktreeinclude is gitignore
+// syntax, where a blank line means nothing. A lone "!" is not blank: it reads
+// as a deny, survives accumulation, and would then be compiled away into a
+// pattern that protects nothing while the user believes otherwise.
+func TestABarePatternNegationIsRefused(t *testing.T) {
+	isolateFileConfig(t)
+
+	globalCfg := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, globalCfg, "[files]\ncopy = [\".env\", \"!\"]\n")
+
+	repoDir := newFilesRepo(t, "")
+	t.Setenv("WT_CONFIG", globalCfg)
+	gitRepoRootFn = func() (string, error) { return repoDir, nil }
+	loadWorktreeConfig()
+
+	_, err := resolveFileConfig(repoDir)
+	if err == nil {
+		t.Fatal("expected a bare negation to be refused")
+	}
+	if !strings.Contains(err.Error(), `"!"`) || !strings.Contains(err.Error(), "empty") {
+		t.Errorf("error = %q, want it to name \"!\" as empty", err)
+	}
+}
+
 // exclude accumulates with the repo's .wt.toml applied after the user's own
 // config, so a committed "!*.pem" would undo exactly what a global exclude was
 // protecting. Negation is refused in exclude and link for that reason.

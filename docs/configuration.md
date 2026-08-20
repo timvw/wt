@@ -365,7 +365,10 @@ starts subtly broken until you copy them across by hand.
 
 The `[files]` section declares what should be materialised into every new
 worktree. It runs automatically on `wt create`, `wt checkout`, `wt pr` and
-`wt mr`, after `git worktree add` and before the `post_*` hooks:
+`wt mr`, after `git worktree add` and before the `post_*` hooks — and on a
+`wt checkout` of a worktree that already exists, which is what lets one made
+before `[files]` was configured catch up. Re-running it costs nothing: files
+already there are skipped, never overwritten.
 
 ```toml
 [files]

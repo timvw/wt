@@ -84,6 +84,33 @@ scenarios:
         expect:
           output_contains: "EDITED_IN_WORKTREE=1"
 
+  - name: checkout_of_an_existing_worktree_still_materialises
+    description: A worktree made before [files] existed catches up on the next checkout
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    setup:
+      - create_branch: files-recheckout
+      - git_checkout: main
+    steps:
+      - run: printf '.env\n' > .gitignore && printf 'TOKEN=1\n' > .env
+        expect:
+          exit_code: 0
+      # No [files] yet: the worktree is created without the .env.
+      - run: $WT_BIN checkout files-recheckout
+        expect:
+          exit_code: 0
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/files-recheckout/.env" && echo "COPIED" || echo "NOT_COPIED"
+        expect:
+          output_contains: "NOT_COPIED"
+      # Configure it, then check the same branch out again.
+      - run: printf '[files]\ncopy = [".env"]\n' > .wt.toml && $WT_BIN checkout files-recheckout
+        expect:
+          exit_code: 0
+          output_contains: "Copied 1 file"
+      - run: cat "$WORKTREE_ROOT_POSIX/test-repo/files-recheckout/.env"
+        expect:
+          output_contains: "TOKEN=1"
+
   - name: json_output_includes_files_summary
     description: The create payload carries a files summary in JSON mode
     skip_shells: [powershell, pwsh]
