@@ -255,7 +255,11 @@ func validateFilePatterns(cfg fileConfig) error {
 				return fmt.Errorf("[files] %s pattern %q (from %s) is empty; it would match nothing",
 					group.key, p.Pattern, p.Source)
 			}
-			if hasDotDotSegment(body) {
+			// Both spellings: gitignore escapes survive into the literal path a
+			// link entry resolves to, so `\.\./secret` is `../secret` by the
+			// time anything acts on it, and F3 promises that is refused here
+			// rather than caught by withinRoot on the way out.
+			if hasDotDotSegment(body) || hasDotDotSegment(ignore.LiteralPath(body)) {
 				return fmt.Errorf("[files] %s pattern %q (from %s) contains a %q path segment; patterns must stay inside the worktree",
 					group.key, p.Pattern, p.Source, "..")
 			}

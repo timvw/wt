@@ -338,11 +338,29 @@ func TestSecurityF2WithinRoot(t *testing.T) {
 func TestSecurityF3DotDotSegmentsRejected(t *testing.T) {
 	src := newFilesRepo(t, "")
 
-	for _, pattern := range []string{"..", "../x", "a/../../b", "a/..", "!../x"} {
+	// The escaped spellings matter too: gitignore's "\" survives into the
+	// literal path a link entry resolves to, so `\.\./x` is `../x` by the time
+	// it names a file.
+	for _, pattern := range []string{"..", "../x", "a/../../b", "a/..", "!../x", `\.\./x`, `a/\../b`} {
 		t.Run(pattern, func(t *testing.T) {
 			setFileConfig(t, []string{pattern}, nil, nil, false)
 			if _, err := resolveFileConfig(src); err == nil {
 				t.Fatalf("pattern %q with a %q segment was accepted", pattern, "..")
+			}
+		})
+	}
+}
+
+// The same for a link entry, which is where an escaped ".." actually resolves
+// into a path rather than a glob.
+func TestSecurityF3DotDotIsRejectedInLinkEntriesToo(t *testing.T) {
+	src := newFilesRepo(t, "")
+
+	for _, pattern := range []string{"../secret", `\.\./secret`} {
+		t.Run(pattern, func(t *testing.T) {
+			setFileConfig(t, nil, []string{pattern}, nil, false)
+			if _, err := resolveFileConfig(src); err == nil {
+				t.Fatalf("link pattern %q with a %q segment was accepted", pattern, "..")
 			}
 		})
 	}
