@@ -258,6 +258,44 @@ mutate their global state:
 GH_CONFIG_DIR=~/.config/gh-work wt clone acme/api
 ```
 
+### Setting the category per directory
+
+Passing `WT_CATEGORY=work` on every command gets old, and exporting it in your
+shell profile only gives you one value for the whole machine. If you want
+"everything under this directory is work" without repeating yourself,
+[direnv](https://direnv.net) already does exactly that — `wt` reads the
+environment, so no `wt` configuration is involved.
+
+With the category in both patterns:
+
+```toml
+pattern = "{.worktreeRoot}/{.env.WT_CATEGORY:-personal}/{.repo.Name}/{.branch}"
+repo_pattern = "{.repoRoot}/{.env.WT_CATEGORY:-personal}/{.repo.Owner}/{.repo.Name}/{.branch}"
+```
+
+drop an `.envrc` at the head of each category tree — under `repo_root` *and*
+under `worktree_root`, since a clone lands in the first and its worktrees in
+the second:
+
+```bash
+echo 'export WT_CATEGORY=work' > ~/dev/repos/work/.envrc
+echo 'export WT_CATEGORY=work' > ~/dev/worktrees/work/.envrc
+direnv allow ~/dev/repos/work
+direnv allow ~/dev/worktrees/work
+```
+
+Every `wt` command run beneath one of those then picks up the category
+automatically, and the `:-` default keeps directories without an `.envrc`
+working. Covering both roots is what makes the category survive the hop: `wt
+clone acme/api` run from `~/dev/repos/work` lands the checkout in
+`~/dev/repos/work/acme/api/main`, and a later `wt create feat/x` from inside it
+still sees `WT_CATEGORY=work` — so the worktree lands under
+`~/dev/worktrees/work` rather than falling back to `personal`.
+
+Note that this keys off the directory you run the command *from*, not where the
+result lands — which is what you want for `wt clone`, since you are choosing the
+destination at that moment.
+
 ## Hooks
 
 Hooks let you run custom commands before or after `wt` operations. Define them in the `[hooks]` section of your config file:
