@@ -34,7 +34,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
       - name: Verify dependencies
@@ -82,7 +82,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
       # The fish wrapper tests execute the generated integration script for
@@ -149,7 +149,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
       - name: Build for all platforms
@@ -282,7 +282,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
       - name: Install zsh (Linux)
