@@ -888,6 +888,25 @@ func TestATrackedDestinationAncestorIsNotTurnedIntoADirectory(t *testing.T) {
 	}
 }
 
+// On a case-insensitive filesystem "App.env" and "app.env" are one file, so a
+// destination tracking either name owns the path the copy would write. An
+// exact-match lookup would miss it and hand the tracked name a foreign file.
+func TestTheDestinationIndexFoldsCaseWhereTheFilesystemDoes(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "worktree")
+	setupTestRepo(t, dst)
+	writeFile(t, filepath.Join(dst, "App.env"), "COMMITTED=1")
+	runGitCommand(t, dst, "add", "App.env")
+	runGitCommand(t, dst, "commit", "-m", "track App.env")
+
+	idx := newTrackedIndex(dst)
+	if !idx.tracked("App.env") {
+		t.Fatal("the tracked name itself was not recognised")
+	}
+	if got, want := idx.tracked("app.env"), caseInsensitiveWorktree(dst); got != want {
+		t.Errorf("tracked(\"app.env\") = %v on a filesystem whose case-insensitivity is %v", got, want)
+	}
+}
+
 // A directory that cannot be created is reported, not discarded: a run whose
 // whole content is one directory would otherwise say "nothing to copy" while
 // having produced nothing.

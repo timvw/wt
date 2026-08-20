@@ -151,7 +151,7 @@ func TestSecurityF2DestinationStaysInsideWorktree(t *testing.T) {
 	// A relative path that climbs out of the destination must be refused even
 	// if it somehow reached copyOne: this is the last line of defence behind
 	// the config-time check.
-	res := copyOne(src, dst, "../escaped.txt", false, nil)
+	res := copyOne(src, dst, "../escaped.txt", false, trackedIndex{})
 	if res.Action != fileActionFailed {
 		t.Fatalf("action = %q, want %q", res.Action, fileActionFailed)
 	}
