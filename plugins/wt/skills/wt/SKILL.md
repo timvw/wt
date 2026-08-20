@@ -82,7 +82,7 @@ Key semantics:
 
 - **Nothing is copied by default.** Without configuration, `wt create` behaves as before.
 - The three list keys **accumulate** across layers (config file → `.wt.toml` → `.worktreeinclude`) rather than replacing each other. `exclude` is applied last and cannot be overridden, including over `link`. Only `copy_ignored` follows the normal precedence chain.
-- A directory pattern covers its whole tree, and a `!` in `copy` wins over a matched parent directory or `copy_ignored` — `copy = ["cache/", "!cache/private.key"]` copies everything under `cache/` except that key.
+- A directory pattern covers its whole tree, and a `!` in `copy` wins over a matched parent directory or `copy_ignored` — `copy = ["cache/", "!cache/private.key"]` copies everything under `cache/` except that key. `!` is rejected in `exclude` and `link`, since a committed `.wt.toml` could otherwise undo a global exclude.
 - Candidates come from `git ls-files --others --ignored --exclude-standard`, so **tracked files are never copied**. `link` checks the index directly and skips tracked paths too.
 - Copies use a reflink on APFS/Btrfs/XFS; symlinks are recreated as symlinks, never dereferenced. A destination whose parent is a symlink is refused, not written through.
 - Existing destination files are **skipped, not overwritten**, unless `--force`.

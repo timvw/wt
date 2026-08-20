@@ -205,12 +205,22 @@ func validateFilePatterns(cfg fileConfig) error {
 		key      string
 		patterns []layeredPattern
 		literal  bool
+		// noNegation marks a list where "!" would let a later layer undo an
+		// earlier one, which the accumulation rules do not allow.
+		noNegation bool
 	}{
-		{"copy", cfg.Copy, false},
-		{"exclude", cfg.Exclude, false},
-		{"link", cfg.Link, true},
+		{key: "copy", patterns: cfg.Copy},
+		{key: "exclude", patterns: cfg.Exclude, noNegation: true},
+		{key: "link", patterns: cfg.Link, literal: true, noNegation: true},
 	} {
 		for _, p := range group.patterns {
+			if group.noNegation && strings.HasPrefix(p.Pattern, "!") {
+				// Excludes accumulate with the repo's .wt.toml applied after the
+				// user's own config, so a committed "!*.pem" would re-include
+				// exactly what the user's global exclude was protecting.
+				return fmt.Errorf("[files] %s pattern %q (from %s) is a negation; %s is applied last and cannot be re-included",
+					group.key, p.Pattern, p.Source, group.key)
+			}
 			body := strings.TrimPrefix(p.Pattern, "!")
 			if hasDotDotSegment(body) {
 				return fmt.Errorf("[files] %s pattern %q (from %s) contains a %q path segment; patterns must stay inside the worktree",
@@ -240,6 +250,25 @@ func isAbsoluteFilePattern(p string, literal bool) bool {
 		return true
 	}
 	return false
+}
+
+// dirIsSafeToCreate reports whether dst/rel can be made a real directory.
+//
+// noSymlinkComponents deliberately stops before the leaf, which is right for a
+// file (O_EXCL handles it) but not for a directory: MkdirAll and Chmod both
+// follow a symlink standing where the directory should be, so a worktree with a
+// tracked "cache -> /outside" would have wt chmod something outside it (F7).
+func dirIsSafeToCreate(dst, rel string) bool {
+	if !noSymlinkComponents(dst, rel) {
+		return false
+	}
+	info, err := os.Lstat(filepath.Join(dst, filepath.FromSlash(rel)))
+	if err != nil {
+		// Nothing there yet, so MkdirAll will create a real directory.
+		return os.IsNotExist(err)
+	}
+	// Lstat, so a symlink to a directory reports false — which is the point.
+	return info.IsDir()
 }
 
 // noSymlinkComponents reports whether every existing directory component
@@ -498,10 +527,13 @@ func (p *planner) skip(rel, name string) bool {
 	return !withinRoot(p.src, abs)
 }
 
-// excluded reports whether the exclude list keeps rel out. A "!" in exclude
-// says "do not exclude this after all", so only a positive selection counts.
+// excluded reports whether the exclude list keeps rel out.
+//
+// Any decision at all counts, not just Selected: a "!" in exclude is rejected
+// when the config is loaded, so a Rejected here would mean that check was
+// bypassed — and an exclude that can be argued out of is not an exclude.
 func (p *planner) excluded(rel string, isDir bool) bool {
-	return p.cfg.excludeMatcher.Decide(rel, isDir) == ignore.Selected
+	return p.cfg.excludeMatcher.Decide(rel, isDir) != ignore.Unmatched
 }
 
 // selected reports whether rel belongs in the plan.
@@ -582,7 +614,7 @@ func copyPlannedFiles(src, dst string, plan copyPlan, opts copyOptions) []fileRe
 
 	for _, rel := range plan.dirs {
 		dir := filepath.Join(dst, filepath.FromSlash(rel))
-		if !withinRoot(dst, dir) || !noSymlinkComponents(dst, rel) {
+		if !withinRoot(dst, dir) || !dirIsSafeToCreate(dst, rel) {
 			continue
 		}
 		_ = fileops.MkdirAllFrom(dir, filepath.Join(src, filepath.FromSlash(rel)))
@@ -807,7 +839,7 @@ func linkConfiguredPaths(src, dst string, cfg fileConfig, opts copyOptions) []fi
 		// exclude is applied last and cannot be overridden — that holds for
 		// link just as it does for copy, otherwise "*.key" in exclude would
 		// still be honoured for copies and silently ignored for links.
-		if cfg.excludeMatcher.Decide(rel, statErr == nil && info.IsDir()) == ignore.Selected {
+		if cfg.excludeMatcher.Decide(rel, statErr == nil && info.IsDir()) != ignore.Unmatched {
 			results = append(results, fileResult{Path: rel, Action: fileActionSkipped, Reason: "excluded"})
 			continue
 		}

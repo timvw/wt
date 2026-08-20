@@ -241,6 +241,72 @@ func TestExcludeAlsoAppliesToLink(t *testing.T) {
 	}
 }
 
+// exclude accumulates with the repo's .wt.toml applied after the user's own
+// config, so a committed "!*.pem" would undo exactly what a global exclude was
+// protecting. Negation is refused in exclude and link for that reason.
+func TestNegationIsRefusedInExcludeAndLink(t *testing.T) {
+	tests := []struct {
+		name   string
+		config string
+		want   string
+	}{
+		{
+			name:   "exclude",
+			config: "[files]\nexclude = [\"*.pem\", \"!keep.pem\"]\n",
+			want:   `"!keep.pem"`,
+		},
+		{
+			name:   "link",
+			config: "[files]\nlink = [\"!node_modules\"]\n",
+			want:   `"!node_modules"`,
+		},
+		{
+			name:   "repo config undoing a global exclude",
+			config: "[files]\nexclude = [\"!*.pem\"]\ncopy_ignored = true\n",
+			want:   `"!*.pem"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateFileConfig(t)
+
+			globalCfg := filepath.Join(t.TempDir(), "config.toml")
+			writeFile(t, globalCfg, tt.config)
+
+			repoDir := newFilesRepo(t, "")
+			t.Setenv("WT_CONFIG", globalCfg)
+			gitRepoRootFn = func() (string, error) { return repoDir, nil }
+			loadWorktreeConfig()
+
+			_, err := resolveFileConfig(repoDir)
+			if err == nil {
+				t.Fatal("expected a negation in the list to be refused")
+			}
+			if !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), "negation") {
+				t.Errorf("error = %q, want it to name %s as a negation", err, tt.want)
+			}
+		})
+	}
+}
+
+// A "!" is still legal in copy, where it means "not this one".
+func TestNegationIsAllowedInCopy(t *testing.T) {
+	isolateFileConfig(t)
+
+	globalCfg := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, globalCfg, "[files]\ncopy = [\"*.env\", \"!secret.env\"]\n")
+
+	repoDir := newFilesRepo(t, "")
+	t.Setenv("WT_CONFIG", globalCfg)
+	gitRepoRootFn = func() (string, error) { return repoDir, nil }
+	loadWorktreeConfig()
+
+	if _, err := resolveFileConfig(repoDir); err != nil {
+		t.Fatalf("resolveFileConfig: %v", err)
+	}
+}
+
 // exclude also wins over copy_ignored, which is the blunt "copy everything"
 // switch.
 func TestExcludeOverridesCopyIgnored(t *testing.T) {

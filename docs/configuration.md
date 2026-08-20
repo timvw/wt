@@ -428,8 +428,14 @@ Duplicates are dropped, keeping first-seen order, so `wt info` lists the
 effective set in layer order with the source of each pattern.
 
 `exclude` is always applied **last** and cannot be overridden — not by a later
-layer's `copy`, not by `copy_ignored`, not by a negated pattern, and not by
-`link`. An excluded path is reported as skipped rather than materialised.
+layer's `copy`, not by `copy_ignored`, and not by `link`. An excluded path is
+reported as skipped rather than materialised.
+
+Because the layers accumulate with the repo's `.wt.toml` applied *after* your own
+config, a `!` in `exclude` would let a committed file undo the protection you set
+globally. So `exclude` and `link` reject negated patterns outright, naming the
+pattern and the layer it came from. `!` remains available in `copy`, where it
+only ever removes.
 
 A directory pattern covers everything below it, in both lists: `exclude =
 ["secrets/"]` keeps `secrets/key.pem` out, and `copy = ["cache/"]` brings the

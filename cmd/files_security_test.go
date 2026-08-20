@@ -211,6 +211,47 @@ func TestSecurityF2SymlinkedDestinationParentIsRefused(t *testing.T) {
 	}
 }
 
+// A directory in the plan gets MkdirAll'd and Chmod'd, and both follow a
+// symlink standing where the directory should be — so the leaf needs the check
+// that a file leaf does not.
+func TestSecurityF7SymlinkedDestinationDirectoryIsRefused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevation on Windows")
+	}
+
+	src := newFilesRepo(t, "cache/\n")
+	writeFile(t, filepath.Join(src, "cache", "a.txt"), "a")
+	if err := os.Chmod(filepath.Join(src, "cache"), 0o700); err != nil {
+		t.Fatalf("chmod source: %v", err)
+	}
+
+	dst := newDestination(t)
+	outside := t.TempDir()
+	if err := os.Chmod(outside, 0o755); err != nil {
+		t.Fatalf("chmod outside: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dst, "cache")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	setFileConfig(t, []string{"cache/"}, nil, nil, false)
+
+	if _, err := runFileCopy(src, dst, copyOptions{}); err != nil {
+		t.Fatalf("runFileCopy: %v", err)
+	}
+
+	if _, err := os.Lstat(filepath.Join(outside, "a.txt")); !os.IsNotExist(err) {
+		t.Errorf("wrote into %s through the symlinked directory", outside)
+	}
+	info, err := os.Stat(outside)
+	if err != nil {
+		t.Fatalf("stat outside: %v", err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Errorf("mode of %s = %v, want 0755 unchanged", outside, info.Mode().Perm())
+	}
+}
+
 // The same guard has to hold for link, which builds its paths independently of
 // the copy planner.
 func TestSecurityF2SymlinkedLinkParentIsRefused(t *testing.T) {
