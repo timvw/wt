@@ -851,6 +851,43 @@ func TestATrackedButAbsentDestinationPathIsLeftAlone(t *testing.T) {
 	}
 }
 
+// The guard covers ancestors, not just the leaf. One branch can track "cache"
+// as a plain file while the branch being copied from ignores a "cache/"
+// directory; with the tracked file absent from the destination worktree,
+// copying cache/a.txt would create dst/cache as a directory and leave git
+// reporting a deleted file next to an untracked tree.
+func TestATrackedDestinationAncestorIsNotTurnedIntoADirectory(t *testing.T) {
+	src := newFilesRepo(t, "cache/\n")
+	writeFile(t, filepath.Join(src, "cache", "a.txt"), "a")
+
+	dst := filepath.Join(t.TempDir(), "worktree")
+	setupTestRepo(t, dst)
+	writeFile(t, filepath.Join(dst, "cache"), "I am a file")
+	runGitCommand(t, dst, "add", "cache")
+	runGitCommand(t, dst, "commit", "-m", "track cache as a file")
+	if err := os.Remove(filepath.Join(dst, "cache")); err != nil {
+		t.Fatal(err)
+	}
+
+	setFileConfig(t, []string{"cache/"}, nil, nil, false)
+
+	result, err := runFileCopy(src, dst, copyOptions{})
+	if err != nil {
+		t.Fatalf("runFileCopy: %v", err)
+	}
+	if result.Summary.Copied != 0 {
+		t.Errorf("summary = %+v, want nothing copied (%+v)", result.Summary, result.Files)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "cache")); !os.IsNotExist(err) {
+		t.Errorf("dst/cache was created over a tracked path (%v)", err)
+	}
+	for _, f := range result.Files {
+		if !strings.Contains(f.Reason, "tracked by git in the destination") {
+			t.Errorf("%s: action %s, reason %q", f.Path, f.Action, f.Reason)
+		}
+	}
+}
+
 // A directory that cannot be created is reported, not discarded: a run whose
 // whole content is one directory would otherwise say "nothing to copy" while
 // having produced nothing.

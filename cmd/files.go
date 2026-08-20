@@ -431,6 +431,30 @@ func trackedPaths(root string) map[string]bool {
 	return tracked
 }
 
+// trackedInDestination reports whether writing rel would disturb something the
+// destination branch tracks — the path itself, or an ancestor of it.
+//
+// The ancestor case is not hypothetical: a branch can track "cache" as a file
+// while the branch being copied from ignores a "cache/" directory. With the
+// file absent from the destination worktree, creating the parent directory for
+// "cache/a.txt" would quietly turn a tracked file into an untracked tree.
+func trackedInDestination(tracked map[string]bool, rel string) bool {
+	if len(tracked) == 0 {
+		return false
+	}
+	for path := rel; path != "" && path != "."; {
+		if tracked[path] {
+			return true
+		}
+		i := strings.LastIndex(path, "/")
+		if i < 0 {
+			break
+		}
+		path = path[:i]
+	}
+	return false
+}
+
 // registeredWorktreePaths returns every worktree git knows about, as absolute
 // cleaned paths.
 //
@@ -646,7 +670,7 @@ func runFileCopy(src, dst string, opts copyOptions) (*copyResult, error) {
 	// (deleted, or left out by a sparse checkout). One index read serves both
 	// the copy and the link stage.
 	var destTracked map[string]bool
-	if len(plan.files) > 0 || len(cfg.Link) > 0 {
+	if len(plan.files) > 0 || len(plan.dirs) > 0 || len(cfg.Link) > 0 {
 		destTracked = trackedPaths(dst)
 	}
 
@@ -671,10 +695,10 @@ func copyPlannedFiles(src, dst string, plan copyPlan, opts copyOptions, destTrac
 	// Before the empty-plan shortcut: a matched directory is created even when
 	// it holds no files at all, which is the entire content of a plan that
 	// selects an empty cache/ or an empty node_modules/.
-	dirFailures := createPlannedDirs(src, dst, plan.dirs, opts.DryRun)
+	dirResults := createPlannedDirs(src, dst, plan.dirs, opts.DryRun, destTracked)
 
 	if len(plan.files) == 0 {
-		return dirFailures
+		return dirResults
 	}
 
 	files, collisions := dropCaseCollisions(dst, plan.files)
@@ -685,7 +709,7 @@ func copyPlannedFiles(src, dst string, plan copyPlan, opts copyOptions, destTrac
 			results[i] = dryRunResult(src, dst, rel, opts.Force, destTracked)
 		}
 		results = append(results, collisions...)
-		return append(results, dirFailures...)
+		return append(results, dirResults...)
 	}
 
 	progress := newProgressReporter(len(files), plan.bytes)
@@ -716,7 +740,7 @@ func copyPlannedFiles(src, dst string, plan copyPlan, opts copyOptions, destTrac
 	progress.finish()
 
 	results = append(results, collisions...)
-	return append(results, dirFailures...)
+	return append(results, dirResults...)
 }
 
 // createPlannedDirs materialises the directories a plan selected in their own
@@ -727,26 +751,30 @@ func copyPlannedFiles(src, dst string, plan copyPlan, opts copyOptions, destTrac
 // A dry run makes the two refusals that can be checked without writing, and
 // says nothing about the rest: an mkdir that will fail on permissions cannot be
 // predicted without attempting it.
-func createPlannedDirs(src, dst string, dirs []string, dryRun bool) []fileResult {
-	var failures []fileResult
+func createPlannedDirs(src, dst string, dirs []string, dryRun bool, destTracked map[string]bool) []fileResult {
+	var results []fileResult
 	for _, rel := range dirs {
 		dir := filepath.Join(dst, filepath.FromSlash(rel))
 		switch {
 		case !withinRoot(dst, dir):
-			failures = append(failures, fileResult{Path: rel, Action: fileActionFailed, Reason: "path escapes the worktree"})
+			results = append(results, fileResult{Path: rel, Action: fileActionFailed, Reason: "path escapes the worktree"})
 		case !noSymlinkComponents(dst, rel):
-			failures = append(failures, fileResult{Path: rel, Action: fileActionFailed, Reason: "destination parent is a symlink"})
+			results = append(results, fileResult{Path: rel, Action: fileActionFailed, Reason: "destination parent is a symlink"})
+		case trackedInDestination(destTracked, rel):
+			// The directory itself, or an ancestor, is a path the destination
+			// branch tracks — mkdir there is git's business, not ours.
+			results = append(results, fileResult{Path: rel, Action: fileActionSkipped, Reason: "tracked by git in the destination"})
 		case !dirIsSafeToCreate(dst, rel):
-			failures = append(failures, fileResult{Path: rel, Action: fileActionFailed, Reason: "destination exists and is not a directory"})
+			results = append(results, fileResult{Path: rel, Action: fileActionFailed, Reason: "destination exists and is not a directory"})
 		case dryRun:
 			// Nothing to create.
 		default:
 			if err := fileops.MkdirAllFrom(dir, filepath.Join(src, filepath.FromSlash(rel))); err != nil {
-				failures = append(failures, fileResult{Path: rel, Action: fileActionFailed, Reason: err.Error()})
+				results = append(results, fileResult{Path: rel, Action: fileActionFailed, Reason: err.Error()})
 			}
 		}
 	}
-	return failures
+	return results
 }
 
 // copyOne materialises a single relative path.
@@ -767,7 +795,7 @@ func copyOne(src, dst, rel string, force bool, destTracked map[string]bool) file
 	// tracked on the branch being copied into. Being absent there — deleted, or
 	// left out of a sparse checkout — makes it no less tracked, so this is
 	// checked before the write rather than only on collision.
-	if destTracked[rel] {
+	if trackedInDestination(destTracked, rel) {
 		return fileResult{Path: rel, Action: fileActionSkipped, Reason: "tracked by git in the destination"}
 	}
 
@@ -850,7 +878,7 @@ func dryRunResult(src, dst, rel string, force bool, destTracked map[string]bool)
 		return fileResult{Path: rel, Action: fileActionFailed, Reason: "destination parent is a symlink"}
 	}
 
-	if destTracked[rel] {
+	if trackedInDestination(destTracked, rel) {
 		return fileResult{Path: rel, Action: fileActionSkipped, Reason: "tracked by git in the destination"}
 	}
 
@@ -1105,7 +1133,7 @@ func linkConfiguredPaths(src, dst string, cfg fileConfig, opts copyOptions, clai
 		// And on the branch being linked into: a path missing from that
 		// worktree is still tracked there, so the "exists" check below would
 		// let a symlink take a committed file's place.
-		if destTracked[rel] {
+		if trackedInDestination(destTracked, rel) {
 			results = append(results, fileResult{Path: rel, Action: fileActionSkipped, Reason: "tracked by git in the destination"})
 			continue
 		}

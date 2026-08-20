@@ -506,8 +506,10 @@ A path the **destination branch tracks** is never written, `--force` included:
 candidates are the source worktree's ignored files, and one branch's untracked
 `.env` is no reason to put an uncommitted file where another branch keeps a
 committed one. That holds whether or not the file is currently present there —
-deleted, or left out by a sparse checkout, it is still tracked. Those paths are
-reported as skipped with the reason `tracked by git in the destination`.
+deleted, or left out by a sparse checkout, it is still tracked. The same applies
+below a tracked path: if the destination branch keeps `cache` as a file, no
+`cache/…` is written over it. Those paths are reported as skipped with the
+reason `tracked by git in the destination`.
 
 ### `wt copy`
 
