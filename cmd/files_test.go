@@ -120,6 +120,70 @@ func TestExcludeIsAppliedLastAndNotOverridable(t *testing.T) {
 	}
 }
 
+// A trailing space is significant in gitignore syntax when escaped, so the
+// config layer must hand patterns to the ignore parser verbatim rather than
+// trimming them into something else.
+func TestEscapedTrailingSpaceSurvivesTheConfigLayer(t *testing.T) {
+	isolateFileConfig(t)
+
+	tmp := t.TempDir()
+	globalCfg := filepath.Join(tmp, "config.toml")
+	// TOML "\\ " is the two characters backslash-space, i.e. gitignore's escape.
+	writeFile(t, globalCfg, "[files]\ncopy = [\"trailing\\\\ \", \"plain  \"]\n")
+
+	repoDir := newFilesRepo(t, "")
+	t.Setenv("WT_CONFIG", globalCfg)
+	gitRepoRootFn = func() (string, error) { return repoDir, nil }
+	loadWorktreeConfig()
+
+	cfg, err := resolveFileConfig(repoDir)
+	if err != nil {
+		t.Fatalf("resolveFileConfig: %v", err)
+	}
+
+	want := []string{`trailing\ `, "plain  "}
+	if got := patternStrings(cfg.Copy); !equalStrings(got, want) {
+		t.Fatalf("copy = %q, want %q", got, want)
+	}
+
+	// And the pattern must match the name it actually spells.
+	if !cfg.copyMatcher.Match("trailing ", false) {
+		t.Error(`pattern "trailing\ " does not match the file "trailing "`)
+	}
+	if cfg.copyMatcher.Match("trailing", false) {
+		t.Error(`pattern "trailing\ " must not match "trailing"`)
+	}
+}
+
+// "applied last and not overridable" has to cover link too, or an exclude that
+// looks effective for copies would be quietly ignored for links.
+func TestExcludeAlsoAppliesToLink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevation on Windows")
+	}
+
+	src := newFilesRepo(t, "node_modules/\n.venv/\n")
+	writeFile(t, filepath.Join(src, "node_modules", "pkg", "index.js"), "{}")
+	writeFile(t, filepath.Join(src, ".venv", "pyvenv.cfg"), "home = /usr")
+
+	dst := newDestination(t)
+	setFileConfig(t, nil, []string{"node_modules", ".venv"}, []string{".venv"}, false)
+
+	result, err := runFileCopy(src, dst, copyOptions{})
+	if err != nil {
+		t.Fatalf("runFileCopy: %v", err)
+	}
+	if result.Summary.Linked != 1 {
+		t.Fatalf("linked = %d, want 1 (%+v)", result.Summary.Linked, result.Files)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, ".venv")); !os.IsNotExist(err) {
+		t.Error("an excluded path was linked")
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "node_modules")); err != nil {
+		t.Errorf("node_modules was not linked: %v", err)
+	}
+}
+
 // exclude also wins over copy_ignored, which is the blunt "copy everything"
 // switch.
 func TestExcludeOverridesCopyIgnored(t *testing.T) {

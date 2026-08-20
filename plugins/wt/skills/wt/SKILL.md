@@ -81,9 +81,9 @@ A `.worktreeinclude` file at the **main worktree root** holds the same patterns 
 Key semantics:
 
 - **Nothing is copied by default.** Without configuration, `wt create` behaves as before.
-- The three list keys **accumulate** across layers (config file → `.wt.toml` → `.worktreeinclude`) rather than replacing each other. `exclude` is applied last and cannot be overridden. Only `copy_ignored` follows the normal precedence chain.
-- Candidates come from `git ls-files --others --ignored --exclude-standard`, so **tracked files are never copied**.
-- Copies use a reflink on APFS/Btrfs/XFS; symlinks are recreated as symlinks, never dereferenced.
+- The three list keys **accumulate** across layers (config file → `.wt.toml` → `.worktreeinclude`) rather than replacing each other. `exclude` is applied last and cannot be overridden, including over `link`. Only `copy_ignored` follows the normal precedence chain.
+- Candidates come from `git ls-files --others --ignored --exclude-standard`, so **tracked files are never copied**. `link` checks the index directly and skips tracked paths too.
+- Copies use a reflink on APFS/Btrfs/XFS; symlinks are recreated as symlinks, never dereferenced. A destination whose parent is a symlink is refused, not written through.
 - Existing destination files are **skipped, not overwritten**, unless `--force`.
 - `[files]` needs no `wt trust` approval: it is declarative data, unlike `[hooks]`.
 - Suppress with `--no-copy` on create/checkout/pr/mr, or `WT_FILES_DISABLED=1`.

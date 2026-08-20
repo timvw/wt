@@ -426,7 +426,8 @@ Duplicates are dropped, keeping first-seen order, so `wt info` lists the
 effective set in layer order with the source of each pattern.
 
 `exclude` is always applied **last** and cannot be overridden — not by a later
-layer's `copy`, not by `copy_ignored`, not by a negated pattern.
+layer's `copy`, not by `copy_ignored`, not by a negated pattern, and not by
+`link`. An excluded path is reported as skipped rather than materialised.
 
 `copy_ignored` is a scalar, so it follows the normal
 [precedence chain](#precedence) instead: env var `WT_COPY_IGNORED`, local git
@@ -441,7 +442,9 @@ Candidates come from `git ls-files --others --ignored --exclude-standard`, so:
 
 - **Tracked files are never copied.** They are already in the new worktree via
   the checkout, and copying them would overwrite it with the main worktree's
-  uncommitted working state.
+  uncommitted working state. `link` names its paths literally rather than
+  drawing them from this list, so it checks the index directly and skips
+  anything tracked.
 - Nested `.gitignore` files, `core.excludesFile` and `.git/info/exclude` all
   work, because git resolves them rather than `wt`.
 - `.git/`, `.bzr/`, `.hg/`, `.jj/`, `.pijul/`, `.sl/` and `.svn/` are never
@@ -459,7 +462,9 @@ reports the `method` per file (`reflink`, `copy` or `symlink`), so you can check
 which you got.
 
 An existing destination file is **skipped, never overwritten**, unless you pass
-`--force`. Symlinks are recreated as symlinks and never dereferenced.
+`--force`. Symlinks are recreated as symlinks and never dereferenced, and a
+destination whose parent directory is a symlink is refused outright rather than
+written through — a worktree can legitimately contain a tracked symlink.
 
 ### `wt copy`
 

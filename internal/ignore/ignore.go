@@ -199,6 +199,29 @@ func ParseFile(r io.Reader) ([]string, error) {
 	return out, nil
 }
 
+// LiteralPath turns a gitignore-syntax entry into the plain path it names.
+//
+// It exists for callers that treat an entry as a literal path rather than a
+// glob ([files] link). Trailing spaces are dropped unless escaped, a leading
+// "\" escape is removed, and remaining backslash escapes are resolved, so
+// `logs\ ` names a directory called "logs ". Patterns containing wildcards are
+// returned with their escapes resolved too; whether that is meaningful is the
+// caller's business.
+func LiteralPath(raw string) string {
+	line := trimTrailingSpaces(raw)
+
+	var b strings.Builder
+	for i := 0; i < len(line); i++ {
+		if line[i] == '\\' && i+1 < len(line) {
+			i++
+			b.WriteByte(line[i])
+			continue
+		}
+		b.WriteByte(line[i])
+	}
+	return b.String()
+}
+
 // compile turns one gitignore line into a pattern. ok is false for lines that
 // contribute nothing (blank lines and comments).
 func compile(raw string) (pattern, bool, error) {

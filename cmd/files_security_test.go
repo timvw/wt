@@ -163,6 +163,75 @@ func TestSecurityF2DestinationStaysInsideWorktree(t *testing.T) {
 	}
 }
 
+// The lexical check alone is not enough: a worktree can contain a *tracked*
+// symlink, so "cache/secret.txt" stays lexically inside the destination and
+// still writes to wherever "cache" points.
+func TestSecurityF2SymlinkedDestinationParentIsRefused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevation on Windows")
+	}
+
+	src := newFilesRepo(t, "cache/\n")
+	writeFile(t, filepath.Join(src, "cache", "secret.txt"), "secret")
+
+	dst := newDestination(t)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(dst, "cache")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	setFileConfig(t, []string{"cache/secret.txt"}, nil, nil, false)
+
+	result, err := runFileCopy(src, dst, copyOptions{})
+	if err != nil {
+		t.Fatalf("runFileCopy: %v", err)
+	}
+	if result.Summary.Copied != 0 {
+		t.Errorf("copied = %d, want 0 (%+v)", result.Summary.Copied, result.Files)
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "secret.txt")); !os.IsNotExist(err) {
+		t.Fatalf("wrote through the symlinked parent into %s", outside)
+	}
+
+	// --force must not talk its way through either.
+	if _, err := runFileCopy(src, dst, copyOptions{Force: true}); err != nil {
+		t.Fatalf("forced run: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "secret.txt")); !os.IsNotExist(err) {
+		t.Fatalf("--force wrote through the symlinked parent into %s", outside)
+	}
+}
+
+// The same guard has to hold for link, which builds its paths independently of
+// the copy planner.
+func TestSecurityF2SymlinkedLinkParentIsRefused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevation on Windows")
+	}
+
+	src := newFilesRepo(t, "vendor/\n")
+	writeFile(t, filepath.Join(src, "vendor", "dep", "index.js"), "{}")
+
+	dst := newDestination(t)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(dst, "vendor")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	setFileConfig(t, nil, []string{"vendor/dep"}, nil, false)
+
+	result, err := runFileCopy(src, dst, copyOptions{})
+	if err != nil {
+		t.Fatalf("runFileCopy: %v", err)
+	}
+	if result.Summary.Linked != 0 {
+		t.Errorf("linked = %d, want 0 (%+v)", result.Summary.Linked, result.Files)
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "dep")); !os.IsNotExist(err) {
+		t.Fatalf("linked through the symlinked parent into %s", outside)
+	}
+}
+
 func TestSecurityF2WithinRoot(t *testing.T) {
 	root := t.TempDir()
 
@@ -295,6 +364,36 @@ func TestSecurityF5TrackedFilesAreNeverCopied(t *testing.T) {
 	}
 	if !contains(files, "ignored.txt") {
 		t.Errorf("ignored file missing from plan: %v", files)
+	}
+}
+
+// link names its paths literally instead of drawing them from the ignored
+// candidate list, so it needs its own tracked-path guard to keep F5.
+func TestSecurityF5TrackedPathsAreNeverLinked(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevation on Windows")
+	}
+
+	src := newFilesRepo(t, "")
+	writeFile(t, filepath.Join(src, "vendor", "dep.js"), "{}")
+	runGitCommand(t, src, "add", "vendor")
+	runGitCommand(t, src, "commit", "-m", "track vendor")
+
+	dst := newDestination(t)
+	setFileConfig(t, nil, []string{"vendor"}, nil, false)
+
+	result, err := runFileCopy(src, dst, copyOptions{})
+	if err != nil {
+		t.Fatalf("runFileCopy: %v", err)
+	}
+	if result.Summary.Linked != 0 {
+		t.Fatalf("linked = %d, want 0 (%+v)", result.Summary.Linked, result.Files)
+	}
+	if result.Files[0].Reason != "tracked by git" {
+		t.Errorf("reason = %q, want %q", result.Files[0].Reason, "tracked by git")
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "vendor")); !os.IsNotExist(err) {
+		t.Error("a tracked path was linked into the destination")
 	}
 }
 

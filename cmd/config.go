@@ -293,8 +293,11 @@ func parseGitBool(v string) (bool, bool) {
 // config file, then repo config, then .worktreeinclude.
 func accumulateFilePatterns(dst []layeredPattern, patterns []string, source string) []layeredPattern {
 	for _, p := range patterns {
-		p = strings.TrimSpace(p)
-		if p == "" {
+		// Patterns are kept verbatim: gitignore gives a trailing space meaning
+		// (it is stripped unless escaped, as in "file\ "), so trimming here
+		// would turn "file\ " into "file\" before the ignore parser ever saw
+		// it. Blank-only entries are the one thing worth dropping.
+		if strings.TrimSpace(p) == "" {
 			continue
 		}
 		duplicate := false

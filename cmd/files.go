@@ -232,6 +232,43 @@ func isAbsoluteFilePattern(p string, literal bool) bool {
 	return false
 }
 
+// noSymlinkComponents reports whether every existing directory component
+// between root and root/rel is a real directory.
+//
+// withinRoot is lexical, which is not enough on its own: a worktree can contain
+// a *tracked* symlink, so a destination like "cache/secret.txt" passes the
+// lexical check and still writes to wherever "cache" points. Refusing to
+// traverse a symlinked component is what actually holds F2 and F7 — see
+// TestSecurityF2SymlinkedDestinationParentIsRefused.
+//
+// Only the components are checked, not the leaf: a symlink at the leaf is the
+// no-clobber case, which O_EXCL and the "exists" skip already handle.
+func noSymlinkComponents(root, rel string) bool {
+	segments := strings.Split(filepath.ToSlash(rel), "/")
+	current := root
+	for _, seg := range segments[:max(len(segments)-1, 0)] {
+		if seg == "" || seg == "." {
+			continue
+		}
+		current = filepath.Join(current, seg)
+		info, err := os.Lstat(current)
+		if err != nil {
+			// Missing components are created by EnsureParent as real
+			// directories, so there is nothing to traverse.
+			if os.IsNotExist(err) {
+				return true
+			}
+			return false
+		}
+		if !info.IsDir() {
+			// A symlink (whatever it points at) or a file where a directory is
+			// expected. Either way, do not write through it.
+			return false
+		}
+	}
+	return true
+}
+
 // withinRoot reports whether path is a strict descendant of root. It is the
 // check behind invariants F1, F2 and F7: everything read and written has to
 // resolve inside the source or destination worktree.
@@ -281,6 +318,24 @@ func listIgnoredCandidates(root string) ([]string, error) {
 		}
 	}
 	return candidates, nil
+}
+
+// isTrackedPath reports whether rel names anything git tracks in root, either
+// as a file or as a directory containing tracked files.
+//
+// The copy side gets this for free because its candidates come from
+// ls-files --others; link entries are named literally, so they need the check.
+// Link lists are short, so one git call per entry is cheaper than listing the
+// whole index.
+func isTrackedPath(root, rel string) bool {
+	cmd := exec.Command("git", "-C", root, "ls-files", "-z", "--", rel)
+	out, err := cmd.Output()
+	if err != nil {
+		// A path outside the repo, or git failing for any other reason, is not
+		// evidence that the path is tracked; the caller's other guards apply.
+		return false
+	}
+	return len(strings.TrimRight(string(out), "\x00")) > 0
 }
 
 // registeredWorktreePaths returns every worktree git knows about, as absolute
@@ -492,7 +547,7 @@ func copyPlannedFiles(src, dst string, plan copyPlan, opts copyOptions) []fileRe
 
 	for _, rel := range plan.dirs {
 		dir := filepath.Join(dst, filepath.FromSlash(rel))
-		if !withinRoot(dst, dir) {
+		if !withinRoot(dst, dir) || !noSymlinkComponents(dst, rel) {
 			continue
 		}
 		_ = fileops.MkdirAllFrom(dir, filepath.Join(src, filepath.FromSlash(rel)))
@@ -533,9 +588,13 @@ func copyOne(src, dst, rel string, force bool) fileResult {
 	srcPath := filepath.Join(src, filepath.FromSlash(rel))
 	dstPath := filepath.Join(dst, filepath.FromSlash(rel))
 
-	// F2/F7: refuse anything that would land outside the destination worktree.
+	// F2/F7: refuse anything that would land outside the destination worktree,
+	// lexically and through a symlinked parent.
 	if !withinRoot(dst, dstPath) || !withinRoot(src, srcPath) {
 		return fileResult{Path: rel, Action: fileActionFailed, Reason: "path escapes the worktree"}
+	}
+	if !noSymlinkComponents(dst, rel) {
+		return fileResult{Path: rel, Action: fileActionFailed, Reason: "destination parent is a symlink"}
 	}
 
 	if err := fileops.EnsureParent(dstPath); err != nil {
@@ -660,8 +719,18 @@ func dropCaseCollisions(dst string, files []string) ([]string, []fileResult) {
 func linkConfiguredPaths(src, dst string, cfg fileConfig, opts copyOptions) []fileResult {
 	var results []fileResult
 	for _, entry := range cfg.Link {
-		rel := filepath.ToSlash(strings.Trim(entry.Pattern, "/"))
+		// Link entries name a path rather than a glob, so resolve gitignore's
+		// escaping (trailing spaces, "\" escapes) into the literal name.
+		rel := filepath.ToSlash(strings.Trim(ignore.LiteralPath(entry.Pattern), "/"))
 		if rel == "" {
+			continue
+		}
+
+		// exclude is applied last and cannot be overridden — that holds for
+		// link just as it does for copy, otherwise "*.key" in exclude would
+		// still be honoured for copies and silently ignored for links.
+		if cfg.excludeMatcher != nil && cfg.excludeMatcher.Match(rel, true) {
+			results = append(results, fileResult{Path: rel, Action: fileActionSkipped, Reason: "excluded"})
 			continue
 		}
 
@@ -669,6 +738,19 @@ func linkConfiguredPaths(src, dst string, cfg fileConfig, opts copyOptions) []fi
 		dstPath := filepath.Join(dst, filepath.FromSlash(rel))
 		if !withinRoot(src, srcPath) || !withinRoot(dst, dstPath) {
 			results = append(results, fileResult{Path: rel, Action: fileActionFailed, Reason: "path escapes the worktree"})
+			continue
+		}
+		// F2/F7: a symlinked parent in either worktree would make the lexical
+		// check above meaningless — refuse to traverse one.
+		if !noSymlinkComponents(src, rel) || !noSymlinkComponents(dst, rel) {
+			results = append(results, fileResult{Path: rel, Action: fileActionFailed, Reason: "parent directory is a symlink"})
+			continue
+		}
+
+		// F5: link entries are named literally rather than drawn from the
+		// ignored-candidate list, so this is where tracked paths are kept out.
+		if isTrackedPath(src, rel) {
+			results = append(results, fileResult{Path: rel, Action: fileActionSkipped, Reason: "tracked by git"})
 			continue
 		}
 
