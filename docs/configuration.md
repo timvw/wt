@@ -261,10 +261,69 @@ GH_CONFIG_DIR=~/.config/gh-work wt clone acme/api
 ### Setting the category per directory
 
 Passing `WT_CATEGORY=work` on every command gets old, and exporting it in your
-shell profile only gives you one value for the whole machine. If you want
-"everything under this directory is work" without repeating yourself,
-[direnv](https://direnv.net) already does exactly that — `wt` reads the
-environment, so no `wt` configuration is involved.
+shell profile only gives you one value for the whole machine. To say
+"everything under this directory is work", use a `[[context]]` rule:
+
+```toml
+[[context]]
+when_path = "~/dev/repos/work"
+env = { WT_CATEGORY = "work" }
+
+[[context]]
+when_path = "~/dev/repos/personal"
+env = { WT_CATEGORY = "personal" }
+```
+
+`when_path` is a **path prefix**, not a glob: a rule matches that directory and
+everything beneath it. Matching is on segment boundaries, so `~/dev/repos/work`
+does not match `~/dev/repos/workshop`, and symlinks are resolved on both sides.
+
+**Which path is matched** depends on the command:
+
+| Command | Matched against |
+| --- | --- |
+| `create`, `co`, `pr`, `mr`, `rm`, … | the repository's **main checkout** |
+| `clone` | the **current directory** (no repository exists yet) |
+
+Matching the main checkout rather than the current directory is what makes a
+category survive the hop between trees. `wt clone acme/api` from
+`~/dev/repos/work` lands the checkout in `~/dev/repos/work/acme/api/main`, and a
+later `wt create feat/x` resolves `work` from that checkout's path — so the
+worktree lands under `~/dev/worktrees/work`, no matter which directory you
+happened to run the command from. One rule per category covers both trees.
+
+**Composition.** Every matching rule applies, and later rules override earlier
+ones per variable — so a broad rule can set a common value and a narrower one
+override a single key:
+
+```toml
+[[context]]
+when_path = "~/dev/repos"
+env = { WT_CATEGORY = "personal", WT_ORG = "timvw" }
+
+[[context]]
+when_path = "~/dev/repos/work"
+env = { WT_CATEGORY = "work" }      # WT_ORG stays "timvw"
+```
+
+**An exported variable always wins**, so the one-off override still works:
+
+```bash
+WT_CATEGORY=oss wt create feat/x
+```
+
+That includes a variable exported as empty — `WT_CATEGORY= wt clone timvw/wt`
+collapses the segment away rather than picking up a rule's value.
+
+Rules are read from **your config file only** — never from a repository's
+committed `.wt.toml`, and not from `git config`. A repository you clone must not
+be able to redirect where your worktrees land, the same reason `root`,
+`repo_root` and `repo_pattern` are excluded from `.wt.toml`.
+
+#### Without `wt` configuration: direnv
+
+If you already use [direnv](https://direnv.net), it does the same job from the
+environment side, and `wt` needs no configuration for it at all.
 
 With the category in both patterns:
 
@@ -286,15 +345,12 @@ direnv allow ~/dev/worktrees/work
 
 Every `wt` command run beneath one of those then picks up the category
 automatically, and the `:-` default keeps directories without an `.envrc`
-working. Covering both roots is what makes the category survive the hop: `wt
-clone acme/api` run from `~/dev/repos/work` lands the checkout in
-`~/dev/repos/work/acme/api/main`, and a later `wt create feat/x` from inside it
-still sees `WT_CATEGORY=work` — so the worktree lands under
-`~/dev/worktrees/work` rather than falling back to `personal`.
+working.
 
-Note that this keys off the directory you run the command *from*, not where the
-result lands — which is what you want for `wt clone`, since you are choosing the
-destination at that moment.
+Unlike a `[[context]]` rule, direnv keys off the directory you run the command
+*from*, which is why both roots need an `.envrc`: a clone lands under
+`repo_root` and its worktrees under `worktree_root`, so covering only one loses
+the category on the hop between them.
 
 ## Hooks
 

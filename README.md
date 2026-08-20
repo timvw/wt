@@ -65,8 +65,17 @@ WT_CATEGORY=work wt clone acme/api   # ~/dev/repos/work/acme/api/main
 wt clone timvw/wt                    # ~/dev/repos/personal/timvw/wt/main (default)
 ```
 
-To set the category per directory instead of per command, use
-[direnv](https://direnv.net) — see
+To set the category for a whole tree of repos instead of per command, add a
+`[[context]]` rule:
+
+```toml
+[[context]]
+when_path = "~/dev/repos/work"
+env = { WT_CATEGORY = "work" }
+```
+
+Every `wt` command operating on a repo under that path then resolves `work`,
+including `wt create` from a worktree in a different tree. See
 [Setting the category per directory](docs/configuration.md#setting-the-category-per-directory).
 
 ### Checkout & Create
