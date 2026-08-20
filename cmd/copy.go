@@ -110,7 +110,14 @@ func resolveCopySource(info repoInfo) (string, error) {
 	}
 	expanded := expandHome(copyFrom)
 	if stat, err := os.Stat(expanded); err == nil && stat.IsDir() {
-		return expanded, nil
+		// Absolute, always: a link entry stores this path as the symlink's
+		// target, and a relative --from would then be resolved against the
+		// directory holding the link rather than the caller's cwd.
+		abs, err := filepath.Abs(expanded)
+		if err != nil {
+			return "", err
+		}
+		return abs, nil
 	}
 	return "", fmt.Errorf("--from %q is neither a worktree branch nor an existing directory", copyFrom)
 }

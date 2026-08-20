@@ -657,6 +657,74 @@ func TestUnreadableFileFailsWithoutAbortingTheRun(t *testing.T) {
 	}
 }
 
+// A relative --from has to become absolute: link entries store the source path
+// as the symlink's target, and a relative one would be resolved against the
+// directory holding the link rather than against the caller's cwd.
+func TestCopyFromRelativePathBecomesAbsolute(t *testing.T) {
+	origFrom := copyFrom
+	t.Cleanup(func() { copyFrom = origFrom })
+
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "source"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	copyFrom = "source"
+	got, err := resolveCopySource(repoInfo{Main: filepath.Join(tmp, "main")})
+	if err != nil {
+		t.Fatalf("resolveCopySource: %v", err)
+	}
+	if !filepath.IsAbs(got) {
+		t.Errorf("resolveCopySource = %q, want an absolute path", got)
+	}
+	// And it still names the directory that was asked for.
+	wantSame, err := os.Stat(filepath.Join(tmp, "source"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotSame, err := os.Stat(got)
+	if err != nil {
+		t.Fatalf("stat %s: %v", got, err)
+	}
+	if !os.SameFile(wantSame, gotSame) {
+		t.Errorf("resolveCopySource = %q, want it to point at %s", got, filepath.Join(tmp, "source"))
+	}
+}
+
+// A selected directory is created even when nothing inside it is copied — an
+// empty cache/ or logs/ that the tooling expects to find is a legitimate, and
+// otherwise unreachable, plan.
+func TestSelectedEmptyDirectoryIsCreated(t *testing.T) {
+	src := newFilesRepo(t, "cache/\n")
+	if err := os.MkdirAll(filepath.Join(src, "cache"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	dst := newDestination(t)
+	setFileConfig(t, []string{"cache/"}, nil, nil, false)
+
+	if _, err := runFileCopy(src, dst, copyOptions{}); err != nil {
+		t.Fatalf("runFileCopy: %v", err)
+	}
+
+	info, err := os.Lstat(filepath.Join(dst, "cache"))
+	if err != nil {
+		t.Fatalf("cache/ was not created: %v", err)
+	}
+	if !info.IsDir() {
+		t.Errorf("cache is %s, want a directory", info.Mode().Type())
+	}
+}
+
 // --force promises to update a file, not to lose it: a copy that fails partway
 // must leave what was already there untouched.
 func TestForceKeepsTheDestinationWhenTheCopyFails(t *testing.T) {

@@ -602,6 +602,19 @@ func runFileCopy(src, dst string, opts copyOptions) (*copyResult, error) {
 // pool. Reflink is a metadata operation and parallelises well; the buffered
 // fallback benefits from the overlap too.
 func copyPlannedFiles(src, dst string, plan copyPlan, opts copyOptions) []fileResult {
+	// Before the empty-plan shortcut: a matched directory is created even when
+	// it holds no files at all, which is the entire content of a plan that
+	// selects an empty cache/ or an empty node_modules/.
+	if !opts.DryRun {
+		for _, rel := range plan.dirs {
+			dir := filepath.Join(dst, filepath.FromSlash(rel))
+			if !withinRoot(dst, dir) || !dirIsSafeToCreate(dst, rel) {
+				continue
+			}
+			_ = fileops.MkdirAllFrom(dir, filepath.Join(src, filepath.FromSlash(rel)))
+		}
+	}
+
 	if len(plan.files) == 0 {
 		return nil
 	}
@@ -614,14 +627,6 @@ func copyPlannedFiles(src, dst string, plan copyPlan, opts copyOptions) []fileRe
 			results[i] = dryRunResult(src, dst, rel, opts.Force)
 		}
 		return append(results, collisions...)
-	}
-
-	for _, rel := range plan.dirs {
-		dir := filepath.Join(dst, filepath.FromSlash(rel))
-		if !withinRoot(dst, dir) || !dirIsSafeToCreate(dst, rel) {
-			continue
-		}
-		_ = fileops.MkdirAllFrom(dir, filepath.Join(src, filepath.FromSlash(rel)))
 	}
 
 	progress := newProgressReporter(len(files), plan.bytes)
@@ -767,6 +772,16 @@ func dryRunResult(src, dst, rel string, force bool) fileResult {
 	if info.Mode()&os.ModeSymlink != 0 {
 		res.Method = string(fileops.MethodSymlink)
 		return res
+	}
+	// CopyFile refuses anything that is neither a regular file nor a symlink,
+	// so a FIFO, socket or device node reached through a selected directory has
+	// to be previewed as the failure it will be rather than as a copy.
+	if !info.Mode().IsRegular() {
+		return fileResult{
+			Path:   rel,
+			Action: fileActionFailed,
+			Reason: fmt.Sprintf("unsupported file type %s: %s", info.Mode().Type(), srcPath),
+		}
 	}
 	res.Bytes = info.Size()
 	if reflinkAvailable(src, dst) {
