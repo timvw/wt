@@ -128,6 +128,7 @@ Available pattern variables:
 - `{.branch}` git branch name
 - `{.worktreeRoot}` value of `WORKTREE_ROOT` (path variable, not transformed by separator)
 - `{.env.VARNAME}` value of environment variable `VARNAME` (e.g. `{.env.USER}`, `{.env.HOME}`)
+- `{.env.VARNAME:-default}` value of `VARNAME`, falling back to `default` when unset (e.g. `{.env.WT_CATEGORY:-personal}`)
 
 Default patterns per strategy:
 
@@ -205,7 +206,7 @@ predictable spot. Two settings decide where:
 repo_root = "~/dev/repos"
 
 # Placement layout. Variables: {.repoRoot}, {.repo.Host}, {.repo.Owner},
-# {.repo.Name}, {.branch}, {.env.VARNAME}.
+# {.repo.Name}, {.branch}, {.env.VARNAME}, {.env.VARNAME:-default}.
 # {.branch} is the remote's default branch (via git ls-remote, fallback "main").
 repo_pattern = "{.repoRoot}/{.repo.Host}/{.repo.Owner}/{.repo.Name}/{.branch}"
 ```
@@ -229,23 +230,24 @@ clone hooks) would be wrong.
 ### Grouping clones ("categories")
 
 There is no built-in notion of work/personal/oss. If you want that grouping,
-express it yourself with an environment variable in the pattern:
+express it yourself with an environment variable in the pattern. Use the
+`:-` syntax to supply a default so the pattern works even when the variable
+is unset:
 
 ```toml
-repo_pattern = "{.repoRoot}/{.env.WT_CATEGORY}/{.repo.Owner}/{.repo.Name}/{.branch}"
+repo_pattern = "{.repoRoot}/{.env.WT_CATEGORY:-personal}/{.repo.Owner}/{.repo.Name}/{.branch}"
 ```
 
 ```bash
-export WT_CATEGORY=personal          # default, e.g. in your shell rc
 WT_CATEGORY=work wt clone acme/api   # ~/dev/repos/work/acme/api/main
-wt clone timvw/wt                    # ~/dev/repos/personal/timvw/wt/main
+wt clone timvw/wt                    # ~/dev/repos/personal/timvw/wt/main (default)
 ```
 
-The variable must exist: referencing one that is unset is an error (that is
-what catches `{.env.HOEM}` typos), so give it a default in your shell rc.
-Setting it to the empty string is fine — the segment collapses away rather than
-leaving an empty directory level, so `WT_CATEGORY= wt clone timvw/wt` lands in
-`~/dev/repos/timvw/wt/main`.
+Without a `:-` default, referencing an unset variable is an error — that is
+what catches `{.env.HOEM}` typos. With `:-`, the fallback is used silently.
+Setting the variable to the empty string is fine — the segment collapses away
+rather than leaving an empty directory level, so `WT_CATEGORY= wt clone timvw/wt`
+lands in `~/dev/repos/timvw/wt/main`.
 
 Auth works the same way. `wt clone` resolves `owner/repo` through whichever
 account `gh`/`glab` is already using, so select the account the way those tools

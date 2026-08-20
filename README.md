@@ -54,16 +54,15 @@ wt clone acme/api ~/src/api                    # explicit destination
 
 Two settings control placement: `repo_root` (default `~/dev/repos`) and
 `repo_pattern`. Grouping levels like "work" vs "personal" are yours to define —
-put an env var in the pattern:
+put an env var in the pattern with a `:-` default so it works even when unset:
 
 ```toml
-repo_pattern = "{.repoRoot}/{.env.WT_CATEGORY}/{.repo.Owner}/{.repo.Name}/{.branch}"
+repo_pattern = "{.repoRoot}/{.env.WT_CATEGORY:-personal}/{.repo.Owner}/{.repo.Name}/{.branch}"
 ```
 
 ```bash
-export WT_CATEGORY=personal          # default, e.g. in your shell rc
 WT_CATEGORY=work wt clone acme/api   # ~/dev/repos/work/acme/api/main
-wt clone timvw/wt                    # ~/dev/repos/personal/timvw/wt/main
+wt clone timvw/wt                    # ~/dev/repos/personal/timvw/wt/main (default)
 ```
 
 ### Checkout & Create

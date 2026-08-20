@@ -27,3 +27,68 @@ scenarios:
           WORKTREE_PATTERN: "{.worktreeRoot}/{.env.TOTALLY_UNDEFINED_VAR}/{.branch}"
         expect:
           exit_code: 1
+
+  - name: env_var_default_used_when_unset
+    description: Default value is used when env var is unset
+    steps:
+      - run: wt create feature-default
+        env:
+          WORKTREE_STRATEGY: custom
+          WORKTREE_PATTERN: "{.worktreeRoot}/{.env.UNSET_CATEGORY:-personal}/{.repo.Name}/{.branch}"
+        expect:
+          exit_code: 0
+      - run: pwd
+        expect:
+          cwd_ends_with: /worktrees/personal/test-repo/feature-default
+
+  - name: env_var_default_ignored_when_set
+    description: Default value is ignored when env var is set
+    steps:
+      - run: wt create feature-setenv
+        env:
+          WORKTREE_STRATEGY: custom
+          WORKTREE_PATTERN: "{.worktreeRoot}/{.env.MY_CAT:-personal}/{.repo.Name}/{.branch}"
+          MY_CAT: work
+        expect:
+          exit_code: 0
+      - run: pwd
+        expect:
+          cwd_ends_with: /worktrees/work/test-repo/feature-setenv
+
+  - name: env_var_empty_default
+    description: Empty default produces an empty segment when var is unset
+    skip_shellenv: true
+    steps:
+      - run: $WT_BIN create feature-empty-def
+        env:
+          WORKTREE_STRATEGY: custom
+          WORKTREE_PATTERN: "{.worktreeRoot}/{.env.GONE:-}/{.branch}"
+        expect:
+          exit_code: 0
+
+  - name: env_var_default_with_slash
+    description: Default value containing a slash is preserved
+    steps:
+      - run: wt create feature-slashdef
+        env:
+          WORKTREE_STRATEGY: custom
+          WORKTREE_PATTERN: "{.worktreeRoot}/{.env.NOSUCH:-a/b}/{.branch}"
+        expect:
+          exit_code: 0
+      - run: pwd
+        expect:
+          cwd_ends_with: /worktrees/a/b/feature-slashdef
+
+  - name: env_var_default_respects_separator
+    description: Default value slash is replaced by the configured separator
+    steps:
+      - run: wt create feature-sepdef
+        env:
+          WORKTREE_STRATEGY: custom
+          WORKTREE_SEPARATOR: "-"
+          WORKTREE_PATTERN: "{.worktreeRoot}/{.env.NOSUCH:-a/b}/{.branch}"
+        expect:
+          exit_code: 0
+      - run: pwd
+        expect:
+          cwd_ends_with: /worktrees/a-b/feature-sepdef

@@ -58,7 +58,7 @@ func renderWorktreePath(info repoInfo, branch string) (string, error) {
 		return "", fmt.Errorf("worktree pattern cannot be empty")
 	}
 
-	rendered, err := tmpl.Render(pattern, context)
+	rendered, err := tmpl.Render(pattern, context, sep)
 	if err != nil {
 		return "", fmt.Errorf("pattern variables missing values: %w", err)
 	}

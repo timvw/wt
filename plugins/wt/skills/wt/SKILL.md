@@ -58,6 +58,7 @@ The `pattern` setting controls the path template. Variables: `{root}`, `{repo}`,
 - Git config: `git config --local wt.strategy sibling-repo` (also `wt.root`, `wt.pattern`, `wt.separator`; scalars only, no hooks)
 - Key settings: `root`, `strategy`, `pattern`, `separator`
 - Env overrides: `WORKTREE_ROOT`, `WORKTREE_STRATEGY`, `WORKTREE_PATTERN`, `WORKTREE_SEPARATOR`
+- Environment variable defaults: `{.env.VARNAME:-fallback}` uses `fallback` when `VARNAME` is unset; `{.env.VARNAME}` without `:-` still errors on missing (catches typos)
 - Precedence (highest first): env > local git config > `.wt.toml` > config file > global git config > defaults
 
 ## Hooks
