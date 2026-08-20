@@ -405,7 +405,9 @@ from all of them at once.
 
 Unlike `.wt.toml`, this file is meant to be committed: it describes what the
 *project* needs, so a new contributor gets working worktrees without configuring
-anything.
+anything. Because it is committed, it has to be a regular file — a
+`.worktreeinclude` that is a symlink is refused rather than followed, so a repo
+cannot point it at something outside the worktree.
 
 ### Accumulation
 

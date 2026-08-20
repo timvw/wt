@@ -241,6 +241,36 @@ func TestSecurityF2SymlinkedLinkParentIsRefused(t *testing.T) {
 	}
 }
 
+// .worktreeinclude is committed, so a hostile repo could ship it as a symlink
+// to a file outside the worktree and have wt read it — and echo its lines back
+// through `wt info`.
+func TestSecurityF7WorktreeIncludeSymlinkIsRefused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevation on Windows")
+	}
+
+	isolateFileConfig(t)
+
+	outside := filepath.Join(t.TempDir(), "private.txt")
+	writeFile(t, outside, "id_rsa\n")
+
+	src := newFilesRepo(t, "")
+	if err := os.Symlink(outside, filepath.Join(src, worktreeIncludeFile)); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	cfg, err := resolveFileConfig(src)
+	if err == nil {
+		t.Fatalf("expected an error, got patterns %v", patternStrings(cfg.Copy))
+	}
+	if !strings.Contains(err.Error(), "regular file") {
+		t.Errorf("error = %q, want it to name the refusal", err)
+	}
+	if contains(patternStrings(cfg.Copy), "id_rsa") {
+		t.Error("patterns were read from outside the worktree")
+	}
+}
+
 func TestSecurityF2WithinRoot(t *testing.T) {
 	root := t.TempDir()
 

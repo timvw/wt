@@ -140,9 +140,19 @@ func resolveFileConfig(mainWorktree string) (fileConfig, error) {
 
 	if mainWorktree != "" {
 		cfg.IncludeFilePath = filepath.Join(mainWorktree, worktreeIncludeFile)
-		f, err := os.Open(cfg.IncludeFilePath)
+		// F7: .worktreeinclude is committed, so a hostile repo could ship it as
+		// a symlink to ~/.ssh/config and have wt read a file outside the
+		// worktree — and print its lines back through `wt info`. Lstat first
+		// and insist on a regular file.
+		info, err := os.Lstat(cfg.IncludeFilePath)
 		switch {
+		case err == nil && !info.Mode().IsRegular():
+			return cfg, fmt.Errorf("%s is not a regular file; refusing to follow it", cfg.IncludeFilePath)
 		case err == nil:
+			f, openErr := os.Open(cfg.IncludeFilePath)
+			if openErr != nil {
+				return cfg, fmt.Errorf("failed to read %s: %w", cfg.IncludeFilePath, openErr)
+			}
 			cfg.IncludeFileFound = true
 			patterns, parseErr := ignore.ParseFile(f)
 			_ = f.Close()
@@ -328,7 +338,9 @@ func listIgnoredCandidates(root string) ([]string, error) {
 // Link lists are short, so one git call per entry is cheaper than listing the
 // whole index.
 func isTrackedPath(root, rel string) bool {
-	cmd := exec.Command("git", "-C", root, "ls-files", "-z", "--", rel)
+	// ":(literal)" stops git reading the path as a pathspec glob, so a link
+	// entry named "a[1].txt" asks about that file rather than a character class.
+	cmd := exec.Command("git", "-C", root, "ls-files", "-z", "--", ":(literal)"+rel)
 	out, err := cmd.Output()
 	if err != nil {
 		// A path outside the repo, or git failing for any other reason, is not
@@ -563,7 +575,7 @@ func copyPlannedFiles(src, dst string, plan copyPlan, opts copyOptions) []fileRe
 
 	if opts.DryRun {
 		for i, rel := range files {
-			results[i] = dryRunResult(src, dst, rel)
+			results[i] = dryRunResult(src, dst, rel, opts.Force)
 		}
 		return append(results, collisions...)
 	}
@@ -652,7 +664,7 @@ func copyOne(src, dst, rel string, force bool) fileResult {
 }
 
 // dryRunResult predicts what copyOne would do, without touching anything.
-func dryRunResult(src, dst, rel string) fileResult {
+func dryRunResult(src, dst, rel string, force bool) fileResult {
 	dstPath := filepath.Join(dst, filepath.FromSlash(rel))
 	srcPath := filepath.Join(src, filepath.FromSlash(rel))
 
@@ -665,8 +677,16 @@ func dryRunResult(src, dst, rel string) fileResult {
 		return fileResult{Path: rel, Action: fileActionFailed, Reason: "destination parent is a symlink"}
 	}
 
-	if _, err := os.Lstat(dstPath); err == nil {
-		return fileResult{Path: rel, Action: fileActionSkipped, Reason: "exists"}
+	// --force is part of what is being previewed: without it an existing
+	// destination is skipped, with it the copy goes ahead unless the
+	// destination is a directory, which --force is not allowed to replace.
+	if existing, err := os.Lstat(dstPath); err == nil {
+		switch {
+		case !force:
+			return fileResult{Path: rel, Action: fileActionSkipped, Reason: "exists"}
+		case existing.IsDir():
+			return fileResult{Path: rel, Action: fileActionFailed, Reason: "destination is a directory"}
+		}
 	}
 
 	res := fileResult{Path: rel, Action: fileActionCopied, Method: string(fileops.MethodCopy)}
@@ -767,14 +787,6 @@ func linkConfiguredPaths(src, dst string, cfg fileConfig, opts copyOptions) []fi
 			continue
 		}
 
-		// exclude is applied last and cannot be overridden — that holds for
-		// link just as it does for copy, otherwise "*.key" in exclude would
-		// still be honoured for copies and silently ignored for links.
-		if cfg.excludeMatcher.Decide(rel, true) == ignore.Selected {
-			results = append(results, fileResult{Path: rel, Action: fileActionSkipped, Reason: "excluded"})
-			continue
-		}
-
 		srcPath := filepath.Join(src, filepath.FromSlash(rel))
 		dstPath := filepath.Join(dst, filepath.FromSlash(rel))
 		if !withinRoot(src, srcPath) || !withinRoot(dst, dstPath) {
@@ -788,6 +800,18 @@ func linkConfiguredPaths(src, dst string, cfg fileConfig, opts copyOptions) []fi
 			continue
 		}
 
+		// The real directory bit decides whether a "cache/" exclude applies, so
+		// the source has to be stat-ed before the exclude list is consulted.
+		info, statErr := os.Lstat(srcPath)
+
+		// exclude is applied last and cannot be overridden — that holds for
+		// link just as it does for copy, otherwise "*.key" in exclude would
+		// still be honoured for copies and silently ignored for links.
+		if cfg.excludeMatcher.Decide(rel, statErr == nil && info.IsDir()) == ignore.Selected {
+			results = append(results, fileResult{Path: rel, Action: fileActionSkipped, Reason: "excluded"})
+			continue
+		}
+
 		// F5: link entries are named literally rather than drawn from the
 		// ignored-candidate list, so this is where tracked paths are kept out.
 		if isTrackedPath(src, rel) {
@@ -795,7 +819,7 @@ func linkConfiguredPaths(src, dst string, cfg fileConfig, opts copyOptions) []fi
 			continue
 		}
 
-		if _, err := os.Lstat(srcPath); err != nil {
+		if statErr != nil {
 			results = append(results, fileResult{Path: rel, Action: fileActionSkipped, Reason: "source does not exist"})
 			continue
 		}

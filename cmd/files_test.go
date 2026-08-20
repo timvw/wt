@@ -742,6 +742,73 @@ func TestDryRunMatchesTheRealRun(t *testing.T) {
 	}
 }
 
+// --force is part of what --dry-run previews: predicting "skipped (exists)" for
+// a run that will overwrite is worse than not previewing at all.
+func TestDryRunModelsForce(t *testing.T) {
+	src := newFilesRepo(t, "*.env\n")
+	writeFile(t, filepath.Join(src, "app.env"), "TOKEN=1")
+	writeFile(t, filepath.Join(src, "dir.env"), "DIR=1")
+
+	dst := newDestination(t)
+	writeFile(t, filepath.Join(dst, "app.env"), "EXISTING=1")
+	// A directory where a file should go: --force must not replace it.
+	if err := os.MkdirAll(filepath.Join(dst, "dir.env"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	setFileConfig(t, []string{"*.env"}, nil, nil, false)
+
+	dry, err := runFileCopy(src, dst, copyOptions{DryRun: true, Force: true})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	real, err := runFileCopy(src, dst, copyOptions{Force: true})
+	if err != nil {
+		t.Fatalf("real run: %v", err)
+	}
+
+	if len(dry.Files) != len(real.Files) {
+		t.Fatalf("dry run planned %d entries, real run produced %d", len(dry.Files), len(real.Files))
+	}
+	for i := range dry.Files {
+		if dry.Files[i].Path != real.Files[i].Path || dry.Files[i].Action != real.Files[i].Action {
+			t.Errorf("entry %d: dry %+v, real %+v", i, dry.Files[i], real.Files[i])
+		}
+	}
+	if readFile(t, filepath.Join(dst, "app.env")) != "TOKEN=1" {
+		t.Error("--force did not overwrite the existing file")
+	}
+}
+
+// A directory-only exclude pattern must not apply to a link whose source is a
+// regular file — the trailing slash means directories only.
+func TestDirectoryOnlyExcludeDoesNotApplyToAFileLink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevation on Windows")
+	}
+
+	src := newFilesRepo(t, "cache\nbuild\n")
+	writeFile(t, filepath.Join(src, "cache"), "a regular file, not a directory")
+	writeFile(t, filepath.Join(src, "build", "out.bin"), "binary")
+
+	dst := newDestination(t)
+	setFileConfig(t, nil, []string{"cache", "build"}, []string{"build/"}, false)
+
+	result, err := runFileCopy(src, dst, copyOptions{})
+	if err != nil {
+		t.Fatalf("runFileCopy: %v", err)
+	}
+	if result.Summary.Linked != 1 {
+		t.Fatalf("linked = %d, want 1 (%+v)", result.Summary.Linked, result.Files)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "cache")); err != nil {
+		t.Errorf("the file link was excluded by a directory-only pattern: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "build")); !os.IsNotExist(err) {
+		t.Error("the directory link was not excluded")
+	}
+}
+
 // link entries are literal paths: a missing source is a warning, and an
 // existing destination is never replaced even with --force.
 func TestLinkSemantics(t *testing.T) {
