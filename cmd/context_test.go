@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -14,6 +15,254 @@ func withRules(t *testing.T, rules []ContextRule) {
 	prev := contextRules
 	contextRules = rules
 	t.Cleanup(func() { contextRules = prev })
+}
+
+// withGitConfig serves fixed entries per scope to loadWorktreeConfig.
+//
+// Every test that calls the loader needs this even when it cares about nothing
+// in git config: without it the developer's own ~/.gitconfig is read, and a
+// real wt.context.* rule there would leak into the assertions.
+func withGitConfig(t *testing.T, global, local []gitConfigEntry) {
+	t.Helper()
+	prev := gitConfigFn
+	gitConfigFn = func(scope gitConfigScope) []gitConfigEntry {
+		switch scope {
+		case gitScopeGlobal:
+			return global
+		case gitScopeLocal:
+			return local
+		}
+		return nil
+	}
+	t.Cleanup(func() { gitConfigFn = prev })
+}
+
+// withoutRepoConfig stops the loader from picking up whatever repository the
+// test binary happens to be running inside.
+func withoutRepoConfig(t *testing.T) {
+	t.Helper()
+	prev := gitRepoRootFn
+	gitRepoRootFn = func() (string, error) { return "", os.ErrNotExist }
+	t.Cleanup(func() { gitRepoRootFn = prev })
+}
+
+// withoutConfigFile points the loader at a path that does not exist, leaving
+// git config as the only source of rules.
+func withoutConfigFile(t *testing.T) {
+	t.Helper()
+	withoutRepoConfig(t)
+	prev := configFlag
+	configFlag = filepath.Join(t.TempDir(), "absent.toml")
+	t.Cleanup(func() { configFlag = prev })
+}
+
+func TestContextRulesFromGitConfig(t *testing.T) {
+	t.Run("whenpath and multi-valued env", func(t *testing.T) {
+		rules := contextRulesFromGitConfig([]gitConfigEntry{
+			{Key: "wt.context.work.whenpath", Value: "~/dev/repos/work"},
+			{Key: "wt.context.work.env", Value: "WT_CATEGORY=work"},
+			{Key: "wt.context.work.env", Value: "WT_ORG=acme"},
+		})
+
+		if len(rules) != 1 {
+			t.Fatalf("parsed %d rules, want 1", len(rules))
+		}
+		if rules[0].WhenPath != "~/dev/repos/work" {
+			t.Errorf("WhenPath = %q, want ~/dev/repos/work", rules[0].WhenPath)
+		}
+		// Both values survive: this is the whole reason the loader keeps
+		// entries in a slice instead of collapsing them to one per key.
+		if rules[0].Env["WT_CATEGORY"] != "work" || rules[0].Env["WT_ORG"] != "acme" {
+			t.Errorf("Env = %v, want both WT_CATEGORY=work and WT_ORG=acme", rules[0].Env)
+		}
+	})
+
+	t.Run("rules keep the order git listed them in", func(t *testing.T) {
+		rules := contextRulesFromGitConfig([]gitConfigEntry{
+			{Key: "wt.context.broad.whenpath", Value: "/a"},
+			{Key: "wt.context.broad.env", Value: "X=1"},
+			{Key: "wt.context.narrow.whenpath", Value: "/a/b"},
+			{Key: "wt.context.narrow.env", Value: "X=2"},
+			// A second entry for the first rule must not move it to the end:
+			// position is decided by first appearance, so composition follows
+			// the config file.
+			{Key: "wt.context.broad.env", Value: "Y=3"},
+		})
+
+		if len(rules) != 2 {
+			t.Fatalf("parsed %d rules, want 2", len(rules))
+		}
+		if rules[0].WhenPath != "/a" || rules[1].WhenPath != "/a/b" {
+			t.Fatalf("order = %q, %q; want /a then /a/b", rules[0].WhenPath, rules[1].WhenPath)
+		}
+		if rules[0].Env["Y"] != "3" {
+			t.Errorf("rules[0].Env = %v, want the later Y=3 merged in", rules[0].Env)
+		}
+	})
+
+	t.Run("rule name may contain dots", func(t *testing.T) {
+		rules := contextRulesFromGitConfig([]gitConfigEntry{
+			{Key: "wt.context.acme.api.whenpath", Value: "/srv"},
+			{Key: "wt.context.acme.api.env", Value: "X=1"},
+		})
+		if len(rules) != 1 {
+			t.Fatalf("parsed %d rules, want 1 (name split on the last dot)", len(rules))
+		}
+		if rules[0].WhenPath != "/srv" || rules[0].Env["X"] != "1" {
+			t.Errorf("rule = %+v, want WhenPath=/srv and X=1", rules[0])
+		}
+	})
+
+	t.Run("subsection case is not required to match", func(t *testing.T) {
+		// git preserves subsection case, so `[wt "Context.Work"]` reaches us
+		// spelled that way. The name keeps its case; the prefix must not care.
+		rules := contextRulesFromGitConfig([]gitConfigEntry{
+			{Key: "wt.Context.Work.whenpath", Value: "/w"},
+			{Key: "wt.Context.Work.env", Value: "X=1"},
+		})
+		if len(rules) != 1 || rules[0].WhenPath != "/w" || rules[0].Env["X"] != "1" {
+			t.Fatalf("rules = %+v, want one rule with WhenPath=/w and X=1", rules)
+		}
+	})
+
+	t.Run("malformed and unrelated entries leave no rule behind", func(t *testing.T) {
+		rules := contextRulesFromGitConfig([]gitConfigEntry{
+			{Key: "wt.root", Value: "/scalar"},                  // not a rule
+			{Key: "wt.context.a.env", Value: "NOEQUALS"},        // no "="
+			{Key: "wt.context.b.env", Value: "=orphan"},         // empty name
+			{Key: "wt.context.c.unknown", Value: "x"},           // unknown field
+			{Key: "wt.context.whenpath", Value: "/no-name"},     // no rule name
+			{Key: "wt.contextual.d.env", Value: "X=1"},          // different subsection
+			{Key: "wt.context.e.env", Value: " WT_X = spaced "}, // trimmed, kept
+		})
+
+		if len(rules) != 1 {
+			t.Fatalf("parsed %+v, want only the one well-formed rule", rules)
+		}
+		if rules[0].Env["WT_X"] != "spaced" {
+			t.Errorf("Env = %v, want WT_X=spaced with surrounding space trimmed", rules[0].Env)
+		}
+	})
+
+	t.Run("no entries", func(t *testing.T) {
+		if rules := contextRulesFromGitConfig(nil); len(rules) != 0 {
+			t.Fatalf("contextRulesFromGitConfig(nil) = %+v, want none", rules)
+		}
+	})
+}
+
+// The real `git config` round trip: proves the key shape documented for users
+// is the one that comes back, and that --add really yields repeated entries.
+func TestContextRulesFromRealGitConfig(t *testing.T) {
+	repoDir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+
+	run("init", "-q", ".")
+	run("config", "--local", "wt.context.work.whenpath", "~/dev/repos/work")
+	run("config", "--local", "--add", "wt.context.work.env", "WT_CATEGORY=work")
+	run("config", "--local", "--add", "wt.context.work.env", "WT_ORG=acme")
+	run("config", "--local", "wt.context.personal.whenpath", "~/dev/repos/personal")
+	run("config", "--local", "--add", "wt.context.personal.env", "WT_CATEGORY=personal")
+
+	t.Chdir(repoDir)
+
+	rules := contextRulesFromGitConfig(defaultGitConfig(gitScopeLocal))
+	if len(rules) != 2 {
+		t.Fatalf("parsed %d rules from real git config, want 2: %+v", len(rules), rules)
+	}
+	if rules[0].WhenPath != "~/dev/repos/work" {
+		t.Errorf("rules[0].WhenPath = %q, want ~/dev/repos/work", rules[0].WhenPath)
+	}
+	if rules[0].Env["WT_CATEGORY"] != "work" || rules[0].Env["WT_ORG"] != "acme" {
+		t.Errorf("rules[0].Env = %v, want WT_CATEGORY=work and WT_ORG=acme", rules[0].Env)
+	}
+	if rules[1].Env["WT_CATEGORY"] != "personal" {
+		t.Errorf("rules[1].Env = %v, want WT_CATEGORY=personal", rules[1].Env)
+	}
+}
+
+func TestGlobalGitConfigLoadsContextRules(t *testing.T) {
+	withoutConfigFile(t)
+	withGitConfig(t, []gitConfigEntry{
+		{Key: "wt.context.work.whenpath", Value: "~/dev/repos/work"},
+		{Key: "wt.context.work.env", Value: "WT_CATEGORY=work"},
+	}, nil)
+
+	loadWorktreeConfig()
+
+	if len(contextRules) != 1 {
+		t.Fatalf("loaded %d rules, want 1", len(contextRules))
+	}
+	if contextRules[0].Env["WT_CATEGORY"] != "work" {
+		t.Errorf("rule = %+v, want WT_CATEGORY=work", contextRules[0])
+	}
+}
+
+// Local git config is .git/config — shared by every worktree of one repository,
+// and therefore the wrong scope for a rule that decides where repositories go.
+// Keeping it out also holds the same user-owned line as the .wt.toml refusal.
+func TestLocalGitConfigCannotSupplyContextRules(t *testing.T) {
+	withoutConfigFile(t)
+	withGitConfig(t, nil, []gitConfigEntry{
+		{Key: "wt.context.sneaky.whenpath", Value: "/"},
+		{Key: "wt.context.sneaky.env", Value: "WT_CATEGORY=attacker"},
+	})
+
+	loadWorktreeConfig()
+
+	if len(contextRules) != 0 {
+		t.Fatalf("local git config supplied %d rules, want 0: %+v", len(contextRules), contextRules)
+	}
+}
+
+// The two sources compose rather than one replacing the other: a config file
+// rule wins where both cover the same path, but a git config rule for an
+// unrelated tree keeps working instead of disappearing the moment a [[context]]
+// block is added to the file.
+func TestConfigFileRulesComposeOverGitConfigRules(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	body := strings.Join([]string{
+		`[[context]]`,
+		`when_path = "/shared"`,
+		`env = { WT_CATEGORY = "from-file" }`,
+	}, "\n")
+	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prevFlag := configFlag
+	configFlag = cfgPath
+	t.Cleanup(func() { configFlag = prevFlag })
+
+	withoutRepoConfig(t)
+	withGitConfig(t, []gitConfigEntry{
+		{Key: "wt.context.shared.whenpath", Value: "/shared"},
+		{Key: "wt.context.shared.env", Value: "WT_CATEGORY=from-git"},
+		{Key: "wt.context.shared.env", Value: "WT_ORG=acme"},
+		{Key: "wt.context.other.whenpath", Value: "/other"},
+		{Key: "wt.context.other.env", Value: "WT_CATEGORY=git-only"},
+	}, nil)
+
+	loadWorktreeConfig()
+
+	shared := contextEnv("/shared/acme/api")
+	if shared["WT_CATEGORY"] != "from-file" {
+		t.Errorf("WT_CATEGORY = %q, want from-file (config file outranks git config)", shared["WT_CATEGORY"])
+	}
+	if shared["WT_ORG"] != "acme" {
+		t.Errorf("WT_ORG = %q, want acme (the git rule's other variable survives)", shared["WT_ORG"])
+	}
+	if got := contextEnv("/other/acme"); got["WT_CATEGORY"] != "git-only" {
+		t.Errorf("WT_CATEGORY = %q, want git-only (an unrelated git rule is not dropped)", got["WT_CATEGORY"])
+	}
 }
 
 func TestContextEnvMatching(t *testing.T) {
@@ -249,11 +498,8 @@ func TestConfigFileLoadsContextRules(t *testing.T) {
 	configFlag = cfgPath
 	t.Cleanup(func() { configFlag = prevFlag })
 
-	// gitRepoRootFn is stubbed so the loader does not pick up whatever
-	// repository the test binary happens to be running inside.
-	prevRepoRoot := gitRepoRootFn
-	gitRepoRootFn = func() (string, error) { return "", os.ErrNotExist }
-	t.Cleanup(func() { gitRepoRootFn = prevRepoRoot })
+	withoutRepoConfig(t)
+	withGitConfig(t, nil, nil)
 
 	loadWorktreeConfig()
 
@@ -294,6 +540,7 @@ func TestRepoConfigCannotSupplyContextRules(t *testing.T) {
 	prevRepoRoot := gitRepoRootFn
 	gitRepoRootFn = func() (string, error) { return repoDir, nil }
 	t.Cleanup(func() { gitRepoRootFn = prevRepoRoot })
+	withGitConfig(t, nil, nil)
 
 	loadWorktreeConfig()
 

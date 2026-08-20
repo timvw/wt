@@ -134,23 +134,34 @@ const (
 	gitScopeLocal  gitConfigScope = "local"
 )
 
+// gitConfigEntry is one key/value record as git reported it.
+//
+// A slice rather than a map because two properties are needed that a map cannot
+// carry: repeated keys (a context rule sets one `env` key once per variable,
+// with `--add`) and the order git listed them in, which is the order rules are
+// composed in.
+type gitConfigEntry struct {
+	// Key is the full dotted name. git lowercases the section and the variable
+	// name but preserves the case of any subsection, and that is kept as-is
+	// here so a rule's name survives; lowercase for lookups.
+	Key   string
+	Value string
+}
+
 // gitConfigFn reads the wt.* keys from a single git config scope.
 // It is a variable so tests can inject a fake implementation.
 var gitConfigFn = defaultGitConfig
 
-// defaultGitConfig reads wt.* keys from the given git config scope.
-//
-// Only the last value of each key is kept: git config returns multi-valued keys
-// in lowest-to-highest precedence order, and for scalar settings the final one
-// is the effective value.
+// defaultGitConfig reads wt.* keys from the given git config scope, in the
+// order git reports them.
 //
 // A missing scope is not an error. `git config --get-regexp` exits 1 when no key
 // matches, and exits with other non-zero codes when the scope is unavailable
 // (for example --local outside a repository). Both mean "nothing configured
-// here", so any error yields an empty map rather than failing the command. This
+// here", so any error yields no entries rather than failing the command. This
 // matches how a malformed config file is treated on the TOML path, which is
 // also skipped rather than reported.
-func defaultGitConfig(scope gitConfigScope) map[string]string {
+func defaultGitConfig(scope gitConfigScope) []gitConfigEntry {
 	// --null makes the output unambiguous: records are NUL-separated and the
 	// key is separated from its value by a newline, so values containing
 	// spaces or newlines survive intact. A key set with no value at all has no
@@ -161,7 +172,7 @@ func defaultGitConfig(scope gitConfigScope) map[string]string {
 		return nil
 	}
 
-	values := make(map[string]string)
+	var entries []gitConfigEntry
 	for _, record := range strings.Split(string(output), "\x00") {
 		if record == "" {
 			continue
@@ -169,14 +180,28 @@ func defaultGitConfig(scope gitConfigScope) map[string]string {
 		key, value, hasValue := strings.Cut(record, "\n")
 		if !hasValue {
 			// `[wt]\n\tseparator` with no "=": git reports it as valueless.
-			// There is no scalar setting for which that is meaningful, so it
-			// is treated as unset rather than as an empty string.
+			// There is no setting for which that is meaningful, so it is
+			// treated as unset rather than as an empty string.
 			continue
 		}
-		// git lowercases the section and the variable name, but preserves the
-		// case of any subsection. Only the fully lowercase keys are read, so
-		// normalising here keeps lookups simple.
-		values[strings.ToLower(key)] = value
+		entries = append(entries, gitConfigEntry{Key: key, Value: value})
+	}
+	return entries
+}
+
+// gitConfigValues collapses entries to one value per key, for the scalar
+// settings.
+//
+// The last value wins: git lists multi-valued keys in lowest-to-highest
+// precedence order, and for a scalar the final one is the effective value.
+// Keys are lowercased so lookups can be written in one spelling.
+func gitConfigValues(entries []gitConfigEntry) map[string]string {
+	if len(entries) == 0 {
+		return nil
+	}
+	values := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		values[strings.ToLower(entry.Key)] = entry.Value
 	}
 	return values
 }
@@ -186,8 +211,8 @@ func defaultGitConfig(scope gitConfigScope) map[string]string {
 // possible via multi-valued keys, but the merge semantics (replace vs append,
 // and how to clear inherited hooks) are not settled for the TOML sources
 // either, so git config stays scalar-only.
-func applyGitConfig(scope gitConfigScope, sourceLabel string) {
-	values := gitConfigFn(scope)
+func applyGitConfig(entries []gitConfigEntry, sourceLabel string) {
+	values := gitConfigValues(entries)
 	if len(values) == 0 {
 		return
 	}
@@ -271,6 +296,10 @@ const defaultConfigTemplate = `# wt configuration file
 #
 # Matched against the repository's main checkout for worktree commands, and
 # against the current directory for 'wt clone' (no repo exists yet).
+#
+# The same rules can live in ~/.gitconfig instead (this file wins on conflict):
+#   git config --global wt.context.work.whenpath "~/dev/repos/work"
+#   git config --global --add wt.context.work.env "WT_CATEGORY=work"
 #
 # [[context]]
 # when_path = "~/dev/repos/work"
@@ -370,8 +399,11 @@ func loadWorktreeConfig() {
 	repoPattern = defaultRepoPattern
 
 	// 2. Global git config (~/.gitconfig) — the broadest fallback, below wt's
-	// own config file.
-	applyGitConfig(gitScopeGlobal, "git config (global)")
+	// own config file. Read once and used twice: the scalar settings, and the
+	// wt.context.* rules, which no other git scope may supply.
+	globalGit := gitConfigFn(gitScopeGlobal)
+	applyGitConfig(globalGit, "git config (global)")
+	contextRules = contextRulesFromGitConfig(globalGit)
 
 	// 3. Load config file
 	configFilePath = resolveConfigPath(configFlag)
@@ -415,7 +447,15 @@ func loadWorktreeConfig() {
 				hooksPolicy = strings.ToLower(strings.TrimSpace(cfg.HooksPolicy))
 				configSources.HooksPolicy = "config file"
 			}
-			contextRules = cfg.Context
+			// Appended after the git config rules rather than replacing them,
+			// so the two sources compose the way rules within one source
+			// already do: every matching rule applies, later definitions win
+			// per variable. Because these come last, the config file wins
+			// wherever both sources set the same variable for the same path —
+			// which is the documented precedence — while a git config rule for
+			// some unrelated tree keeps working instead of silently vanishing
+			// the moment a [[context]] block is added to this file.
+			contextRules = append(contextRules, cfg.Context...)
 		}
 	}
 
@@ -490,7 +530,9 @@ func loadWorktreeConfig() {
 	//
 	// Linked worktrees share the main repository's .git/config, so a value set
 	// once in the main checkout applies from every worktree of that repo.
-	applyGitConfig(gitScopeLocal, "git config (local)")
+	//
+	// wt.context.* is deliberately not read here — see contextRulesFromGitConfig.
+	applyGitConfig(gitConfigFn(gitScopeLocal), "git config (local)")
 
 	// 6. Environment variables override every file-based source
 	if v := os.Getenv("WORKTREE_ROOT"); v != "" {

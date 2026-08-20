@@ -77,6 +77,7 @@ git config --global wt.root ~/projects/worktrees
 | `wt.pattern` | `pattern` |
 | `wt.separator` | `separator` |
 | `wt.repo_pattern` | `repo_pattern` |
+| `wt.context.<name>.whenpath` / `.env` | `[[context]]` (**`--global` only**) |
 
 Notes:
 
@@ -85,6 +86,8 @@ Notes:
   local state rather than project policy arriving through a pull request.
 - Linked worktrees share the main repository's `.git/config`, so `--local`
   settings apply from every worktree of that repo.
+- `wt.context.*` is the exception to that: it is read from `--global` only.
+  See [Setting the category per directory](#setting-the-category-per-directory).
 
 ## Precedence
 
@@ -315,10 +318,54 @@ WT_CATEGORY=oss wt create feat/x
 That includes a variable exported as empty — `WT_CATEGORY= wt clone timvw/wt`
 collapses the segment away rather than picking up a rule's value.
 
-Rules are read from **your config file only** — never from a repository's
-committed `.wt.toml`, and not from `git config`. A repository you clone must not
-be able to redirect where your worktrees land, the same reason `root`,
-`repo_root` and `repo_pattern` are excluded from `.wt.toml`.
+#### In global git config
+
+Rules can live in `~/.gitconfig` instead, if you would rather not keep a `wt`
+config file at all:
+
+```bash
+git config --global wt.context.work.whenpath "~/dev/repos/work"
+git config --global --add wt.context.work.env "WT_CATEGORY=work"
+git config --global --add wt.context.work.env "WT_ORG=acme"
+```
+
+`wt.context.<name>.<key>` is a git subsection, so `<name>` is just a handle for
+the rule — it lets you come back and remove one:
+
+```bash
+git config --global --remove-section 'wt.context.work'
+```
+
+Three things to know:
+
+- **`env` is multi-valued.** Use `--add` once per variable; plain `git config`
+  replaces the whole key. Each value is a single `NAME=VALUE` pair, and one
+  without an `=` is ignored.
+- **git lowercases key names**, so it is `whenpath`, not `whenPath`. A
+  camel-cased spelling written by hand into `~/.gitconfig` is silently ignored.
+  (Subsection names keep their case, so `<name>` can be spelled however you
+  like.)
+- **The config file wins.** Global git config sits *below* the config file in
+  the [precedence](#precedence) order — level 5 against level 4. This is the
+  reverse of `--local` git config at level 2, so "git config beats the config
+  file" only holds for `--local`.
+
+The two sources compose rather than replace: rules from `~/.gitconfig` are
+evaluated first, then those from the config file, under the same "later
+definitions win per variable" rule as above. So a config-file rule overrides a
+git config rule wherever both cover the same path, while a git config rule for
+an unrelated tree keeps working.
+
+#### Where rules may not come from
+
+Not from a repository's committed `.wt.toml`, and not from `--local` git config.
+A repository you clone must not be able to redirect where your worktrees land —
+the same reason `root`, `repo_root` and `repo_pattern` are excluded from
+`.wt.toml`. `--local` is also the wrong shape for the job: a rule scoped to one
+repository is redundant, since that repository could set `wt.pattern` directly.
+
+The system scope (`git config --system`) is not read either — `wt` reads no
+system git config at all, for any setting.
 
 #### Without `wt` configuration: direnv
 
