@@ -907,6 +907,53 @@ func TestTheDestinationIndexFoldsCaseWhereTheFilesystemDoes(t *testing.T) {
 	}
 }
 
+// The mirror of the ancestor case: git can own a path as a *directory*
+// because something under it is indexed. A sparse or deleted vendor/ is still
+// git's, so a symlink or a file must not take the name — while copying into
+// such a directory alongside its tracked contents stays perfectly normal.
+func TestATrackedSubtreeInTheDestinationKeepsItsName(t *testing.T) {
+	src := newFilesRepo(t, "cache/\n")
+	writeFile(t, filepath.Join(src, "vendor", "dep.js"), "SOURCE")
+	writeFile(t, filepath.Join(src, "cache", "a.txt"), "a")
+
+	dst := filepath.Join(t.TempDir(), "worktree")
+	setupTestRepo(t, dst)
+	writeFile(t, filepath.Join(dst, "vendor", "dep.js"), "COMMITTED")
+	writeFile(t, filepath.Join(dst, "cache", "committed.txt"), "COMMITTED")
+	runGitCommand(t, dst, "add", "vendor", "cache")
+	runGitCommand(t, dst, "commit", "-m", "track both subtrees")
+	// Sparse checkout, or a plain rm: the paths are indexed but not present.
+	if err := os.RemoveAll(filepath.Join(dst, "vendor")); err != nil {
+		t.Fatal(err)
+	}
+
+	setFileConfig(t, []string{"cache/"}, []string{"vendor"}, nil, false)
+
+	result, err := runFileCopy(src, dst, copyOptions{})
+	if err != nil {
+		t.Fatalf("runFileCopy: %v", err)
+	}
+
+	byPath := map[string]fileResult{}
+	for _, f := range result.Files {
+		byPath[f.Path] = f
+	}
+	if got := byPath["vendor"]; got.Action != fileActionSkipped || !strings.Contains(got.Reason, "tracked by git in the destination") {
+		t.Errorf("vendor = %+v, want it skipped as the destination's", got)
+	}
+	if info, err := os.Lstat(filepath.Join(dst, "vendor")); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		t.Error("a symlink was created over a tracked subtree")
+	}
+	// And the ordinary case is untouched: an ignored file copied into a
+	// directory the destination also tracks contents in.
+	if got := byPath["cache/a.txt"]; got.Action != fileActionCopied {
+		t.Errorf("cache/a.txt = %+v, want it copied (%+v)", got, result.Files)
+	}
+	if got := readFile(t, filepath.Join(dst, "cache", "committed.txt")); got != "COMMITTED" {
+		t.Errorf("cache/committed.txt = %q, want it untouched", got)
+	}
+}
+
 // A directory that cannot be created is reported, not discarded: a run whose
 // whole content is one directory would otherwise say "nothing to copy" while
 // having produced nothing.

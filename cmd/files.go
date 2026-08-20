@@ -414,6 +414,10 @@ func isTrackedPath(root, rel string) bool {
 // replace a committed file with somebody's untracked one.
 type trackedIndex struct {
 	paths map[string]bool
+	// dirs holds every directory an indexed path lives under, so that a path
+	// git owns as a *directory* can be recognised even when the checkout is
+	// missing it.
+	dirs map[string]bool
 	// fold is set on a case-insensitive destination, where a branch tracking
 	// "App.env" owns the very same file the source calls "app.env".
 	fold bool
@@ -430,10 +434,23 @@ func newTrackedIndex(root string) trackedIndex {
 		return trackedIndex{}
 	}
 
-	idx := trackedIndex{paths: make(map[string]bool), fold: caseInsensitiveWorktree(root)}
+	idx := trackedIndex{
+		paths: make(map[string]bool),
+		dirs:  make(map[string]bool),
+		fold:  caseInsensitiveWorktree(root),
+	}
 	for _, path := range strings.Split(string(out), "\x00") {
-		if path != "" {
-			idx.paths[idx.key(path)] = true
+		if path == "" {
+			continue
+		}
+		key := idx.key(path)
+		idx.paths[key] = true
+		for i := strings.LastIndex(key, "/"); i > 0; i = strings.LastIndex(key, "/") {
+			key = key[:i]
+			if idx.dirs[key] {
+				break // This ancestor, and everything above it, is already in.
+			}
+			idx.dirs[key] = true
 		}
 	}
 	return idx
@@ -468,6 +485,19 @@ func (t trackedIndex) tracked(rel string) bool {
 		path = path[:i]
 	}
 	return false
+}
+
+// owns adds the mirror case to tracked: a path git holds as a *directory*,
+// because something under it is indexed. Putting a file or a symlink there
+// stands where a tracked subtree belongs — a sparse or deleted "vendor/" is
+// still git's, and `link = ["vendor"]` must not take the name.
+//
+// Creating a *directory* there is a different matter: that is exactly what
+// checking the subtree out would do, and copying cache/a.txt into a branch
+// that also tracks cache/committed.txt is ordinary. So the directory stage
+// asks tracked() and this is for the writes that materialise a leaf.
+func (t trackedIndex) owns(rel string) bool {
+	return t.tracked(rel) || t.dirs[t.key(rel)]
 }
 
 // registeredWorktreePaths returns every worktree git knows about, as absolute
@@ -810,7 +840,7 @@ func copyOne(src, dst, rel string, force bool, destTracked trackedIndex) fileRes
 	// tracked on the branch being copied into. Being absent there — deleted, or
 	// left out of a sparse checkout — makes it no less tracked, so this is
 	// checked before the write rather than only on collision.
-	if destTracked.tracked(rel) {
+	if destTracked.owns(rel) {
 		return fileResult{Path: rel, Action: fileActionSkipped, Reason: "tracked by git in the destination"}
 	}
 
@@ -893,7 +923,7 @@ func dryRunResult(src, dst, rel string, force bool, destTracked trackedIndex) fi
 		return fileResult{Path: rel, Action: fileActionFailed, Reason: "destination parent is a symlink"}
 	}
 
-	if destTracked.tracked(rel) {
+	if destTracked.owns(rel) {
 		return fileResult{Path: rel, Action: fileActionSkipped, Reason: "tracked by git in the destination"}
 	}
 
@@ -1148,7 +1178,7 @@ func linkConfiguredPaths(src, dst string, cfg fileConfig, opts copyOptions, clai
 		// And on the branch being linked into: a path missing from that
 		// worktree is still tracked there, so the "exists" check below would
 		// let a symlink take a committed file's place.
-		if destTracked.tracked(rel) {
+		if destTracked.owns(rel) {
 			results = append(results, fileResult{Path: rel, Action: fileActionSkipped, Reason: "tracked by git in the destination"})
 			continue
 		}
