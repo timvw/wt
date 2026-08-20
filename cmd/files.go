@@ -733,7 +733,7 @@ func runFileCopy(src, dst string, opts copyOptions) (*copyResult, error) {
 	// The real run copies before it links, so a link whose destination the copy
 	// stage has just claimed is skipped as existing. A dry run writes nothing,
 	// so it has to be told what the copy stage would have produced.
-	results = append(results, linkConfiguredPaths(src, dst, cfg, opts, claimedPaths(dst, opts, copied), destTracked)...)
+	results = append(results, linkConfiguredPaths(src, dst, cfg, opts, claimedPaths(dst, opts, copied, plan.dirs), destTracked)...)
 
 	sort.Slice(results, func(i, j int) bool { return results[i].Path < results[j].Path })
 	result.Files = results
@@ -1110,7 +1110,7 @@ func dropCaseCollisions(dst string, files []string) ([]string, []fileResult) {
 // copying happens first and the link then finds its destination taken. Outside
 // a dry run the filesystem answers this by itself and the predicate is never
 // true.
-func claimedPaths(dst string, opts copyOptions, copied []fileResult) func(string) bool {
+func claimedPaths(dst string, opts copyOptions, copied []fileResult, dirs []string) func(string) bool {
 	if !opts.DryRun {
 		return func(string) bool { return false }
 	}
@@ -1126,9 +1126,35 @@ func claimedPaths(dst string, opts copyOptions, copied []fileResult) func(string
 	}
 
 	claimed := make(map[string]bool, len(copied))
+	claim := func(rel string) {
+		claimed[key(rel)] = true
+		// The parents count too: copying cache/a.txt makes dst/cache exist,
+		// which is what a `link = ["cache"]` would find in the real run.
+		for i := strings.LastIndex(rel, "/"); i > 0; i = strings.LastIndex(rel, "/") {
+			rel = rel[:i]
+			if claimed[key(rel)] {
+				break
+			}
+			claimed[key(rel)] = true
+		}
+	}
+	refused := make(map[string]bool)
+	for _, r := range copied {
+		if r.Action == fileActionFailed || r.Action == fileActionSkipped {
+			refused[r.Path] = true
+		}
+	}
 	for _, r := range copied {
 		if r.Action == fileActionCopied {
-			claimed[key(r.Path)] = true
+			claim(r.Path)
+		}
+	}
+	// A directory selected in its own right claims its name as surely as a
+	// copied file does — an empty cache/ produces no file result at all — and
+	// createPlannedDirs reports one only when it refused to create it.
+	for _, dir := range dirs {
+		if !refused[dir] {
+			claim(dir)
 		}
 	}
 	return func(rel string) bool { return claimed[key(rel)] }

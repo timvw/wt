@@ -1267,6 +1267,53 @@ func TestDryRunAgreesWhenAPathIsBothCopiedAndLinked(t *testing.T) {
 	}
 }
 
+// The copy stage claims more than the paths it writes: copying cache/a.txt
+// makes dst/cache exist, and an empty selected directory is created outright.
+// A link naming either of those finds its destination taken in the real run,
+// so the preview has to say so as well.
+func TestDryRunAgreesWhenACopyClaimsALinksDirectory(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{"directory holding a copied file", "a.txt"},
+		{"directory selected while empty", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := newFilesRepo(t, "cache/\n")
+			if tc.content == "" {
+				if err := os.MkdirAll(filepath.Join(src, "cache"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				writeFile(t, filepath.Join(src, "cache", tc.content), "a")
+			}
+			dst := newDestination(t)
+
+			setFileConfig(t, []string{"cache/"}, []string{"cache"}, nil, false)
+
+			dry, err := runFileCopy(src, dst, copyOptions{DryRun: true})
+			if err != nil {
+				t.Fatalf("dry run: %v", err)
+			}
+			real, err := runFileCopy(src, dst, copyOptions{})
+			if err != nil {
+				t.Fatalf("real run: %v", err)
+			}
+
+			if dry.Summary.Linked != real.Summary.Linked {
+				t.Errorf("dry run predicted %d links, real run made %d:\ndry  %+v\nreal %+v",
+					dry.Summary.Linked, real.Summary.Linked, dry.Files, real.Files)
+			}
+			if info, err := os.Lstat(filepath.Join(dst, "cache")); err != nil {
+				t.Errorf("lstat cache: %v", err)
+			} else if info.Mode()&os.ModeSymlink != 0 {
+				t.Error("cache is a symlink; the copy stage should have claimed it")
+			}
+		})
+	}
+}
+
 // --force is part of what --dry-run previews: predicting "skipped (exists)" for
 // a run that will overwrite is worse than not previewing at all.
 func TestDryRunModelsForce(t *testing.T) {
