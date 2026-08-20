@@ -174,6 +174,13 @@ const (
 // It is a variable so tests can inject a fake implementation.
 var gitConfigFn = defaultGitConfig
 
+// gitConfigBoolKeys names the wt.* keys read as git booleans. They are the only
+// ones for which a valueless key is meaningful: `[wt]\n\tcopyIgnored` with no
+// "=" is how git spells true.
+var gitConfigBoolKeys = map[string]bool{
+	"wt.copyignored": true,
+}
+
 // defaultGitConfig reads wt.* keys from the given git config scope.
 //
 // Only the last value of each key is kept: git config returns multi-valued keys
@@ -203,16 +210,19 @@ func defaultGitConfig(scope gitConfigScope) map[string]string {
 			continue
 		}
 		key, value, hasValue := strings.Cut(record, "\n")
-		if !hasValue {
-			// `[wt]\n\tseparator` with no "=": git reports it as valueless.
-			// There is no scalar setting for which that is meaningful, so it
-			// is treated as unset rather than as an empty string.
-			continue
-		}
 		// git lowercases the section and the variable name, but preserves the
 		// case of any subsection. Only the fully lowercase keys are read, so
 		// normalising here keeps lookups simple.
-		values[strings.ToLower(key)] = value
+		key = strings.ToLower(key)
+		if !hasValue && !gitConfigBoolKeys[key] {
+			// `[wt]\n\tseparator` with no "=": git reports it as valueless.
+			// For a string setting that means nothing, so it is treated as
+			// unset rather than as an empty string.
+			continue
+		}
+		// A valueless boolean is git's spelling of true, and parseGitBool
+		// reads the empty value that way.
+		values[key] = value
 	}
 	return values
 }
@@ -258,7 +268,12 @@ func applyGitConfig(scope gitConfigScope, sourceLabel string) {
 	// scalar. The list keys would need --get-all handling for multi-valued
 	// keys, and there is no accumulation story for git config layers, so they
 	// stay TOML-only (documented in docs/configuration.md).
-	if v, ok := values["wt.copy_ignored"]; ok {
+	//
+	// It is spelled wt.copyIgnored there, not wt.copy_ignored: git config
+	// variable names allow only alphanumerics and "-", and it rejects an
+	// underscore outright ("error: invalid key"), a whole config file holding
+	// one included. git lowercases the name it reports, hence the lookup key.
+	if v, ok := values["wt.copyignored"]; ok {
 		if b, ok := parseGitBool(v); ok {
 			filesCopyIgnored = b
 			configSources.CopyIgnored = sourceLabel

@@ -58,7 +58,7 @@ The dotted form is required: `wt` renders patterns with `missingkey=error`, so a
 
 - Config file: `~/.config/wt/config.toml` (or `WT_CONFIG` / `--config`)
 - Per-repo override: `.wt.toml` in the repo root
-- Git config: `git config --local wt.strategy sibling-repo` (also `wt.root`, `wt.pattern`, `wt.separator`, `wt.copy_ignored`; scalars only, no hooks, no `[files]` lists)
+- Git config: `git config --local wt.strategy sibling-repo` (also `wt.root`, `wt.pattern`, `wt.separator`, `wt.copyIgnored` — git config names allow no underscore; scalars only, no hooks, no `[files]` lists)
 - Key settings: `root`, `strategy`, `pattern`, `separator`
 - Env overrides: `WORKTREE_ROOT`, `WORKTREE_STRATEGY`, `WORKTREE_PATTERN`, `WORKTREE_SEPARATOR`, `WT_COPY_IGNORED`
 - Environment variable defaults: `{.env.VARNAME:-fallback}` uses `fallback` when `VARNAME` is unset; `{.env.VARNAME}` without `:-` still errors on missing (catches typos)

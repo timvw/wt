@@ -343,13 +343,13 @@ func TestCopyIgnoredPrecedence(t *testing.T) {
 		},
 		{
 			name:       "global git config",
-			global:     map[string]string{"wt.copy_ignored": "true"},
+			global:     map[string]string{"wt.copyignored": "true"},
 			want:       true,
 			wantSource: "git config (global)",
 		},
 		{
 			name:       "config file beats global git config",
-			global:     map[string]string{"wt.copy_ignored": "true"},
+			global:     map[string]string{"wt.copyignored": "true"},
 			configFile: "[files]\ncopy_ignored = false\n",
 			want:       false,
 			wantSource: "config file",
@@ -364,13 +364,13 @@ func TestCopyIgnoredPrecedence(t *testing.T) {
 		{
 			name:       "local git config beats repo config",
 			repoConfig: "[files]\ncopy_ignored = true\n",
-			local:      map[string]string{"wt.copy_ignored": "false"},
+			local:      map[string]string{"wt.copyignored": "false"},
 			want:       false,
 			wantSource: "git config (local)",
 		},
 		{
 			name:       "env beats everything",
-			local:      map[string]string{"wt.copy_ignored": "false"},
+			local:      map[string]string{"wt.copyignored": "false"},
 			env:        "true",
 			want:       true,
 			wantSource: "env: WT_COPY_IGNORED",
@@ -379,7 +379,7 @@ func TestCopyIgnoredPrecedence(t *testing.T) {
 			// copy_ignored = false must be distinguishable from unset, so a
 			// repo can turn off a user's global "copy everything".
 			name:       "explicit false is not treated as unset",
-			global:     map[string]string{"wt.copy_ignored": "true"},
+			global:     map[string]string{"wt.copyignored": "true"},
 			repoConfig: "[files]\ncopy_ignored = false\n",
 			want:       false,
 			wantSource: "repo config",
@@ -388,13 +388,13 @@ func TestCopyIgnoredPrecedence(t *testing.T) {
 			// git spells booleans several ways; an unparseable value is
 			// ignored rather than silently read as false.
 			name:       "unparseable git value is ignored",
-			global:     map[string]string{"wt.copy_ignored": "maybe"},
+			global:     map[string]string{"wt.copyignored": "maybe"},
 			want:       false,
 			wantSource: "default",
 		},
 		{
 			name:       "git config yes/on spellings",
-			global:     map[string]string{"wt.copy_ignored": "yes"},
+			global:     map[string]string{"wt.copyignored": "yes"},
 			want:       true,
 			wantSource: "git config (global)",
 		},
@@ -654,6 +654,45 @@ func TestUnreadableFileFailsWithoutAbortingTheRun(t *testing.T) {
 	}
 	if got := readFile(t, filepath.Join(dst, "readable.env")); got != "OK=1" {
 		t.Errorf("readable.env content = %q", got)
+	}
+}
+
+// --force promises to update a file, not to lose it: a copy that fails partway
+// must leave what was already there untouched.
+func TestForceKeepsTheDestinationWhenTheCopyFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits do not apply on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can read any file regardless of mode")
+	}
+
+	src := newFilesRepo(t, "*.env\n")
+	secret := filepath.Join(src, "secret.env")
+	writeFile(t, secret, "NEW=1")
+	if err := os.Chmod(secret, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(secret, 0o644) })
+
+	dst := newDestination(t)
+	writeFile(t, filepath.Join(dst, "secret.env"), "OLD=1")
+
+	setFileConfig(t, []string{"*.env"}, nil, nil, false)
+
+	result, err := runFileCopy(src, dst, copyOptions{Force: true})
+	if err != nil {
+		t.Fatalf("runFileCopy: %v", err)
+	}
+	if result.Summary.Failed != 1 {
+		t.Errorf("failed = %d, want 1 (%+v)", result.Summary.Failed, result.Files)
+	}
+	if got := readFile(t, filepath.Join(dst, "secret.env")); got != "OLD=1" {
+		t.Errorf("secret.env = %q, want the original OLD=1 to have survived", got)
+	}
+	// And no half-written temporary is left lying around.
+	if entries := listTree(t, dst); !equalStrings(entries, []string{".", "secret.env"}) {
+		t.Errorf("destination = %v, want just secret.env", entries)
 	}
 }
 

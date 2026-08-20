@@ -456,10 +456,20 @@ somebody's `.env`.
 
 `copy_ignored` is a scalar, so it follows the normal
 [precedence chain](#precedence) instead: env var `WT_COPY_IGNORED`, local git
-config `wt.copy_ignored`, `.wt.toml`, config file, global git config, then the
+config `wt.copyIgnored`, `.wt.toml`, config file, global git config, then the
 default `false`. It is the only `[files]` key readable from git config — the list
 keys would need `--get-all` handling for multi-valued keys and have no
 accumulation story across git scopes, so they stay TOML-only.
+
+Note the spelling: in git config it is `wt.copyIgnored`, not `wt.copy_ignored`.
+git config variable names allow only alphanumerics and `-`, and git rejects an
+underscore outright — a config *file* containing one fails to parse entirely.
+The name is case-insensitive, so `wt.copyignored` works just as well, and as
+with any git boolean the value may be omitted to mean true:
+
+```bash
+git config --local wt.copyIgnored true
+```
 
 ### Which files are candidates
 

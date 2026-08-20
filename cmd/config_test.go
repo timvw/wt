@@ -1174,7 +1174,7 @@ func TestDefaultGitConfigMultilineAndValuelessKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(cfgPath, append(existing, []byte("\tseparator\n")...), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, append(existing, []byte("\tseparator\n\tcopyIgnored\n")...), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1199,6 +1199,16 @@ func TestDefaultGitConfigMultilineAndValuelessKeys(t *testing.T) {
 	// A valueless key is treated as unset, not as an empty string.
 	if _, ok := values["wt.separator"]; ok {
 		t.Errorf("wt.separator = %q, want absent for a valueless key", values["wt.separator"])
+	}
+	// Except for a boolean, where valueless is git's spelling of true —
+	// `git config --bool wt.copyIgnored` reads it that way, so wt has to too.
+	// (git reports the name lowercased, and rejects an underscore in it.)
+	v, ok := values["wt.copyignored"]
+	if !ok {
+		t.Fatal("wt.copyignored is absent; a valueless boolean means true")
+	}
+	if b, parsed := parseGitBool(v); !parsed || !b {
+		t.Errorf("parseGitBool(%q) = %v, %v; want true, true", v, b, parsed)
 	}
 }
 

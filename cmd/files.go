@@ -683,10 +683,7 @@ func copyOne(src, dst, rel string, force bool) fileResult {
 			// should be allowed to mean.
 			return fileResult{Path: rel, Action: fileActionFailed, Reason: "destination is a directory"}
 		}
-		if rmErr := os.Remove(dstPath); rmErr != nil {
-			return fileResult{Path: rel, Action: fileActionFailed, Reason: rmErr.Error()}
-		}
-		method, err = fileops.CopyFile(srcPath, dstPath)
+		method, err = forceCopyOver(srcPath, dstPath)
 	}
 	if err != nil {
 		return fileResult{Path: rel, Action: fileActionFailed, Reason: err.Error()}
@@ -697,6 +694,43 @@ func copyOne(src, dst, rel string, force bool) fileResult {
 		res.Bytes = info.Size()
 	}
 	return res
+}
+
+// forceCopyOver replaces an existing destination with a fresh copy of src.
+//
+// Removing the destination first and copying afterwards would be simpler, but
+// it opens a window in which the old file is gone and the new one does not
+// exist yet: an unreadable source or a full disk at that point costs the user a
+// file that --force only promised to update. So copy beside it under a
+// temporary name and rename over it once the copy has succeeded — a failure
+// then costs nothing but the temporary.
+func forceCopyOver(srcPath, dstPath string) (fileops.Method, error) {
+	dir, base := filepath.Split(dstPath)
+
+	// CreateTemp only reserves the name: CopyFile insists on creating the
+	// destination itself (O_EXCL is the no-clobber guarantee) and may have to
+	// create it as a symlink rather than a file.
+	tmp, err := os.CreateTemp(dir, base+".wt-tmp-*")
+	if err != nil {
+		return "", err
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	if err := os.Remove(tmpPath); err != nil {
+		return "", err
+	}
+	// Leaves nothing behind on any of the failure paths below; after a
+	// successful rename there is nothing left to remove.
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	method, err := fileops.CopyFile(srcPath, tmpPath)
+	if err != nil {
+		return "", err
+	}
+	if err := os.Rename(tmpPath, dstPath); err != nil {
+		return "", err
+	}
+	return method, nil
 }
 
 // dryRunResult predicts what copyOne would do, without touching anything.
