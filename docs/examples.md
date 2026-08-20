@@ -66,19 +66,52 @@ pre_remove = [
 
 ## Copy `.env` to new worktrees
 
-Automatically copy environment files from the main worktree so new branches are ready to run immediately:
+Untracked config files are what make a checkout usable, and they are exactly what a fresh worktree does not have. Declare them once:
 
 ```toml
-[hooks]
-post_create = [
-  "test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"
-]
-post_checkout = [
-  "test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"
-]
+[files]
+copy = [".env", ".env.local", "config/local.yml"]
 ```
 
-This copies `.env` only if it exists in the main checkout. Extend the pattern for other config files (`.env.local`, `config/local.yml`, etc.) by adding more `cp` commands.
+They are materialised on `create`, `checkout`, `pr` and `mr`, before the `post_*` hooks run — so a `post_create` that runs `direnv allow` or `npm install` sees them. A file that is already in the destination is skipped rather than overwritten, and on APFS, Btrfs and XFS the copy is a reflink, so size is not a reason to hesitate.
+
+Only untracked, git-ignored files are candidates: a tracked file is already in the new worktree via the checkout and is never touched.
+
+To let the repository declare this for everyone instead, commit a `.worktreeinclude` at its root:
+
+```gitignore
+# Untracked files every worktree needs
+.env
+.claude/settings.local.json
+```
+
+Its patterns are unioned with whatever your own config asks for, so a new contributor gets working worktrees with no setup at all.
+
+Re-run it on demand after changing a source file, and check first if you like:
+
+```console
+$ wt copy --dry-run
+would copy .env       (reflink)
+would skip .env.local (exists)
+
+$ wt copy --force
+Copied 2 files (2 reflinked)
+```
+
+Skip it for one command with `--no-copy`, or switch the feature off entirely with `WT_FILES_DISABLED=1`.
+
+## Share `node_modules` between worktrees
+
+Symlink the expensive directories instead of copying them, so every worktree resolves to one install:
+
+```toml
+[files]
+link = ["node_modules", ".venv"]
+```
+
+A missing source is a warning, not an error — a repo that has not been `npm install`ed yet still gets a worktree. An existing destination is never replaced, even with `--force`: swapping a real directory for a symlink is too destructive to do on a flag.
+
+Note that a shared `node_modules` means branches cannot hold different dependency versions. Use `copy` (which reflinks where it can) if your branches change `package.json`.
 
 ## Task spanning multiple repositories
 

@@ -19,6 +19,7 @@ Section A: Using wt (installed tool consumers)
   - wt remove <branch> (alias: wt rm)
   - wt pr [number|url] (requires gh)
   - wt mr [number|url] (requires glab)
+  - wt copy [branch] [--dry-run] [--force] [--from <branch|path>] — materialise [files] into a worktree
   - wt info
   - wt init
 - Typical consumer workflow:
@@ -42,9 +43,9 @@ Section B: Contributing to wt (project authors/maintainers)
 Configuration and hooks
 - Config file: ~/.config/wt/config.toml (or WT_CONFIG / --config)
 - Per-repo override: .wt.toml in the repo root (project policy; ignores root, repo_root, repo_pattern, clone hooks)
-- Git config: wt.root, wt.repo_root, wt.strategy, wt.pattern, wt.separator, wt.repo_pattern via git config --local/--global (scalars only, no hooks)
+- Git config: wt.root, wt.repo_root, wt.strategy, wt.pattern, wt.separator, wt.repo_pattern, wt.copy_ignored via git config --local/--global (scalars only, no hooks, no [files] lists)
 - Key settings: root, strategy, pattern, separator, repo_root, repo_pattern
-- Env overrides: WORKTREE_ROOT, WORKTREE_STRATEGY, WORKTREE_PATTERN, WORKTREE_SEPARATOR, WT_REPO_ROOT, WT_REPO_PATTERN
+- Env overrides: WORKTREE_ROOT, WORKTREE_STRATEGY, WORKTREE_PATTERN, WORKTREE_SEPARATOR, WT_REPO_ROOT, WT_REPO_PATTERN, WT_COPY_IGNORED
 - Precedence (highest first): env > local git config > .wt.toml > config file > global git config > defaults
   (--config / WT_CONFIG select which TOML file is loaded; they are not a precedence level)
 - Clone placement (wt clone): repo_root (default ~/dev/repos) + repo_pattern (default {.repoRoot}/{.repo.Host}/{.repo.Owner}/{.repo.Name}/{.branch})
@@ -58,6 +59,22 @@ Configuration and hooks
 - Approvals live in ~/.config/wt/trust.toml; non-interactive runs decline unless WT_HOOKS_APPROVE_ALL=1
 - hooks_policy (config file or WT_HOOKS_POLICY): prompt-untrusted (default), prompt-all, trusted-only, off
 - hooks_policy is never read from a repo-level .wt.toml; WT_HOOKS_APPROVE_ALL=1 approves everything (automation only)
+
+Untracked file materialisation ([files])
+- [files] schema: copy = [...], link = [...], exclude = [...] (gitignore syntax), copy_ignored = false
+- Runs automatically on create/checkout/pr/mr, after 'git worktree add' and before post_* hooks; failure is non-fatal
+- .worktreeinclude at the MAIN worktree root (gitignore syntax, one pattern per line) is unioned into copy; meant to be committed
+- The three list keys ACCUMULATE across layers: config file -> repo .wt.toml -> .worktreeinclude; duplicates dropped, first-seen order kept
+- exclude is applied last and cannot be overridden by a later copy entry or by copy_ignored
+- copy_ignored is a scalar and follows the normal precedence chain; it is the only [files] key readable from git config
+- Candidates come from 'git ls-files --others --ignored --exclude-standard': tracked files are NEVER copied
+- Never copied regardless of patterns: .git/ .bzr/ .hg/ .jj/ .pijul/ .sl/ .svn/ and any registered worktree of the same repo
+- Copy method: reflink on APFS/Btrfs/XFS, buffered copy elsewhere (incl. Windows); symlinks recreated as symlinks, never dereferenced
+- Existing destination files are skipped, not overwritten, unless --force; link entries are never replaced even with --force
+- Disable: --no-copy on create/checkout/pr/mr, or WT_FILES_DISABLED=1
+- [files] needs no 'wt trust' approval: it is declarative data held by invariants F1-F7 (see docs/configuration.md#files)
+- JSON: 'wt copy --format json' emits {source, destination, dry_run, summary, files[{path, action, method, bytes, target, reason}]};
+  create/checkout/pr/mr payloads gain a "files" summary object when anything was materialised
 
 Dependencies
 - Required: git

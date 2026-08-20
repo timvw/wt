@@ -1,0 +1,124 @@
+# E2E tests for the `wt copy` command
+name: files-copy-command
+description: Test wt copy with --dry-run, --force and --from
+
+scenarios:
+  - name: dry_run_then_real_run
+    description: --dry-run lists what would happen and changes nothing; the real run does it
+    skip_shells: [powershell, pwsh] # steps use POSIX shell syntax
+    skip_shellenv: true
+    steps:
+      - run: printf '.env\n' > .gitignore && printf 'TOKEN=1\n' > .env && printf '[files]\ncopy = [".env"]\n' > .wt.toml
+        expect:
+          exit_code: 0
+      # --no-copy so the worktree starts empty and `wt copy` has work to do.
+      - run: $WT_BIN create copy-cmd --no-copy
+        expect:
+          exit_code: 0
+      - run: $WT_BIN copy copy-cmd --dry-run
+        expect:
+          exit_code: 0
+          output_contains: "would copy"
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/copy-cmd/.env" && echo "CREATED" || echo "UNTOUCHED"
+        expect:
+          output_contains: "UNTOUCHED"
+      - run: $WT_BIN copy copy-cmd
+        expect:
+          exit_code: 0
+          output_contains: "Copied 1 file"
+      - run: cat "$WORKTREE_ROOT_POSIX/test-repo/copy-cmd/.env"
+        expect:
+          output_contains: "TOKEN=1"
+
+  - name: force_overwrites_existing
+    description: --force replaces a destination file that a plain run would skip
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: printf '.env\n' > .gitignore && printf 'FROM_MAIN=1\n' > .env && printf '[files]\ncopy = [".env"]\n' > .wt.toml
+        expect:
+          exit_code: 0
+      - run: $WT_BIN create copy-force
+        expect:
+          exit_code: 0
+      - run: printf 'STALE=1\n' > "$WORKTREE_ROOT_POSIX/test-repo/copy-force/.env" && $WT_BIN copy copy-force
+        expect:
+          exit_code: 0
+          output_contains: "skipped 1"
+      - run: $WT_BIN copy copy-force --force
+        expect:
+          exit_code: 0
+          output_contains: "Copied 1 file"
+      - run: cat "$WORKTREE_ROOT_POSIX/test-repo/copy-force/.env"
+        expect:
+          output_contains: "FROM_MAIN=1"
+
+  - name: copy_from_sibling_worktree
+    description: --from seeds one worktree out of another instead of out of main
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      # The .gitignore is committed here: the source is a sibling worktree, and
+      # it only sees ignore rules that are actually checked in.
+      - run: printf '.env\n' > .gitignore && git add .gitignore && git commit -m 'ignore .env' --quiet && printf '[files]\ncopy = [".env"]\n' > .wt.toml
+        expect:
+          exit_code: 0
+      - run: $WT_BIN create copy-source && $WT_BIN create copy-target
+        expect:
+          exit_code: 0
+      - run: printf 'FROM_SIBLING=1\n' > "$WORKTREE_ROOT_POSIX/test-repo/copy-source/.env" && $WT_BIN copy copy-target --from copy-source
+        expect:
+          exit_code: 0
+          output_contains: "Copied 1 file"
+      - run: cat "$WORKTREE_ROOT_POSIX/test-repo/copy-target/.env"
+        expect:
+          output_contains: "FROM_SIBLING=1"
+
+  - name: copy_unknown_branch_fails
+    description: Copying into a branch without a worktree is an error, not a silent no-op
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: $WT_BIN copy no-such-branch
+        expect:
+          exit_code: 1
+          output_contains: "no worktree found for branch"
+
+  - name: copy_json_requires_branch
+    description: JSON mode refuses to guess the destination
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: $WT_BIN --format json copy
+        expect:
+          exit_code: 1
+          output_contains: "requires an explicit branch argument"
+
+  - name: copy_json_reports_method
+    description: JSON output names the method used for each file
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: printf '.env\n' > .gitignore && printf 'TOKEN=1\n' > .env && printf '[files]\ncopy = [".env"]\n' > .wt.toml
+        expect:
+          exit_code: 0
+      - run: $WT_BIN create copy-json --no-copy
+        expect:
+          exit_code: 0
+      - run: $WT_BIN --format json copy copy-json
+        expect:
+          exit_code: 0
+          output_contains: '"method"'
+
+  - name: copy_nothing_configured
+    description: With no [files] configuration there is nothing to copy
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: $WT_BIN create copy-unconfigured
+        expect:
+          exit_code: 0
+      - run: $WT_BIN copy copy-unconfigured --dry-run
+        expect:
+          exit_code: 0
+          output_contains: "Nothing to copy"

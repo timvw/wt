@@ -20,7 +20,8 @@ Inspired by [haacked/dotfiles/tree-me](https://github.com/haacked/dotfiles/blob/
 - **Interactive selection menus** with fuzzy matching for checkout, cd, remove, pr, and mr commands
 - GitHub PR support via `wt pr` command (uses `gh` CLI) — checks out the PR's actual branch name
 - GitLab MR support via `wt mr` command (uses `glab` CLI) — checks out the MR's actual branch name
-- **Pre/post command hooks** — run custom scripts on create/checkout/remove/clone (e.g. [launch AI assistants](docs/examples.md#ai-assistants-and-editors), [share build caches](docs/examples.md#shared-build-cache-across-worktrees), [assign dev server ports](docs/examples.md#deterministic-dev-server-port-per-worktree), [copy `.env`](docs/examples.md#copy-env-to-new-worktrees), [init submodules](docs/examples.md#git-submodules-in-worktrees))
+- **Built-in file copy** — declare `.env` and friends in [`[files]`](docs/configuration.md#files) or a committed `.worktreeinclude`; copied with a **reflink** on APFS/Btrfs/XFS, so even `node_modules` costs metadata rather than disk
+- **Pre/post command hooks** — run custom scripts on create/checkout/remove/clone (e.g. [launch AI assistants](docs/examples.md#ai-assistants-and-editors), [share build caches](docs/examples.md#shared-build-cache-across-worktrees), [assign dev server ports](docs/examples.md#deterministic-dev-server-port-per-worktree), [init submodules](docs/examples.md#git-submodules-in-worktrees))
 - **Stale worktree detection** — find worktrees with deleted remote branches or inactive commits (`wt cleanup --stale`)
 - **Color-coded status output** — green (clean), red (dirty), yellow (ahead/behind), bold cyan (current); respects `NO_COLOR=1` and auto-strips colors when piped
 - **CI/CD status integration** — `wt status --ci` shows pipeline status (✓/✗/●) per branch via `gh` or `glab` CLI
@@ -116,6 +117,32 @@ wt mr 123                                          # looks up branch for MR !123
 wt mr https://gitlab.com/org/repo/-/merge_requests/123  # GitLab MR URL
 wt mr                                              # interactive: fuzzy-search from open MRs
 ```
+
+### Untracked files
+
+A new worktree has everything git tracks and nothing else — no `.env`, no
+`.envrc`, no editor state. Declare what a usable checkout needs and `wt` puts it
+there on `create`, `checkout`, `pr` and `mr`:
+
+```toml
+# ~/.config/wt/config.toml, or a repo's .wt.toml
+[files]
+copy = [".env", ".claude/settings.local.json"]
+link = ["node_modules"]
+```
+
+```bash
+wt copy                           # re-run for the current worktree
+wt copy feature-branch --dry-run  # show what would happen, change nothing
+wt copy feature-branch --force    # overwrite files already there
+wt create feature --no-copy       # skip it just this once
+```
+
+Or commit a `.worktreeinclude` at the repo root — same gitignore syntax, one
+pattern per line — so every contributor gets working worktrees without
+configuring anything. Only untracked, git-ignored files are ever candidates; a
+tracked file is already in the worktree and is never touched. See
+[Files](docs/configuration.md#files).
 
 ### List & Remove
 

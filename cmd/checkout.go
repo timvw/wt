@@ -112,19 +112,28 @@ var checkoutCmd = &cobra.Command{
 			return fmt.Errorf("failed to create worktree: %w", err)
 		}
 
+		if !isJSONOutput() {
+			fmt.Printf("✓ Worktree created at: %s\n", path)
+		}
+
+		// Materialise [files] before post_checkout hooks — see create.go.
+		files := materialiseFiles(info, path, noCopyFiles)
+
 		// Run post-checkout hooks (warn only)
 		_ = runHooks("post_checkout", getHooks("post_checkout"), hookEnv)
 
 		if isJSONOutput() {
-			return emitJSONSuccess(cmd, map[string]any{
+			data := map[string]any{
 				"status":      "created",
 				"branch":      branch,
 				"path":        path,
 				"navigate_to": path,
-			})
+			}
+			if files != nil {
+				data["files"] = files
+			}
+			return emitJSONSuccess(cmd, data)
 		}
-
-		fmt.Printf("✓ Worktree created at: %s\n", path)
 
 		printCDMarker(path)
 		return nil

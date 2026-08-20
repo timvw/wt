@@ -70,20 +70,31 @@ var createCmd = &cobra.Command{
 			return fmt.Errorf("failed to create worktree: %w", err)
 		}
 
+		if !isJSONOutput() {
+			fmt.Printf("✓ Worktree created at: %s\n", path)
+		}
+
+		// Materialise [files] before post_create hooks: a hook running
+		// `npm install` or `direnv allow` has to see the .env that was just
+		// copied. Failure here is non-fatal and never rolls back the worktree.
+		files := materialiseFiles(info, path, noCopyFiles)
+
 		// Run post-create hooks (warn only)
 		_ = runHooks("post_create", getHooks("post_create"), hookEnv)
 
 		if isJSONOutput() {
-			return emitJSONSuccess(cmd, map[string]any{
+			data := map[string]any{
 				"status":      "created",
 				"branch":      branch,
 				"base":        base,
 				"path":        path,
 				"navigate_to": path,
-			})
+			}
+			if files != nil {
+				data["files"] = files
+			}
+			return emitJSONSuccess(cmd, data)
 		}
-
-		fmt.Printf("✓ Worktree created at: %s\n", path)
 
 		printCDMarker(path)
 		return nil

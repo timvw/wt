@@ -213,22 +213,31 @@ func checkoutPROrMR(cmd *cobra.Command, input string, remoteType RemoteType) err
 		fmt.Sprintf("origin/%s", branch), branch)
 	_ = upstreamCmd.Run()
 
+	if !jsonMode {
+		fmt.Printf("✓ %s #%s (%s) checked out at: %s\n", strings.ToUpper(prefix), prNumber, branch, path)
+	}
+
+	// Materialise [files] before post_pr/post_mr hooks — see create.go.
+	files := materialiseFiles(info, path, noCopyFiles)
+
 	// Run post-pr/post-mr hooks (warn only)
 	postHookName := "post_" + hookPrefix
 	_ = runHooks(postHookName, getHooks(postHookName), hookEnv)
 
 	if jsonMode {
-		return emitJSONSuccess(cmd, map[string]any{
+		data := map[string]any{
 			"status":      "created",
 			"id":          prNumber,
 			"kind":        prefix,
 			"branch":      branch,
 			"path":        path,
 			"navigate_to": path,
-		})
+		}
+		if files != nil {
+			data["files"] = files
+		}
+		return emitJSONSuccess(cmd, data)
 	}
-
-	fmt.Printf("✓ %s #%s (%s) checked out at: %s\n", strings.ToUpper(prefix), prNumber, branch, path)
 
 	printCDMarker(path)
 	return nil
