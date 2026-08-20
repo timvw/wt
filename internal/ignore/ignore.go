@@ -76,12 +76,69 @@ func (m *Matcher) Empty() bool {
 // Patterns are consulted last-to-first and the first one that matches decides,
 // which is how a later "!" line re-includes a path an earlier line excluded.
 func (m *Matcher) Match(rel string, isDir bool) bool {
+	return m.decideOne(rel, isDir) == Selected
+}
+
+// Decision is the outcome of evaluating a path against a pattern set.
+type Decision int
+
+const (
+	// Unmatched means no pattern had anything to say about the path.
+	Unmatched Decision = iota
+	// Selected means the deciding pattern was a plain one: the path is in.
+	Selected
+	// Rejected means the deciding pattern was a "!" negation: the path is
+	// explicitly out.
+	Rejected
+)
+
+// Decide evaluates rel against the pattern set the way git evaluates a path
+// against .gitignore: every ancestor directory is considered before the path
+// itself, so a directory pattern such as "secrets/" covers everything below it
+// even when the caller only ever sees the leaf.
+//
+// It differs from git on one point, deliberately. Git documents that "it is not
+// possible to re-include a file if a parent directory of that file is
+// excluded", because it never descends into an excluded directory. wt does
+// descend, so a more specific "!" below a matched directory is honoured:
+// copy = ["cache/", "!cache/private.key"] leaves private.key behind. The
+// divergence only ever selects fewer files, which is the safe direction for a
+// feature that materialises secrets into new worktrees.
+func (m *Matcher) Decide(rel string, isDir bool) Decision {
 	if m == nil {
-		return false
+		return Unmatched
 	}
 	rel = strings.Trim(rel, "/")
 	if rel == "" {
-		return false
+		return Unmatched
+	}
+
+	// Walk the path top-down so the most specific pattern decides: each
+	// ancestor prefix, then the path itself.
+	decision := Unmatched
+	for i := 0; i <= len(rel); i++ {
+		if i < len(rel) && rel[i] != '/' {
+			continue
+		}
+		// Ancestors are always directories; only the leaf carries isDir.
+		leaf := i == len(rel)
+		if d := m.decideOne(rel[:i], !leaf || isDir); d != Unmatched {
+			decision = d
+		}
+	}
+	return decision
+}
+
+// decideOne evaluates a single path against the patterns, last to first, so the
+// most recent matching line wins — that is what makes a later "!" re-include a
+// path an earlier line excluded.
+func (m *Matcher) decideOne(rel string, isDir bool) Decision {
+	if m == nil {
+		return Unmatched
+	}
+	rel = strings.Trim(rel, "/")
+	if rel == "" {
+		return Unmatched
 	}
 	base := rel
 	if i := strings.LastIndex(rel, "/"); i >= 0 {
@@ -98,10 +155,13 @@ func (m *Matcher) Match(rel string, isDir bool) bool {
 			target = rel
 		}
 		if wildmatch(p.glob, target) {
-			return !p.negate
+			if p.negate {
+				return Rejected
+			}
+			return Selected
 		}
 	}
-	return false
+	return Unmatched
 }
 
 // MayContain reports whether any descendant of the directory rel could match.

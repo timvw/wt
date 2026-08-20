@@ -155,6 +155,63 @@ func TestEscapedTrailingSpaceSurvivesTheConfigLayer(t *testing.T) {
 	}
 }
 
+// A directory pattern in exclude covers everything below it. git reports
+// candidates as leaf paths whenever a directory is not wholly ignored, so
+// matching only the leaf would let "secrets/" miss "secrets/key.pem".
+func TestDirectoryExcludeCoversItsContents(t *testing.T) {
+	src := newFilesRepo(t, "*.pem\n")
+	writeFile(t, filepath.Join(src, "secrets", "key.pem"), "PRIVATE")
+	writeFile(t, filepath.Join(src, "keep.pem"), "ok")
+
+	setFileConfig(t, nil, nil, []string{"secrets/"}, true)
+
+	files := planPaths(t, src)
+	if contains(files, "secrets/key.pem") {
+		t.Errorf("a file below an excluded directory was selected: %v", files)
+	}
+	if !contains(files, "keep.pem") {
+		t.Errorf("keep.pem missing from plan: %v", files)
+	}
+}
+
+// A "!" in copy names a path the user does not want, so it has to win over the
+// blanket yes of a matched parent directory or copy_ignored. This is a
+// deliberate divergence from git, which cannot re-include below an excluded
+// directory; it only ever copies less.
+func TestNegatedCopyPatternWinsOverABlanketYes(t *testing.T) {
+	t.Run("below a matched directory", func(t *testing.T) {
+		src := newFilesRepo(t, "cache/\n")
+		writeFile(t, filepath.Join(src, "cache", "a.txt"), "a")
+		writeFile(t, filepath.Join(src, "cache", "private.key"), "SECRET")
+
+		setFileConfig(t, []string{"cache/", "!cache/private.key"}, nil, nil, false)
+
+		files := planPaths(t, src)
+		if contains(files, "cache/private.key") {
+			t.Errorf("negated pattern was selected anyway: %v", files)
+		}
+		if !contains(files, "cache/a.txt") {
+			t.Errorf("cache/a.txt missing from plan: %v", files)
+		}
+	})
+
+	t.Run("under copy_ignored", func(t *testing.T) {
+		src := newFilesRepo(t, "*.key\n*.txt\n")
+		writeFile(t, filepath.Join(src, "a.txt"), "a")
+		writeFile(t, filepath.Join(src, "private.key"), "SECRET")
+
+		setFileConfig(t, []string{"!private.key"}, nil, nil, true)
+
+		files := planPaths(t, src)
+		if contains(files, "private.key") {
+			t.Errorf("negated pattern was selected despite copy_ignored: %v", files)
+		}
+		if !contains(files, "a.txt") {
+			t.Errorf("a.txt missing from plan: %v", files)
+		}
+	})
+}
+
 // "applied last and not overridable" has to cover link too, or an exclude that
 // looks effective for copies would be quietly ignored for links.
 func TestExcludeAlsoAppliesToLink(t *testing.T) {
@@ -650,12 +707,19 @@ func TestDryRunMatchesTheRealRun(t *testing.T) {
 
 	setFileConfig(t, []string{"*.env"}, nil, nil, false)
 
+	before := listTree(t, src)
+
 	dry, err := runFileCopy(src, dst, copyOptions{DryRun: true})
 	if err != nil {
 		t.Fatalf("dry run: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(dst, "app.env")); !os.IsNotExist(err) {
 		t.Fatal("the dry run created a file")
+	}
+	// "Change nothing" has to include the source worktree, which may well be
+	// read-only: the reflink probe must not write there to predict the method.
+	if after := listTree(t, src); !equalStrings(before, after) {
+		t.Errorf("the dry run touched the source worktree:\nbefore %v\nafter  %v", before, after)
 	}
 
 	real, err := runFileCopy(src, dst, copyOptions{})

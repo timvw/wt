@@ -429,6 +429,23 @@ effective set in layer order with the source of each pattern.
 layer's `copy`, not by `copy_ignored`, not by a negated pattern, and not by
 `link`. An excluded path is reported as skipped rather than materialised.
 
+A directory pattern covers everything below it, in both lists: `exclude =
+["secrets/"]` keeps `secrets/key.pem` out, and `copy = ["cache/"]` brings the
+whole tree in.
+
+A `!` in `copy` names a path you do *not* want, and it wins over any blanket
+yes — a matched parent directory or `copy_ignored`:
+
+```toml
+[files]
+copy = ["cache/", "!cache/private.key"]   # everything under cache/ except that one
+```
+
+This is a deliberate divergence from gitignore, where a file cannot be
+re-included once a parent directory is excluded. It only ever selects *fewer*
+files, which is the safe direction when the thing being materialised is
+somebody's `.env`.
+
 `copy_ignored` is a scalar, so it follows the normal
 [precedence chain](#precedence) instead: env var `WT_COPY_IGNORED`, local git
 config `wt.copy_ignored`, `.wt.toml`, config file, global git config, then the
@@ -459,7 +476,8 @@ macOS, Btrfs and XFS on Linux — so a multi-gigabyte `node_modules` costs
 metadata rather than disk, and the two copies diverge only as they are written
 to. Everywhere else, including Windows, a buffered copy is used. `--format json`
 reports the `method` per file (`reflink`, `copy` or `symlink`), so you can check
-which you got.
+which you got. `--dry-run` predicts it without writing to the source worktree:
+it compares filesystems first and probes inside the destination only.
 
 An existing destination file is **skipped, never overwritten**, unless you pass
 `--force`. Symlinks are recreated as symlinks and never dereferenced, and a

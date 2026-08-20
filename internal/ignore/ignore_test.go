@@ -114,6 +114,73 @@ func TestMatch(t *testing.T) {
 	}
 }
 
+func TestDecide(t *testing.T) {
+	tests := []struct {
+		name     string
+		patterns []string
+		path     string
+		isDir    bool
+		want     Decision
+	}{
+		{"nothing matches", []string{"*.env"}, "src/main.go", false, Unmatched},
+		{"leaf matches", []string{"*.env"}, "app.env", false, Selected},
+
+		// A directory-only pattern covers everything below it, which Match
+		// alone cannot see because the leaf is not a directory.
+		{"dir-only covers descendant", []string{"secrets/"}, "secrets/key.pem", false, Selected},
+		{"dir-only covers deep descendant", []string{"secrets/"}, "secrets/a/b/key.pem", false, Selected},
+		{"dir-only does not cover a sibling", []string{"secrets/"}, "public/key.pem", false, Unmatched},
+		{"anchored dir covers descendant", []string{"/cache/"}, "cache/a.txt", false, Selected},
+
+		// A negation below a matched directory is honoured, which is where wt
+		// deliberately diverges from git's "cannot re-include" rule.
+		{"negation below matched dir", []string{"cache/", "!cache/private.key"}, "cache/private.key", false, Rejected},
+		{"sibling below matched dir still selected", []string{"cache/", "!cache/private.key"}, "cache/a.txt", false, Selected},
+		{"negation on the leaf alone", []string{"!private.key"}, "private.key", false, Rejected},
+		{"negated dir rejects descendants", []string{"!cache/"}, "cache/a.txt", false, Rejected},
+
+		// Order still decides between patterns at the same level.
+		{"later pattern wins", []string{"!*.env", "*.env"}, "app.env", false, Selected},
+		{"more specific ancestor wins over general", []string{"!logs/", "logs/keep.txt"}, "logs/keep.txt", false, Selected},
+
+		{"empty path", []string{"*"}, "", false, Unmatched},
+		{"nil matcher", nil, "a", false, Unmatched},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, err := New(tt.patterns)
+			if err != nil {
+				t.Fatalf("New(%q) returned error: %v", tt.patterns, err)
+			}
+			if got := m.Decide(tt.path, tt.isDir); got != tt.want {
+				t.Errorf("Decide(%q, isDir=%v) with patterns %q = %v, want %v",
+					tt.path, tt.isDir, tt.patterns, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLiteralPath(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want string
+	}{
+		{"node_modules", "node_modules"},
+		{"node_modules  ", "node_modules"},
+		{`logs\ `, "logs "},
+		{`a\#b`, "a#b"},
+		{`a\\b`, `a\b`},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		if got := LiteralPath(tt.raw); got != tt.want {
+			t.Errorf("LiteralPath(%q) = %q, want %q", tt.raw, got, tt.want)
+		}
+	}
+}
+
 func TestMayContain(t *testing.T) {
 	tests := []struct {
 		name     string

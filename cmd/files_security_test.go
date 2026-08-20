@@ -182,6 +182,15 @@ func TestSecurityF2SymlinkedDestinationParentIsRefused(t *testing.T) {
 
 	setFileConfig(t, []string{"cache/secret.txt"}, nil, nil, false)
 
+	// --dry-run must predict the refusal rather than promise a copy.
+	preview, err := runFileCopy(src, dst, copyOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if preview.Summary.Copied != 0 {
+		t.Errorf("dry run reported %d copies, want 0 (%+v)", preview.Summary.Copied, preview.Files)
+	}
+
 	result, err := runFileCopy(src, dst, copyOptions{})
 	if err != nil {
 		t.Fatalf("runFileCopy: %v", err)

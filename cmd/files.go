@@ -399,11 +399,11 @@ func buildCopyPlan(src string, cfg fileConfig) (copyPlan, error) {
 		if rel == "" || p.skip(rel, filepath.Base(rel)) {
 			continue
 		}
-		if p.cfg.excludeMatcher.Match(rel, isDir) {
+		if p.excluded(rel, isDir) {
 			continue
 		}
 
-		matched := cfg.CopyIgnored || cfg.copyMatcher.Match(rel, isDir)
+		matched := p.selected(rel, isDir, false)
 		if !isDir {
 			if matched {
 				p.addFile(rel)
@@ -449,11 +449,11 @@ func (p *planner) walk(rel string, forced bool) {
 		// as a file and recreated as a symlink rather than descended into
 		// (invariant F4).
 		isDir := entry.IsDir()
-		if p.cfg.excludeMatcher.Match(childRel, isDir) {
+		if p.excluded(childRel, isDir) {
 			continue
 		}
 
-		matched := forced || p.cfg.CopyIgnored || p.cfg.copyMatcher.Match(childRel, isDir)
+		matched := p.selected(childRel, isDir, forced)
 		if !isDir {
 			if matched {
 				p.addFile(childRel)
@@ -484,6 +484,29 @@ func (p *planner) skip(rel, name string) bool {
 	}
 	// F1/F7: never read anything the source worktree does not contain.
 	return !withinRoot(p.src, abs)
+}
+
+// excluded reports whether the exclude list keeps rel out. A "!" in exclude
+// says "do not exclude this after all", so only a positive selection counts.
+func (p *planner) excluded(rel string, isDir bool) bool {
+	return p.cfg.excludeMatcher.Decide(rel, isDir) == ignore.Selected
+}
+
+// selected reports whether rel belongs in the plan.
+//
+// forced carries down from a directory that was already selected, and
+// copy_ignored selects everything git reports as ignored. Both are overridden
+// by an explicit "!" in copy: a negation is the user naming a path they do not
+// want, and that has to win over a blanket yes.
+func (p *planner) selected(rel string, isDir, forced bool) bool {
+	switch p.cfg.copyMatcher.Decide(rel, isDir) {
+	case ignore.Rejected:
+		return false
+	case ignore.Selected:
+		return true
+	default:
+		return forced || p.cfg.CopyIgnored
+	}
 }
 
 func (p *planner) addFile(rel string) {
@@ -631,12 +654,23 @@ func copyOne(src, dst, rel string, force bool) fileResult {
 // dryRunResult predicts what copyOne would do, without touching anything.
 func dryRunResult(src, dst, rel string) fileResult {
 	dstPath := filepath.Join(dst, filepath.FromSlash(rel))
+	srcPath := filepath.Join(src, filepath.FromSlash(rel))
+
+	// The refusals copyOne makes have to be predicted here too, or --dry-run
+	// promises a copy the real run will decline.
+	if !withinRoot(dst, dstPath) || !withinRoot(src, srcPath) {
+		return fileResult{Path: rel, Action: fileActionFailed, Reason: "path escapes the worktree"}
+	}
+	if !noSymlinkComponents(dst, rel) {
+		return fileResult{Path: rel, Action: fileActionFailed, Reason: "destination parent is a symlink"}
+	}
+
 	if _, err := os.Lstat(dstPath); err == nil {
 		return fileResult{Path: rel, Action: fileActionSkipped, Reason: "exists"}
 	}
 
 	res := fileResult{Path: rel, Action: fileActionCopied, Method: string(fileops.MethodCopy)}
-	info, err := os.Lstat(filepath.Join(src, filepath.FromSlash(rel)))
+	info, err := os.Lstat(srcPath)
 	if err != nil {
 		return fileResult{Path: rel, Action: fileActionFailed, Reason: err.Error()}
 	}
@@ -668,14 +702,21 @@ func reflinkAvailable(src, dst string) bool {
 	}
 
 	ok := false
-	if probeSrc, err := os.CreateTemp(src, ".wt-reflink-probe-"); err == nil {
-		name := probeSrc.Name()
-		_ = probeSrc.Close()
-		probeDst := filepath.Join(dst, filepath.Base(name)+".dst")
-		err := fileops.Reflink(name, probeDst)
-		ok = err == nil
-		_ = os.Remove(name)
-		_ = os.Remove(probeDst)
+	// A clone cannot span filesystems, so an answer is free in that case — and
+	// checking first keeps the probe off cross-device pairs entirely.
+	if fileops.SameFilesystem(src, dst) {
+		// Both probe files go in the destination. It is on the same filesystem
+		// as the source, so the answer is the same, and the source worktree —
+		// the user's actual working copy, possibly read-only — is never
+		// written to, not even by `wt copy --dry-run`.
+		if probe, err := os.CreateTemp(dst, ".wt-reflink-probe-"); err == nil {
+			name := probe.Name()
+			_ = probe.Close()
+			clone := name + ".clone"
+			ok = fileops.Reflink(name, clone) == nil
+			_ = os.Remove(name)
+			_ = os.Remove(clone)
+		}
 	}
 	reflinkProbeCache[key] = ok
 	return ok
@@ -729,7 +770,7 @@ func linkConfiguredPaths(src, dst string, cfg fileConfig, opts copyOptions) []fi
 		// exclude is applied last and cannot be overridden — that holds for
 		// link just as it does for copy, otherwise "*.key" in exclude would
 		// still be honoured for copies and silently ignored for links.
-		if cfg.excludeMatcher != nil && cfg.excludeMatcher.Match(rel, true) {
+		if cfg.excludeMatcher.Decide(rel, true) == ignore.Selected {
 			results = append(results, fileResult{Path: rel, Action: fileActionSkipped, Reason: "excluded"})
 			continue
 		}
