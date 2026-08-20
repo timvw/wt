@@ -51,7 +51,11 @@ func renderWorktreePath(info repoInfo, branch string) (string, error) {
 		},
 		"branch":       strings.TrimSpace(tmpl.Transform(sep, branch)),
 		"worktreeRoot": worktreeRoot,
-		"env":          tmpl.EnvMap(sep),
+		// Context rules are matched against the repository's main checkout, not
+		// the working directory. Every linked worktree of a repo then resolves
+		// to the same rule, which the cwd would not: a repo cloned under
+		// repo_root keeps its worktrees in a different tree entirely.
+		"env": templateEnv(sep, info.Main),
 	}
 
 	if pattern == "" {

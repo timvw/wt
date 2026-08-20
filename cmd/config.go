@@ -21,6 +21,11 @@ type Config struct {
 	Hooks       Hooks  `toml:"hooks"`
 	HooksPolicy string `toml:"hooks_policy"`
 	RepoPattern string `toml:"repo_pattern"`
+
+	// Context holds path-matched rules supplying environment variables to
+	// pattern rendering. Decoded from the user's config file only — see
+	// contextRules in context.go.
+	Context []ContextRule `toml:"context"`
 }
 
 // Hooks holds pre/post command hook commands.
@@ -259,6 +264,22 @@ const defaultConfigTemplate = `# wt configuration file
 # while an empty value just collapses the segment away.
 # repo_pattern = "{.repoRoot}/{.env.WT_CATEGORY}/{.repo.Owner}/{.repo.Name}/{.branch}"
 
+# Set variables for a whole tree of repositories, instead of exporting them per
+# command. Each rule matches a path prefix; every matching rule applies, and
+# later rules override earlier ones per variable. An exported variable always
+# wins over a rule.
+#
+# Matched against the repository's main checkout for worktree commands, and
+# against the current directory for 'wt clone' (no repo exists yet).
+#
+# [[context]]
+# when_path = "~/dev/repos/work"
+# env = { WT_CATEGORY = "work" }
+#
+# [[context]]
+# when_path = "~/dev/repos/personal"
+# env = { WT_CATEGORY = "personal" }
+
 # Hooks — run commands before/after wt operations
 # Available env vars in hooks: $WT_PATH, $WT_BRANCH, $WT_MAIN,
 #                              $WT_REPO_NAME, $WT_REPO_HOST, $WT_REPO_OWNER
@@ -344,6 +365,7 @@ func loadWorktreeConfig() {
 	repoConfigHooks = Hooks{}
 	hookSources = map[string]string{}
 	hooksPolicy = ""
+	contextRules = nil
 
 	repoPattern = defaultRepoPattern
 
@@ -393,6 +415,7 @@ func loadWorktreeConfig() {
 				hooksPolicy = strings.ToLower(strings.TrimSpace(cfg.HooksPolicy))
 				configSources.HooksPolicy = "config file"
 			}
+			contextRules = cfg.Context
 		}
 	}
 

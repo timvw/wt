@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -57,11 +58,20 @@ func repoPlacementPath(info repoInfo, branch string) (string, error) {
 
 	sep := worktreeSeparator
 
+	// No repository exists yet, so context rules match the working directory —
+	// the only signal available, and the one the user is expressing intent with
+	// when they choose where to stand before cloning. It is an input to the
+	// pattern, never the rendered destination, so nothing is circular.
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = ""
+	}
+
 	ctx := map[string]any{
 		"repoRoot": reposRoot,
 		"repo":     map[string]any{"Host": info.Host, "Owner": tmpl.Transform(sep, info.Owner), "Name": info.Name},
 		"branch":   tmpl.Transform(sep, branch),
-		"env":      tmpl.EnvMap(sep),
+		"env":      templateEnv(sep, cwd),
 	}
 	rendered, err := tmpl.Render(pattern, ctx, sep)
 	if err != nil {
