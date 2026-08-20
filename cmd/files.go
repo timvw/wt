@@ -585,8 +585,12 @@ func runFileCopy(src, dst string, opts copyOptions) (*copyResult, error) {
 	}
 
 	results := append([]fileResult(nil), plan.failures...)
-	results = append(results, copyPlannedFiles(src, dst, plan, opts)...)
-	results = append(results, linkConfiguredPaths(src, dst, cfg, opts)...)
+	copied := copyPlannedFiles(src, dst, plan, opts)
+	results = append(results, copied...)
+	// The real run copies before it links, so a link whose destination the copy
+	// stage has just claimed is skipped as existing. A dry run writes nothing,
+	// so it has to be told what the copy stage would have produced.
+	results = append(results, linkConfiguredPaths(src, dst, cfg, opts, claimedPaths(dst, opts, copied))...)
 
 	sort.Slice(results, func(i, j int) bool { return results[i].Path < results[j].Path })
 	result.Files = results
@@ -774,53 +778,77 @@ func reflinkAvailable(src, dst string) bool {
 	return ok
 }
 
-// dropCaseCollisions removes paths that would collide on a case-insensitive
-// filesystem, reporting them rather than letting one silently land on top of
-// the other.
 // caseInsensitiveWorktree reports whether dst is on a case-insensitive
-// filesystem, without writing to it.
+// filesystem, without writing anything anywhere.
 //
-// filesystemCaseInsensitive answers the same question by creating a temp file,
-// which is fine where it is already used but not here: this runs on the
-// --dry-run path too, and "show what would happen, change nothing" has to mean
-// it. A worktree always has entries to flip the case of, so the probe reduces
-// to two Lstats; the write probe is kept only as a fallback for the case where
-// the directory cannot be read or holds nothing with a cased letter.
+// filesystemCaseInsensitive answers the same question by creating a temp file.
+// That is fine where it is already used, but not here: this runs on the
+// --dry-run path via dropCaseCollisions, and "show what would happen, change
+// nothing" has to mean it. So take a name that already exists — an entry in
+// dst, or failing that dst itself and its ancestors — flip its case, and ask
+// whether the two names lead to the same file.
 func caseInsensitiveWorktree(dst string) bool {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 		return false
 	}
 
-	entries, err := os.ReadDir(dst)
-	if err != nil {
-		return filesystemCaseInsensitive(dst)
+	if entries, err := os.ReadDir(dst); err == nil {
+		for _, entry := range entries {
+			if answer, ok := sameFileWithFlippedCase(filepath.Join(dst, entry.Name())); ok {
+				return answer
+			}
+		}
 	}
-	for _, entry := range entries {
-		name := entry.Name()
-		alt := strings.ToUpper(name)
-		if alt == name {
-			alt = strings.ToLower(name)
+	// An empty or unreadable directory still has a path of its own, and dst
+	// shares a filesystem with itself.
+	for path := filepath.Clean(dst); ; {
+		if answer, ok := sameFileWithFlippedCase(path); ok {
+			return answer
 		}
-		if alt == name {
-			// Digits and punctuation only; nothing to learn from this one.
-			continue
+		parent := filepath.Dir(path)
+		if parent == path {
+			break
 		}
-
-		original, err := os.Lstat(filepath.Join(dst, name))
-		if err != nil {
-			continue
-		}
-		flipped, err := os.Lstat(filepath.Join(dst, alt))
-		if err != nil {
-			return false
-		}
-		// Both names may exist as distinct files on a case-sensitive
-		// filesystem, so identity is the question, not existence.
-		return os.SameFile(original, flipped)
+		path = parent
 	}
-	return filesystemCaseInsensitive(dst)
+	// Nothing along the way held a letter to flip. Both platforms that reach
+	// this line are case-insensitive by default, and guessing that way costs a
+	// reported collision rather than a silent overwrite.
+	return true
 }
 
+// sameFileWithFlippedCase reports whether path and the same path with the case
+// of its last element flipped are one and the same file. ok is false when the
+// name holds no cased letter, or when the answer cannot be established.
+func sameFileWithFlippedCase(path string) (result, ok bool) {
+	dir, name := filepath.Split(path)
+	alt := strings.ToUpper(name)
+	if alt == name {
+		alt = strings.ToLower(name)
+	}
+	if alt == name {
+		// Digits and punctuation only; nothing to learn from this one.
+		return false, false
+	}
+
+	original, err := os.Lstat(path)
+	if err != nil {
+		return false, false
+	}
+	flipped, err := os.Lstat(filepath.Join(dir, alt))
+	if err != nil {
+		// A missing flipped name settles it; anything else leaves the question
+		// open for the next candidate.
+		return false, os.IsNotExist(err)
+	}
+	// Both names may exist as distinct files on a case-sensitive filesystem, so
+	// identity is the question rather than existence.
+	return os.SameFile(original, flipped), true
+}
+
+// dropCaseCollisions removes paths that would collide on a case-insensitive
+// filesystem, reporting them rather than letting one silently land on top of
+// the other.
 func dropCaseCollisions(dst string, files []string) ([]string, []fileResult) {
 	if !caseInsensitiveWorktree(dst) {
 		return files, nil
@@ -845,6 +873,35 @@ func dropCaseCollisions(dst string, files []string) ([]string, []fileResult) {
 	return kept, dropped
 }
 
+// claimedPaths reports which destination paths a dry run's copy stage would
+// have produced, so the link stage sees them the way the real run does: there,
+// copying happens first and the link then finds its destination taken. Outside
+// a dry run the filesystem answers this by itself and the predicate is never
+// true.
+func claimedPaths(dst string, opts copyOptions, copied []fileResult) func(string) bool {
+	if !opts.DryRun {
+		return func(string) bool { return false }
+	}
+
+	// A destination that differs only by case is the same destination here, so
+	// the lookup has to fold exactly as dropCaseCollisions does.
+	fold := caseInsensitiveWorktree(dst)
+	key := func(rel string) string {
+		if fold {
+			return strings.ToLower(rel)
+		}
+		return rel
+	}
+
+	claimed := make(map[string]bool, len(copied))
+	for _, r := range copied {
+		if r.Action == fileActionCopied {
+			claimed[key(r.Path)] = true
+		}
+	}
+	return func(rel string) bool { return claimed[key(rel)] }
+}
+
 // linkConfiguredPaths creates the symlinks named by [files] link.
 //
 // Semantics differ from copy on purpose: entries are literal relative paths
@@ -853,7 +910,7 @@ func dropCaseCollisions(dst string, files []string) ([]string, []fileResult) {
 // has not been installed yet must not break `wt create`), and an existing
 // destination is never replaced even with --force (swapping a real directory
 // for a symlink is too destructive to do on a flag).
-func linkConfiguredPaths(src, dst string, cfg fileConfig, opts copyOptions) []fileResult {
+func linkConfiguredPaths(src, dst string, cfg fileConfig, opts copyOptions, claimed func(string) bool) []fileResult {
 	var results []fileResult
 	for _, entry := range cfg.Link {
 		// Link entries name a path rather than a glob, so resolve gitignore's
@@ -899,7 +956,7 @@ func linkConfiguredPaths(src, dst string, cfg fileConfig, opts copyOptions) []fi
 			results = append(results, fileResult{Path: rel, Action: fileActionSkipped, Reason: "source does not exist"})
 			continue
 		}
-		if _, err := os.Lstat(dstPath); err == nil {
+		if _, err := os.Lstat(dstPath); err == nil || claimed(rel) {
 			results = append(results, fileResult{Path: rel, Action: fileActionSkipped, Reason: "exists"})
 			continue
 		}

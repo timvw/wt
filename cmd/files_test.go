@@ -658,18 +658,23 @@ func TestUnreadableFileFailsWithoutAbortingTheRun(t *testing.T) {
 }
 
 // The read-only probe has to give the same answer as the write probe it stands
-// in for, whatever this machine's filesystem happens to be.
+// in for, whatever this machine's filesystem happens to be — and it has to do
+// so without writing, on an empty destination as much as on a populated one.
 func TestCaseInsensitiveWorktreeAgreesWithTheWriteProbe(t *testing.T) {
-	dst := newDestination(t)
+	empty := newDestination(t)
+	populated := newDestination(t)
+	writeFile(t, filepath.Join(populated, "App.env"), "TOKEN=1")
 
-	if got, want := caseInsensitiveWorktree(dst), filesystemCaseInsensitive(dst); got != want {
-		t.Errorf("caseInsensitiveWorktree = %v, filesystemCaseInsensitive = %v", got, want)
-	}
+	for _, dst := range []string{empty, populated} {
+		if got, want := caseInsensitiveWorktree(dst), filesystemCaseInsensitive(dst); got != want {
+			t.Errorf("%s: caseInsensitiveWorktree = %v, filesystemCaseInsensitive = %v", dst, got, want)
+		}
 
-	before := listTree(t, dst)
-	caseInsensitiveWorktree(dst)
-	if after := listTree(t, dst); !equalStrings(before, after) {
-		t.Errorf("the probe wrote to the worktree:\nbefore %v\nafter  %v", before, after)
+		before := listTree(t, dst)
+		caseInsensitiveWorktree(dst)
+		if after := listTree(t, dst); !equalStrings(before, after) {
+			t.Errorf("%s: the probe wrote to the worktree:\nbefore %v\nafter  %v", dst, before, after)
+		}
 	}
 }
 
@@ -826,6 +831,48 @@ func TestDryRunMatchesTheRealRun(t *testing.T) {
 		if dry.Files[i].Method != real.Files[i].Method {
 			t.Errorf("entry %d: method dry %q, real %q", i, dry.Files[i].Method, real.Files[i].Method)
 		}
+	}
+}
+
+// A path can end up in both lists — a blanket "*.env" in copy and an explicit
+// entry in link. The real run copies first, so the link then finds its
+// destination taken; the dry run writes nothing and has to reach the same
+// conclusion on its own rather than promising both a copy and a link.
+func TestDryRunAgreesWhenAPathIsBothCopiedAndLinked(t *testing.T) {
+	src := newFilesRepo(t, "*.env\n")
+	writeFile(t, filepath.Join(src, "app.env"), "TOKEN=1")
+	dst := newDestination(t)
+
+	setFileConfig(t, []string{"*.env"}, []string{"app.env"}, nil, false)
+
+	dry, err := runFileCopy(src, dst, copyOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	real, err := runFileCopy(src, dst, copyOptions{})
+	if err != nil {
+		t.Fatalf("real run: %v", err)
+	}
+
+	if len(dry.Files) != len(real.Files) {
+		t.Fatalf("dry run planned %d entries, real run produced %d:\ndry  %+v\nreal %+v",
+			len(dry.Files), len(real.Files), dry.Files, real.Files)
+	}
+	for i := range dry.Files {
+		if dry.Files[i].Path != real.Files[i].Path || dry.Files[i].Action != real.Files[i].Action {
+			t.Errorf("entry %d: dry %+v, real %+v", i, dry.Files[i], real.Files[i])
+		}
+	}
+	if dry.Summary.Linked != 0 {
+		t.Errorf("dry run reported %d links, want 0: the copy claims the path first", dry.Summary.Linked)
+	}
+	// And the file that landed is the copy, not a symlink back to the source.
+	info, err := os.Lstat(filepath.Join(dst, "app.env"))
+	if err != nil {
+		t.Fatalf("lstat app.env: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Error("app.env is a symlink; the copy stage should have claimed it")
 	}
 }
 
