@@ -210,6 +210,35 @@ func TestNegatedCopyPatternWinsOverABlanketYes(t *testing.T) {
 			t.Errorf("a.txt missing from plan: %v", files)
 		}
 	})
+
+	// The layers accumulate, so a "!" from the user's own config would be
+	// last-match-wins against a committed .worktreeinclude that names the same
+	// path — which would let a repository opt a secret back in. A "!" in copy
+	// is a deny, whichever layer it came from and whatever follows it.
+	t.Run("against a later layer's positive pattern", func(t *testing.T) {
+		isolateFileConfig(t)
+
+		tmp := t.TempDir()
+		globalCfg := filepath.Join(tmp, "config.toml")
+		writeFile(t, globalCfg, "[files]\ncopy = [\"cache/\", \"!cache/private.key\"]\n")
+
+		src := newFilesRepo(t, "cache/\n")
+		writeFile(t, filepath.Join(src, "cache", "a.txt"), "a")
+		writeFile(t, filepath.Join(src, "cache", "private.key"), "SECRET")
+		writeFile(t, filepath.Join(src, worktreeIncludeFile), "cache/private.key\n")
+
+		t.Setenv("WT_CONFIG", globalCfg)
+		gitRepoRootFn = func() (string, error) { return src, nil }
+		loadWorktreeConfig()
+
+		files := planPaths(t, src)
+		if contains(files, "cache/private.key") {
+			t.Errorf("a later layer re-selected a denied path: %v", files)
+		}
+		if !contains(files, "cache/a.txt") {
+			t.Errorf("cache/a.txt missing from plan: %v", files)
+		}
+	})
 }
 
 // "applied last and not overridable" has to cover link too, or an exclude that
@@ -722,6 +751,37 @@ func TestSelectedEmptyDirectoryIsCreated(t *testing.T) {
 	}
 	if !info.IsDir() {
 		t.Errorf("cache is %s, want a directory", info.Mode().Type())
+	}
+}
+
+// A directory that cannot be created is reported, not discarded: a run whose
+// whole content is one directory would otherwise say "nothing to copy" while
+// having produced nothing.
+func TestUncreatableDirectoryIsReported(t *testing.T) {
+	src := newFilesRepo(t, "cache/\n")
+	if err := os.MkdirAll(filepath.Join(src, "cache"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	dst := newDestination(t)
+	// A plain file already occupies the name the directory needs.
+	writeFile(t, filepath.Join(dst, "cache"), "in the way")
+
+	setFileConfig(t, []string{"cache/"}, nil, nil, false)
+
+	result, err := runFileCopy(src, dst, copyOptions{})
+	if err != nil {
+		t.Fatalf("runFileCopy: %v", err)
+	}
+	if result.Summary.Failed != 1 {
+		t.Fatalf("failed = %d, want 1 (%+v)", result.Summary.Failed, result.Files)
+	}
+	if result.Files[0].Path != "cache" || result.Files[0].Action != fileActionFailed {
+		t.Errorf("result = %+v, want cache reported as failed", result.Files[0])
+	}
+	// And the file that was in the way is still there, unread and unchanged.
+	if got := readFile(t, filepath.Join(dst, "cache")); got != "in the way" {
+		t.Errorf("cache = %q, want it left alone", got)
 	}
 }
 

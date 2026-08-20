@@ -66,8 +66,9 @@ type fileConfig struct {
 	IncludeFilePath  string
 	IncludeFileFound bool
 
-	copyMatcher    *ignore.Matcher
-	excludeMatcher *ignore.Matcher
+	copyMatcher     *ignore.Matcher
+	copyDenyMatcher *ignore.Matcher
+	excludeMatcher  *ignore.Matcher
 }
 
 // configured reports whether anything is set up that could produce work.
@@ -171,14 +172,38 @@ func resolveFileConfig(mainWorktree string) (fileConfig, error) {
 		return cfg, err
 	}
 
+	// A "!" in copy is a deny, not a rule a later layer can argue with, so the
+	// negations are compiled into a matcher of their own and applied last.
+	// Leaving them in the copy matcher would make them last-match-wins: a
+	// committed .worktreeinclude naming cache/private.key would undo the user's
+	// own "!cache/private.key", which is precisely the hole that rejecting "!"
+	// in exclude closes.
+	positive, denied := splitCopyNegations(cfg.Copy)
+
 	var err error
-	if cfg.copyMatcher, err = ignore.New(patternStrings(cfg.Copy)); err != nil {
+	if cfg.copyMatcher, err = ignore.New(positive); err != nil {
+		return cfg, fmt.Errorf("invalid [files] copy pattern: %w", err)
+	}
+	if cfg.copyDenyMatcher, err = ignore.New(denied); err != nil {
 		return cfg, fmt.Errorf("invalid [files] copy pattern: %w", err)
 	}
 	if cfg.excludeMatcher, err = ignore.New(patternStrings(cfg.Exclude)); err != nil {
 		return cfg, fmt.Errorf("invalid [files] exclude pattern: %w", err)
 	}
 	return cfg, nil
+}
+
+// splitCopyNegations separates the copy list into the patterns that select and
+// the "!" patterns that deny, with the "!" stripped from the latter.
+func splitCopyNegations(patterns []layeredPattern) (positive, denied []string) {
+	for _, p := range patterns {
+		if rest, found := strings.CutPrefix(p.Pattern, "!"); found {
+			denied = append(denied, rest)
+			continue
+		}
+		positive = append(positive, p.Pattern)
+	}
+	return positive, denied
 }
 
 func patternStrings(patterns []layeredPattern) []string {
@@ -527,12 +552,16 @@ func (p *planner) skip(rel, name string) bool {
 	return !withinRoot(p.src, abs)
 }
 
-// excluded reports whether the exclude list keeps rel out.
+// excluded reports whether rel is kept out, by the exclude list or by a "!" in
+// copy. Both are final: no later layer and no blanket yes can undo either.
 //
 // Any decision at all counts, not just Selected: a "!" in exclude is rejected
 // when the config is loaded, so a Rejected here would mean that check was
 // bypassed — and an exclude that can be argued out of is not an exclude.
 func (p *planner) excluded(rel string, isDir bool) bool {
+	if p.cfg.copyDenyMatcher.Decide(rel, isDir) != ignore.Unmatched {
+		return true
+	}
 	return p.cfg.excludeMatcher.Decide(rel, isDir) != ignore.Unmatched
 }
 
@@ -605,18 +634,10 @@ func copyPlannedFiles(src, dst string, plan copyPlan, opts copyOptions) []fileRe
 	// Before the empty-plan shortcut: a matched directory is created even when
 	// it holds no files at all, which is the entire content of a plan that
 	// selects an empty cache/ or an empty node_modules/.
-	if !opts.DryRun {
-		for _, rel := range plan.dirs {
-			dir := filepath.Join(dst, filepath.FromSlash(rel))
-			if !withinRoot(dst, dir) || !dirIsSafeToCreate(dst, rel) {
-				continue
-			}
-			_ = fileops.MkdirAllFrom(dir, filepath.Join(src, filepath.FromSlash(rel)))
-		}
-	}
+	dirFailures := createPlannedDirs(src, dst, plan.dirs, opts.DryRun)
 
 	if len(plan.files) == 0 {
-		return nil
+		return dirFailures
 	}
 
 	files, collisions := dropCaseCollisions(dst, plan.files)
@@ -626,7 +647,8 @@ func copyPlannedFiles(src, dst string, plan copyPlan, opts copyOptions) []fileRe
 		for i, rel := range files {
 			results[i] = dryRunResult(src, dst, rel, opts.Force)
 		}
-		return append(results, collisions...)
+		results = append(results, collisions...)
+		return append(results, dirFailures...)
 	}
 
 	progress := newProgressReporter(len(files), plan.bytes)
@@ -656,7 +678,38 @@ func copyPlannedFiles(src, dst string, plan copyPlan, opts copyOptions) []fileRe
 	wg.Wait()
 	progress.finish()
 
-	return append(results, collisions...)
+	results = append(results, collisions...)
+	return append(results, dirFailures...)
+}
+
+// createPlannedDirs materialises the directories a plan selected in their own
+// right and reports every one it refuses or cannot create. Discarding those
+// errors would let `wt copy` say "nothing to copy" for a run whose entire
+// content was a directory that never appeared.
+//
+// A dry run makes the two refusals that can be checked without writing, and
+// says nothing about the rest: an mkdir that will fail on permissions cannot be
+// predicted without attempting it.
+func createPlannedDirs(src, dst string, dirs []string, dryRun bool) []fileResult {
+	var failures []fileResult
+	for _, rel := range dirs {
+		dir := filepath.Join(dst, filepath.FromSlash(rel))
+		switch {
+		case !withinRoot(dst, dir):
+			failures = append(failures, fileResult{Path: rel, Action: fileActionFailed, Reason: "path escapes the worktree"})
+		case !noSymlinkComponents(dst, rel):
+			failures = append(failures, fileResult{Path: rel, Action: fileActionFailed, Reason: "destination parent is a symlink"})
+		case !dirIsSafeToCreate(dst, rel):
+			failures = append(failures, fileResult{Path: rel, Action: fileActionFailed, Reason: "destination exists and is not a directory"})
+		case dryRun:
+			// Nothing to create.
+		default:
+			if err := fileops.MkdirAllFrom(dir, filepath.Join(src, filepath.FromSlash(rel))); err != nil {
+				failures = append(failures, fileResult{Path: rel, Action: fileActionFailed, Reason: err.Error()})
+			}
+		}
+	}
+	return failures
 }
 
 // copyOne materialises a single relative path.

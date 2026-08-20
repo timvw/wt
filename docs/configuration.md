@@ -519,6 +519,14 @@ $ wt copy feature-branch --force        # overwrite what is already there
 $ wt copy feature-branch --from other   # seed from a sibling worktree
 ```
 
+`--dry-run` leaves both worktrees exactly as it found them, with one deliberate
+exception: to report `(reflink)` rather than guess, it clones a probe file
+inside the *destination* worktree and removes it again. Whether a filesystem
+supports reflink cannot be established any other way — the type is not enough,
+since XFS only supports it when the filesystem was created with `reflink=1`. The
+probe never touches the source worktree, which may well be read-only, and its
+result is cached for the run.
+
 ### Turning it off
 
 - `--no-copy` on `wt create`, `wt checkout`, `wt pr` and `wt mr` skips it once.
