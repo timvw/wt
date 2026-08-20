@@ -76,10 +76,14 @@ type Result struct {
 }
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	// Parse flags
 	shellsFlag := flag.String("shells", "", "Comma-separated list of shells to test (bash,zsh,powershell,pwsh)")
 	scenariosDir := flag.String("scenarios", "e2e/scenarios", "Directory containing scenario YAML files")
-	wtBinary := flag.String("wt", "", "Path to wt binary (default: auto-detect)")
+	wtBinary := flag.String("wt", "", "Path to wt binary (default: build from the working tree)")
 	verbose := flag.Bool("verbose", false, "Verbose output")
 	showOutput := flag.Bool("show-output", false, "Print scenario output for each run")
 	keepTmp := flag.Bool("keep-tmp", false, "Keep temporary directories created during tests")
@@ -89,31 +93,26 @@ func main() {
 	shells := determineShells(*shellsFlag)
 	if len(shells) == 0 {
 		fmt.Println("No shells available to test")
-		os.Exit(1)
+		return 1
 	}
 
-	// Find wt binary (must be absolute path)
-	binary := findWtBinary(*wtBinary)
-	if binary == "" {
-		fmt.Println("ERROR: Could not find wt binary")
-		os.Exit(1)
+	binary, cleanupBinary, err := resolveWtBinary(*wtBinary)
+	if err != nil {
+		fmt.Printf("ERROR: %v\n", err)
+		return 1
 	}
-	// Ensure absolute path
-	if !filepath.IsAbs(binary) {
-		abs, err := filepath.Abs(binary)
-		if err != nil {
-			fmt.Printf("ERROR: Could not get absolute path for binary: %v\n", err)
-			os.Exit(1)
-		}
-		binary = abs
+	defer cleanupBinary()
+	if *wtBinary == "" {
+		fmt.Printf("Built wt binary from the working tree: %s\n", binary)
+	} else {
+		fmt.Printf("Using wt binary: %s\n", binary)
 	}
-	fmt.Printf("Using wt binary: %s\n", binary)
 
 	// Load scenarios
 	scenarios, err := loadScenarios(*scenariosDir)
 	if err != nil {
 		fmt.Printf("ERROR: Failed to load scenarios: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 	fmt.Printf("Loaded %d scenario files\n", len(scenarios))
 
@@ -170,8 +169,9 @@ func main() {
 	fmt.Printf("Skipped: %d\n", skipped)
 
 	if failed > 0 {
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func printScenarioOutput(output string) {
@@ -267,42 +267,89 @@ func posixShellCommand(shell string) string {
 	return shell
 }
 
-func findWtBinary(specified string) string {
+// resolveWtBinary returns an absolute path to the wt binary under test, plus a
+// cleanup function to call when the run is over.
+//
+// With -wt, the given path is used verbatim: CI passes the cross-compiled
+// artifact it wants to exercise. Without it, the binary is built from the
+// working tree.
+//
+// It deliberately does not look for a pre-existing ./bin/wt, nor fall back to a
+// wt on PATH. Both let a run silently exercise a binary unrelated to the source
+// being tested — a stale bin/wt survives a rebase because bin/ is gitignored,
+// and the PATH fallback picks up a system-wide install. Either way the suite
+// reports on the wrong binary, in both directions: failures that are not real,
+// and passes that hide a regression. See issue #141.
+func resolveWtBinary(specified string) (string, func(), error) {
+	noCleanup := func() {}
+
 	if specified != "" {
-		if _, err := os.Stat(specified); err == nil {
-			return specified
+		abs, err := filepath.Abs(specified)
+		if err != nil {
+			return "", noCleanup, fmt.Errorf("resolve -wt path %q: %w", specified, err)
 		}
-		return ""
+		info, err := os.Stat(abs)
+		if err != nil {
+			return "", noCleanup, fmt.Errorf("-wt binary %q: %w", specified, err)
+		}
+		// Caught here rather than as an opaque exec failure inside every
+		// scenario, several hundred lines of output later.
+		if info.IsDir() {
+			return "", noCleanup, fmt.Errorf("-wt binary %q is a directory", specified)
+		}
+		return abs, noCleanup, nil
 	}
 
-	// Try common locations
-	candidates := []string{
-		"./bin/wt",
-		"./wt",
-		"bin/wt",
+	dir, err := os.MkdirTemp("", "wt-e2e-build")
+	if err != nil {
+		return "", noCleanup, fmt.Errorf("create build directory: %w", err)
 	}
+	cleanup := func() {
+		if err := os.RemoveAll(dir); err != nil {
+			fmt.Printf("WARNING: could not remove build directory %s: %v\n", dir, err)
+		}
+	}
+
+	name := "wt"
 	if runtime.GOOS == "windows" {
-		candidates = []string{
-			"./bin/wt.exe",
-			"./wt.exe",
-			"bin/wt.exe",
-		}
+		name = "wt.exe"
+	}
+	binary := filepath.Join(dir, name)
+
+	root, err := moduleRoot()
+	if err != nil {
+		cleanup()
+		return "", noCleanup, err
 	}
 
-	for _, c := range candidates {
-		if abs, err := filepath.Abs(c); err == nil {
-			if _, err := os.Stat(abs); err == nil {
-				return abs
-			}
-		}
+	// Built from the module root rather than the working directory, so the
+	// runner still builds the right package when invoked from a subdirectory.
+	cmd := exec.Command("go", "build", "-o", binary, ".")
+	cmd.Dir = root
+	if output, err := cmd.CombinedOutput(); err != nil {
+		cleanup()
+		return "", noCleanup, fmt.Errorf("build wt from the working tree: %w\n%s", err, output)
 	}
 
-	// Try PATH
-	if path, err := exec.LookPath("wt"); err == nil {
-		return path
-	}
+	return binary, cleanup, nil
+}
 
-	return ""
+// moduleRoot returns the directory holding go.mod for the current module.
+//
+// This resolves relative to the working directory, so the runner has to be
+// invoked from somewhere inside the repository — as it already does for the
+// default -scenarios path. Outside a module the error says so, rather than
+// leaving a confusing build failure.
+func moduleRoot() (string, error) {
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}").Output()
+	if err != nil {
+		return "", fmt.Errorf("locate the wt module: %w (run from inside the repository, or pass -wt)", err)
+	}
+	root := strings.TrimSpace(string(out))
+	if root == "" {
+		return "", fmt.Errorf("locate the wt module: go list returned no directory (run from inside the repository, or pass -wt)")
+	}
+	return root, nil
 }
 
 func loadScenarios(dir string) ([]ScenarioFile, error) {
