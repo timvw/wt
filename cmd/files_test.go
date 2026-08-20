@@ -795,6 +795,62 @@ func TestForceDoesNotOverwriteAPathTrackedInTheDestination(t *testing.T) {
 	}
 }
 
+// Absent is not untracked. A file the destination branch tracks but that is
+// missing from that worktree — deleted, or omitted by a sparse checkout — is
+// still a path git owns, and no --force is needed to reach it: without a check
+// before the write, the plain copy simply succeeds and the branch is left
+// dirty with somebody else's file.
+func TestATrackedButAbsentDestinationPathIsLeftAlone(t *testing.T) {
+	src := newFilesRepo(t, "*.env\n")
+	writeFile(t, filepath.Join(src, "app.env"), "UNTRACKED=1")
+	writeFile(t, filepath.Join(src, "linked.env"), "UNTRACKED=2")
+
+	dst := filepath.Join(t.TempDir(), "worktree")
+	setupTestRepo(t, dst)
+	writeFile(t, filepath.Join(dst, "app.env"), "COMMITTED=1")
+	writeFile(t, filepath.Join(dst, "linked.env"), "COMMITTED=2")
+	runGitCommand(t, dst, "add", "app.env", "linked.env")
+	runGitCommand(t, dst, "commit", "-m", "track both")
+	// Tracked, then removed from the working tree only.
+	if err := os.Remove(filepath.Join(dst, "app.env")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dst, "linked.env")); err != nil {
+		t.Fatal(err)
+	}
+
+	setFileConfig(t, []string{"app.env"}, []string{"linked.env"}, nil, false)
+
+	for _, tc := range []struct {
+		name string
+		opts copyOptions
+	}{
+		{"plain", copyOptions{}},
+		{"forced", copyOptions{Force: true}},
+		{"dry run", copyOptions{DryRun: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := runFileCopy(src, dst, tc.opts)
+			if err != nil {
+				t.Fatalf("runFileCopy: %v", err)
+			}
+			if result.Summary.Skipped != 2 || result.Summary.Copied != 0 || result.Summary.Linked != 0 {
+				t.Errorf("summary = %+v, want both paths skipped (%+v)", result.Summary, result.Files)
+			}
+			for _, f := range result.Files {
+				if !strings.Contains(f.Reason, "tracked by git in the destination") {
+					t.Errorf("%s: reason = %q", f.Path, f.Reason)
+				}
+			}
+			for _, name := range []string{"app.env", "linked.env"} {
+				if _, err := os.Lstat(filepath.Join(dst, name)); !os.IsNotExist(err) {
+					t.Errorf("%s was materialised over a tracked path (%v)", name, err)
+				}
+			}
+		})
+	}
+}
+
 // A directory that cannot be created is reported, not discarded: a run whose
 // whole content is one directory would otherwise say "nothing to copy" while
 // having produced nothing.
