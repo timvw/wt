@@ -117,7 +117,14 @@ func bufferedCopy(src, dst string, perm os.FileMode) error {
 // MkdirAllFrom creates dir and any missing parents, giving dir the mode of the
 // directory it is being copied from. Parents that have to be invented get
 // 0755, since there is nothing to copy their mode from.
+//
+// A directory that is already there keeps its own mode: whoever created it
+// chose those permissions, and quietly widening a 0700 directory to match the
+// source is not something a copy of its *contents* should do.
 func MkdirAllFrom(dir string, srcDir string) error {
+	if info, err := os.Lstat(dir); err == nil && info.IsDir() {
+		return nil
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}

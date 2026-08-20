@@ -305,6 +305,42 @@ func TestMkdirAllFromCopiesMode(t *testing.T) {
 	}
 }
 
+// Copying the contents of a directory is not licence to re-permission the
+// destination: a worktree's 0700 cache/ must not be widened to the source's
+// 0755 just because a copy passed through it.
+func TestMkdirAllFromLeavesAnExistingDirectoryAlone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory modes are not meaningful on Windows")
+	}
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "src")
+	if err := os.Mkdir(srcDir, 0o755); err != nil {
+		t.Fatalf("failed to create source directory: %v", err)
+	}
+	if err := os.Chmod(srcDir, 0o755); err != nil {
+		t.Fatalf("failed to chmod source directory: %v", err)
+	}
+
+	dstDir := filepath.Join(dir, "dst")
+	if err := os.Mkdir(dstDir, 0o700); err != nil {
+		t.Fatalf("failed to create destination directory: %v", err)
+	}
+	if err := os.Chmod(dstDir, 0o700); err != nil {
+		t.Fatalf("failed to chmod destination directory: %v", err)
+	}
+
+	if err := MkdirAllFrom(dstDir, srcDir); err != nil {
+		t.Fatalf("MkdirAllFrom returned error: %v", err)
+	}
+	info, err := os.Stat(dstDir)
+	if err != nil {
+		t.Fatalf("failed to stat destination directory: %v", err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Errorf("existing directory mode = %v, want it left at %v", info.Mode().Perm(), os.FileMode(0o700))
+	}
+}
+
 func TestEnsureParentCreatesMissingDirectories(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "a", "b", "c.txt")
