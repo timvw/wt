@@ -745,23 +745,25 @@ func runFileCopy(src, dst string, opts copyOptions) (*copyResult, error) {
 // pool. Reflink is a metadata operation and parallelises well; the buffered
 // fallback benefits from the overlap too.
 func copyPlannedFiles(src, dst string, plan copyPlan, opts copyOptions, destTracked trackedIndex) []fileResult {
+	// Collisions are settled before anything is created, or a "Cache/" made
+	// here would quietly become the destination of a later "cache/config".
+	dirs, files, collisions := dropCaseCollisions(dst, plan.dirs, plan.files)
+
 	// Before the empty-plan shortcut: a matched directory is created even when
 	// it holds no files at all, which is the entire content of a plan that
 	// selects an empty cache/ or an empty node_modules/.
-	dirResults := createPlannedDirs(src, dst, plan.dirs, opts.DryRun, destTracked)
+	dirResults := append(createPlannedDirs(src, dst, dirs, opts.DryRun, destTracked), collisions...)
 
-	if len(plan.files) == 0 {
+	if len(files) == 0 {
 		return dirResults
 	}
 
-	files, collisions := dropCaseCollisions(dst, plan.files)
 	results := make([]fileResult, len(files))
 
 	if opts.DryRun {
 		for i, rel := range files {
 			results[i] = dryRunResult(src, dst, rel, opts.Force, destTracked)
 		}
-		results = append(results, collisions...)
 		return append(results, dirResults...)
 	}
 
@@ -792,7 +794,6 @@ func copyPlannedFiles(src, dst string, plan copyPlan, opts copyOptions, destTrac
 	wg.Wait()
 	progress.finish()
 
-	results = append(results, collisions...)
 	return append(results, dirResults...)
 }
 
@@ -1081,28 +1082,56 @@ func sameFileWithFlippedCase(path string) (result, ok bool) {
 // dropCaseCollisions removes paths that would collide on a case-insensitive
 // filesystem, reporting them rather than letting one silently land on top of
 // the other.
-func dropCaseCollisions(dst string, files []string) ([]string, []fileResult) {
+//
+// Directories are part of the same namespace and are created first, so they go
+// through the same pass: a source that is case-sensitive can hold both "Cache/"
+// and "cache/", and on APFS the second one is the first. Their contents collide
+// too — a file under "cache/" would land in the "Cache/" that was already
+// created — so an ancestor decides the leaf.
+func dropCaseCollisions(dst string, dirs, files []string) (keptDirs, keptFiles []string, dropped []fileResult) {
 	if !caseInsensitiveWorktree(dst) {
-		return files, nil
+		return dirs, files, nil
 	}
 
-	seen := make(map[string]string, len(files))
-	kept := make([]string, 0, len(files))
-	var dropped []fileResult
-	for _, rel := range files {
-		lower := strings.ToLower(rel)
-		if first, clash := seen[lower]; clash {
-			dropped = append(dropped, fileResult{
-				Path:   rel,
-				Action: fileActionSkipped,
-				Reason: fmt.Sprintf("case-insensitive collision with %s", first),
-			})
-			continue
+	// seen maps a folded path to the spelling that claimed it, including the
+	// parent directories every kept path implies.
+	seen := make(map[string]string, len(dirs)+len(files))
+	claim := func(rel string) (string, bool) {
+		parts := strings.Split(rel, "/")
+		for i := 1; i <= len(parts); i++ {
+			prefix := strings.Join(parts[:i], "/")
+			if first, taken := seen[strings.ToLower(prefix)]; taken && first != prefix {
+				return first, false
+			}
 		}
-		seen[lower] = rel
-		kept = append(kept, rel)
+		// Only once the whole path is clear, so a rejected one leaves nothing
+		// of its own spelling behind.
+		for i := 1; i <= len(parts); i++ {
+			prefix := strings.Join(parts[:i], "/")
+			seen[strings.ToLower(prefix)] = prefix
+		}
+		return "", true
 	}
-	return kept, dropped
+
+	keep := func(paths []string) []string {
+		kept := make([]string, 0, len(paths))
+		for _, rel := range paths {
+			first, ok := claim(rel)
+			if !ok {
+				dropped = append(dropped, fileResult{
+					Path:   rel,
+					Action: fileActionSkipped,
+					Reason: fmt.Sprintf("case-insensitive collision with %s", first),
+				})
+				continue
+			}
+			kept = append(kept, rel)
+		}
+		return kept
+	}
+
+	// Directories first, because that is the order the run materialises them.
+	return keep(dirs), keep(files), dropped
 }
 
 // claimedPaths reports which destination paths a dry run's copy stage would

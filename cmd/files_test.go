@@ -1075,7 +1075,7 @@ func TestCaseInsensitiveCollisionIsReportedNotOverwritten(t *testing.T) {
 		t.Skip("filesystem is case-sensitive; nothing can collide")
 	}
 
-	kept, dropped := dropCaseCollisions(dst, []string{".env", ".ENV", "other"})
+	_, kept, dropped := dropCaseCollisions(dst, nil, []string{".env", ".ENV", "other"})
 
 	if !equalStrings(kept, []string{".env", "other"}) {
 		t.Errorf("kept = %v, want [.env other]", kept)
@@ -1097,9 +1097,95 @@ func TestDropCaseCollisionsIsANoOpOnCaseSensitiveFS(t *testing.T) {
 		t.Skip("filesystem is case-insensitive")
 	}
 
-	kept, dropped := dropCaseCollisions(dst, []string{".env", ".ENV"})
+	_, kept, dropped := dropCaseCollisions(dst, nil, []string{".env", ".ENV"})
 	if !equalStrings(kept, []string{".env", ".ENV"}) || dropped != nil {
 		t.Errorf("kept = %v, dropped = %v; both paths should survive", kept, dropped)
+	}
+}
+
+// Directories are created before any file is copied, so they have to go through
+// the same collision pass: otherwise a selected "Cache/Config/" is made first
+// and a file "cache/config" lands on a directory — with a dry run that promised
+// a copy, because it created nothing and saw nothing in the way.
+func TestDirectoriesCollideInTheSameNamespaceAsFiles(t *testing.T) {
+	dst := newDestination(t)
+	if !filesystemCaseInsensitive(dst) {
+		t.Skip("filesystem is case-sensitive; nothing can collide")
+	}
+
+	dirs, files, dropped := dropCaseCollisions(dst,
+		[]string{"Cache", "Cache/Config", "cache"},
+		[]string{"Cache/keep.txt", "cache/config", "cache/only-here.txt", "other.txt"})
+
+	if !equalStrings(dirs, []string{"Cache", "Cache/Config"}) {
+		t.Errorf("dirs = %v, want [Cache Cache/Config]", dirs)
+	}
+	if !equalStrings(files, []string{"Cache/keep.txt", "other.txt"}) {
+		t.Errorf("files = %v, want [Cache/keep.txt other.txt]", files)
+	}
+
+	refused := make(map[string]string, len(dropped))
+	for _, r := range dropped {
+		if r.Action != fileActionSkipped {
+			t.Errorf("%s: action = %q, want %q", r.Path, r.Action, fileActionSkipped)
+		}
+		if !strings.Contains(r.Reason, "case-insensitive") {
+			t.Errorf("%s: reason = %q, want it to explain the collision", r.Path, r.Reason)
+		}
+		refused[r.Path] = r.Reason
+	}
+	// cache/only-here.txt has no counterpart of its own; it is refused because
+	// its parent directory already exists as Cache/.
+	for _, want := range []string{"cache", "cache/config", "cache/only-here.txt"} {
+		if _, ok := refused[want]; !ok {
+			t.Errorf("%s survived; it collides with the Cache/ that is created first (dropped = %v)", want, dropped)
+		}
+	}
+}
+
+// The end-to-end shape of the same defect. A plan holding both spellings is
+// what a case-sensitive main worktree hands to a case-insensitive one; here the
+// source cannot hold two, so the plan names one tree twice — which is exactly
+// what the destination sees either way. Both runs must reach the same verdict,
+// and the real one must not quietly merge the trees.
+func TestDryRunAgreesWhenADirectoryAndAFileCollideOnCase(t *testing.T) {
+	src := t.TempDir()
+	dst := newDestination(t)
+	if !filesystemCaseInsensitive(dst) {
+		t.Skip("filesystem is case-sensitive; nothing can collide")
+	}
+
+	if err := os.MkdirAll(filepath.Join(src, "Cache", "Empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(src, "Cache", "config"), "payload")
+
+	plan := copyPlan{
+		dirs:  []string{"Cache", "Cache/Empty", "cache"},
+		files: []string{"Cache/config", "cache/config"},
+	}
+
+	predicted := copyPlannedFiles(src, dst, plan, copyOptions{DryRun: true}, trackedIndex{})
+	actual := copyPlannedFiles(src, dst, plan, copyOptions{}, trackedIndex{})
+
+	action := func(results []fileResult, path string) string {
+		for _, r := range results {
+			if r.Path == path {
+				return r.Action
+			}
+		}
+		return "<absent>"
+	}
+	for _, collide := range []string{"cache", "cache/config"} {
+		if got, want := action(predicted, collide), fileActionSkipped; got != want {
+			t.Errorf("dry run says %q for %s, want %q", got, collide, want)
+		}
+		if got, want := action(actual, collide), fileActionSkipped; got != want {
+			t.Errorf("real run says %q for %s, want %q", got, collide, want)
+		}
+	}
+	if got, want := action(actual, "Cache/config"), fileActionCopied; got != want {
+		t.Errorf("real run says %q for Cache/config, want %q", got, want)
 	}
 }
 

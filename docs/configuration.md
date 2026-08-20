@@ -514,6 +514,13 @@ below a tracked path: if the destination branch keeps `cache` as a file, no
 `cache/…` is written over it. Those paths are reported as skipped with the
 reason `tracked by git in the destination`.
 
+On a **case-insensitive destination** — the default macOS and Windows setup —
+two source paths that differ only in case are one path there. A source checked
+out on a case-sensitive filesystem can hold both `Cache/` and `cache/`; only the
+first is materialised, and the second, along with anything under it, is reported
+as skipped with the reason `case-insensitive collision with <path>` rather than
+merged into the tree that got there first.
+
 ### `wt copy`
 
 The same materialisation on demand — after adding a pattern, or after the source
