@@ -75,8 +75,15 @@ env = { WT_CATEGORY = "work" }
 ```
 
 Every `wt` command operating on a repo under that path then resolves `work`,
-including `wt create` from a worktree in a different tree. See
-[Setting the category per directory](docs/configuration.md#setting-the-category-per-directory).
+including `wt create` from a worktree in a different tree. The same rule can go
+in `~/.gitconfig` instead, if you would rather not keep a config file:
+
+```bash
+git config --global wt.context.work.whenpath "~/dev/repos/work"
+git config --global --add wt.context.work.env "WT_CATEGORY=work"
+```
+
+See [Setting the category per directory](docs/configuration.md#setting-the-category-per-directory).
 
 ### Checkout & Create
 

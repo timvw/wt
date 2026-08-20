@@ -345,7 +345,7 @@ func TestLoadWorktreeConfig(t *testing.T) {
 
 	// Isolate from the developer's real git config: a contributor with wt.*
 	// keys in ~/.gitconfig would otherwise fail these tests.
-	gitConfigFn = func(gitConfigScope) map[string]string { return nil }
+	gitConfigFn = func(gitConfigScope) []gitConfigEntry { return nil }
 
 	t.Run("loads defaults when no config file", func(t *testing.T) {
 		os.Setenv("WORKTREE_ROOT", "")
@@ -630,7 +630,7 @@ func TestLoadWorktreeConfigRepoConfig(t *testing.T) {
 		os.Setenv("WT_CONFIG", "/nonexistent/config.toml")
 		configFlag = ""
 		// Isolate from the developer's real git config.
-		gitConfigFn = func(gitConfigScope) map[string]string { return nil }
+		gitConfigFn = func(gitConfigScope) []gitConfigEntry { return nil }
 	}
 
 	t.Run("repo config overrides global config", func(t *testing.T) {
@@ -878,17 +878,27 @@ func TestLoadWorktreeConfigGitConfig(t *testing.T) {
 		os.Setenv("WT_CONFIG", "/nonexistent/config.toml")
 		configFlag = ""
 		gitRepoRootFn = func() (string, error) { return t.TempDir(), nil }
-		gitConfigFn = func(gitConfigScope) map[string]string { return nil }
+		gitConfigFn = func(gitConfigScope) []gitConfigEntry { return nil }
 	}
 
-	// stubGitConfig serves per-scope values to the loader.
+	// stubGitConfig serves per-scope values to the loader. The map form is fine
+	// for the scalar settings these subtests cover: each key appears once, so
+	// the order entries are produced in cannot change the outcome. Ordered
+	// entries are exercised directly in context_test.go.
 	stubGitConfig := func(global, local map[string]string) {
-		gitConfigFn = func(scope gitConfigScope) map[string]string {
+		entries := func(values map[string]string) []gitConfigEntry {
+			var out []gitConfigEntry
+			for key, value := range values {
+				out = append(out, gitConfigEntry{Key: key, Value: value})
+			}
+			return out
+		}
+		gitConfigFn = func(scope gitConfigScope) []gitConfigEntry {
 			switch scope {
 			case gitScopeGlobal:
-				return global
+				return entries(global)
 			case gitScopeLocal:
-				return local
+				return entries(local)
 			}
 			return nil
 		}
@@ -1124,7 +1134,7 @@ func TestDefaultGitConfigParsing(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chdir(origDir) })
 
-	values := defaultGitConfig(gitScopeLocal)
+	values := gitConfigValues(defaultGitConfig(gitScopeLocal))
 
 	// Last value wins for a multi-valued key.
 	if values["wt.strategy"] != "sibling-repo" {
@@ -1187,7 +1197,7 @@ func TestDefaultGitConfigMultilineAndValuelessKeys(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chdir(origDir) })
 
-	values := defaultGitConfig(gitScopeLocal)
+	values := gitConfigValues(defaultGitConfig(gitScopeLocal))
 
 	if values["wt.pattern"] != "line-one\nline-two" {
 		t.Errorf("wt.pattern = %q, want the embedded newline preserved", values["wt.pattern"])
