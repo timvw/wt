@@ -31,6 +31,7 @@ wt is a fast Git worktree helper written in Go. It wraps `git worktree` with a c
 | `wt mr` | Interactive: fuzzy-search from open MRs |
 | `wt status` | Color-coded overview of all worktrees |
 | `wt status --ci` | Include CI/CD pipeline status per branch |
+| `wt copy [branch]` | Materialise the `[files]` set into a worktree (`--dry-run`, `--force`, `--from`) |
 | `wt info` | Show active strategy, pattern, variables |
 | `wt config show` | Show effective config with sources |
 | `wt cleanup --stale` | Detect stale worktrees (deleted remotes, inactive commits) |
@@ -49,27 +50,62 @@ wt supports multiple strategies for organizing worktrees. Configure via `~/.conf
 | `sibling-repo` | `../<repo>-worktrees/<branch>` — worktrees next to repo |
 | `parent-branches` | `../<branch>` — branches as siblings of main checkout |
 
-The `pattern` setting controls the path template. Variables: `{root}`, `{repo}`, `{branch}`, `{host}`, `{owner}`.
+The `pattern` setting controls the path template. Variables: `{.worktreeRoot}`, `{.repo.Name}`, `{.repo.Main}`, `{.repo.Owner}`, `{.repo.Host}`, `{.branch}`, `{.env.VARNAME}`.
+
+The dotted form is required: `wt` renders patterns with `missingkey=error`, so a bare `{root}` or `{repo}` is a hard failure rather than an empty segment. Run `wt info` to see the full variable list and the active pattern.
 
 ## Configuration
 
 - Config file: `~/.config/wt/config.toml` (or `WT_CONFIG` / `--config`)
 - Per-repo override: `.wt.toml` in the repo root
-- Git config: `git config --local wt.strategy sibling-repo` (also `wt.root`, `wt.pattern`, `wt.separator`; scalars only, no hooks)
+- Git config: `git config --local wt.strategy sibling-repo` (also `wt.root`, `wt.pattern`, `wt.separator`, `wt.copyIgnored` — git config names allow no underscore; scalars only, no hooks, no `[files]` lists)
 - Key settings: `root`, `strategy`, `pattern`, `separator`
-- Env overrides: `WORKTREE_ROOT`, `WORKTREE_STRATEGY`, `WORKTREE_PATTERN`, `WORKTREE_SEPARATOR`
+- Env overrides: `WORKTREE_ROOT`, `WORKTREE_STRATEGY`, `WORKTREE_PATTERN`, `WORKTREE_SEPARATOR`, `WT_COPY_IGNORED`
 - Environment variable defaults: `{.env.VARNAME:-fallback}` uses `fallback` when `VARNAME` is unset; `{.env.VARNAME}` without `:-` still errors on missing (catches typos)
 - Precedence (highest first): env > local git config > `.wt.toml` > config file > global git config > defaults
+
+## Untracked files (`[files]`)
+
+A new worktree contains everything git tracks and nothing else, so `.env`, `.envrc` and `.claude/settings.local.json` are missing until they are put there. `[files]` declares that once and wt materialises it on `create`, `checkout`, `pr` and `mr` — after `git worktree add`, before the `post_*` hooks.
+
+```toml
+[files]
+copy = [".env", ".envrc", ".claude/settings.local.json"]  # gitignore syntax
+link = ["node_modules", ".venv"]                          # symlink instead of copy
+exclude = ["*.pem", "*.key"]                              # applied last, always wins
+copy_ignored = false                                      # copy every ignored file
+```
+
+A `.worktreeinclude` file at the **main worktree root** holds the same patterns one per line and is unioned into `copy`. It is meant to be committed, so the repo can declare what every contributor's worktrees need.
+
+Key semantics:
+
+- **Nothing is copied by default.** Without configuration, `wt create` behaves as before.
+- The three list keys **accumulate** across layers (config file → `.wt.toml` → `.worktreeinclude`) rather than replacing each other. `exclude` is applied last and cannot be overridden, including over `link`. Only `copy_ignored` follows the normal precedence chain.
+- A directory pattern covers its whole tree, and a `!` in `copy` wins over a matched parent directory or `copy_ignored` — `copy = ["cache/", "!cache/private.key"]` copies everything under `cache/` except that key. `!` is rejected in `exclude` and `link`, since a committed `.wt.toml` could otherwise undo a global exclude.
+- Candidates come from `git ls-files --others --ignored --exclude-standard`, so **tracked files are never copied**. `link` checks the index directly and skips tracked paths too.
+- Copies use a reflink on APFS/Btrfs/XFS; symlinks are recreated as symlinks, never dereferenced. A destination whose parent is a symlink is refused, not written through.
+- Existing destination files are **skipped, not overwritten**, unless `--force`.
+- `[files]` needs no `wt trust` approval: it is declarative data, unlike `[hooks]`.
+- Suppress with `--no-copy` on create/checkout/pr/mr, or `WT_FILES_DISABLED=1`.
+
+```bash
+wt copy feature-branch --dry-run   # show what would happen, change nothing
+wt copy feature-branch --force     # overwrite what is already there
+wt copy feature-branch --from other-branch  # seed from a sibling worktree
+```
 
 ## Hooks
 
 wt supports pre/post hooks for `create`, `checkout`, `remove`, `pr`, `mr`, and `clone` commands.
 
+Prefer `[files]` for copying files — hooks are for running commands.
+
 Configure in `config.toml` or `.wt.toml`:
 
 ```toml
 [hooks]
-post_create = ["cp .env $WT_PATH/.env"]
+post_create = ["cd $WT_PATH && npm install"]
 post_checkout = ["echo 'Switched to $WT_BRANCH'"]
 ```
 
@@ -90,18 +126,6 @@ The approval is pinned to (repository, contents of `.wt.toml`), so editing the f
 Set `hooks_policy` in `config.toml` (or `WT_HOOKS_POLICY`) to `prompt-untrusted` (default), `prompt-all` (confirm every hook, including the user's own), `trusted-only` (never prompt, skip anything unapproved), or `off`. It is never read from `.wt.toml`.
 
 ### Common Hook Recipes
-
-**Copy `.env` files from main worktree:**
-
-```toml
-[hooks]
-post_create = [
-  "test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"
-]
-post_checkout = [
-  "test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"
-]
-```
 
 **Auto-install dependencies (Node.js):**
 
@@ -131,13 +155,11 @@ pre_remove = [
 ]
 ```
 
-**Shared build cache (symlink `node_modules` across worktrees):**
+**Shared build cache across worktrees** — use `[files] link` rather than a hook:
 
 ```toml
-[hooks]
-post_create = [
-  "mkdir -p $HOME/.cache/wt/$WT_REPO_NAME/node_modules && ln -sf $HOME/.cache/wt/$WT_REPO_NAME/node_modules $WT_PATH/node_modules && cd $WT_PATH && npm install"
-]
+[files]
+link = ["node_modules"]
 ```
 
 **Deterministic dev server port per branch:**

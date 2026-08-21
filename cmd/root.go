@@ -85,6 +85,7 @@ func init() {
 	rootCmd.AddCommand(checkoutCmd)
 	rootCmd.AddCommand(cdCmd)
 	rootCmd.AddCommand(cloneCmd)
+	rootCmd.AddCommand(copyCmd)
 	rootCmd.AddCommand(createCmd)
 	rootCmd.AddCommand(prCmd)
 	rootCmd.AddCommand(mrCmd)
@@ -114,6 +115,12 @@ func init() {
 	initCmd.Flags().BoolVar(&initUninstall, "uninstall", false, "Remove wt configuration from shell")
 	initCmd.Flags().BoolVar(&initNoPrompt, "no-prompt", false, "Skip activation instructions (for automated installs)")
 	configInitCmd.Flags().BoolVar(&configInitForce, "force", false, "Overwrite existing config file")
+	copyCmd.Flags().BoolVarP(&copyDryRun, "dry-run", "n", false, "Show what would be copied without copying")
+	copyCmd.Flags().BoolVarP(&copyForce, "force", "f", false, "Overwrite existing destination files")
+	copyCmd.Flags().StringVar(&copyFrom, "from", "", "Source worktree branch or path (default: main worktree)")
+	for _, c := range []*cobra.Command{createCmd, checkoutCmd, prCmd, mrCmd} {
+		c.Flags().BoolVar(&noCopyFiles, "no-copy", false, "Skip the automatic [files] copy for this invocation")
+	}
 }
 
 func init() {

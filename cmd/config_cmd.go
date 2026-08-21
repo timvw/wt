@@ -58,6 +58,7 @@ var configShowCmd = &cobra.Command{
 					"separator":    map[string]string{"value": worktreeSeparator, "source": configSources.Separator},
 					"repo_pattern": map[string]string{"value": repoPattern, "source": configSources.RepoPattern},
 					"hooks_policy": map[string]string{"value": hooksPolicyValue, "source": hooksPolicySource},
+					"copy_ignored": map[string]string{"value": fmt.Sprintf("%t", filesCopyIgnored), "source": configSources.CopyIgnored},
 				},
 			}
 			if configRepoFound {
@@ -82,6 +83,7 @@ var configShowCmd = &cobra.Command{
 			{"separator", fmt.Sprintf("%q", worktreeSeparator), configSources.Separator},
 			{"repo_pattern", repoPattern, configSources.RepoPattern},
 			{"hooks_policy", hooksPolicyValue, hooksPolicySource},
+			{"copy_ignored", fmt.Sprintf("%t", filesCopyIgnored), configSources.CopyIgnored},
 		}
 		// Size the value column to the widest value (min 40) so long patterns
 		// don't push their source marker out of the column.

@@ -1,0 +1,96 @@
+# E2E tests for the .worktreeinclude file
+name: files-worktreeinclude
+description: Test that .worktreeinclude at the main worktree root drives the copy set
+
+scenarios:
+  - name: worktreeinclude_drives_the_copy
+    description: Patterns in .worktreeinclude are unioned into the copy set with no config file
+    skip_shells: [powershell, pwsh] # steps use POSIX shell syntax
+    skip_shellenv: true
+    steps:
+      - run: printf '.env\n.envrc\n' > .gitignore && printf 'TOKEN=1\n' > .env && printf 'export TOKEN\n' > .envrc
+        expect:
+          exit_code: 0
+      - run: printf '# untracked files every worktree needs\n.env\n' > .worktreeinclude
+        expect:
+          exit_code: 0
+      - run: $WT_BIN create wti-basic
+        expect:
+          exit_code: 0
+          output_contains: "Copied 1 file"
+      - run: cat "$WORKTREE_ROOT_POSIX/test-repo/wti-basic/.env"
+        expect:
+          output_contains: "TOKEN=1"
+      # .envrc is ignored but not listed, so it stays behind.
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/wti-basic/.envrc" && echo "ENVRC_COPIED" || echo "ENVRC_SKIPPED"
+        expect:
+          output_contains: "ENVRC_SKIPPED"
+
+  - name: worktreeinclude_accumulates_with_repo_config
+    description: .worktreeinclude adds to .wt.toml rather than replacing it
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: printf '.env\nlocal.yml\n' > .gitignore && printf 'TOKEN=1\n' > .env && printf 'local\n' > local.yml
+        expect:
+          exit_code: 0
+      - run: printf '[files]\ncopy = [".env"]\n' > .wt.toml && printf 'local.yml\n' > .worktreeinclude
+        expect:
+          exit_code: 0
+      - run: $WT_BIN create wti-accumulate
+        expect:
+          exit_code: 0
+          output_contains: "Copied 2 files"
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/wti-accumulate/.env" && test -f "$WORKTREE_ROOT_POSIX/test-repo/wti-accumulate/local.yml" && echo "BOTH_COPIED"
+        expect:
+          output_contains: "BOTH_COPIED"
+
+  - name: worktreeinclude_negation
+    description: A negated pattern in .worktreeinclude removes an earlier match
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: printf 'secrets/\n' > .gitignore && mkdir -p secrets && printf 'TOKEN=1\n' > secrets/app.env && printf 'KEY\n' > secrets/id.pem
+        expect:
+          exit_code: 0
+      - run: printf 'secrets/**\n!secrets/*.pem\n' > .worktreeinclude
+        expect:
+          exit_code: 0
+      - run: $WT_BIN create wti-negation
+        expect:
+          exit_code: 0
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/wti-negation/secrets/app.env" && echo "ENV_COPIED"
+        expect:
+          output_contains: "ENV_COPIED"
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/wti-negation/secrets/id.pem" && echo "PEM_COPIED" || echo "PEM_NEGATED"
+        expect:
+          output_contains: "PEM_NEGATED"
+
+  - name: empty_worktreeinclude_is_not_an_error
+    description: An empty include file copies nothing and does not fail
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: printf '.env\n' > .gitignore && printf 'TOKEN=1\n' > .env && printf '\n# nothing here\n' > .worktreeinclude
+        expect:
+          exit_code: 0
+      - run: $WT_BIN create wti-empty
+        expect:
+          exit_code: 0
+          output_not_contains: "Copied"
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/wti-empty/.env" && echo "COPIED" || echo "NOTHING_COPIED"
+        expect:
+          output_contains: "NOTHING_COPIED"
+
+  - name: worktreeinclude_shown_in_info
+    description: wt info reports where the include file was looked for and whether it was found
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: printf '.env\n' > .worktreeinclude
+        expect:
+          exit_code: 0
+      - run: $WT_BIN info
+        expect:
+          exit_code: 0
+          output_contains: ".worktreeinclude"

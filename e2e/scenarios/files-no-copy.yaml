@@ -1,0 +1,86 @@
+# E2E tests for the escape hatches that suppress the built-in file copy
+name: files-no-copy
+description: Test --no-copy and WT_FILES_DISABLED=1
+
+scenarios:
+  - name: no_copy_flag_suppresses_create
+    description: --no-copy leaves the new worktree empty
+    skip_shells: [powershell, pwsh] # steps use POSIX shell syntax
+    skip_shellenv: true
+    steps:
+      - run: printf '.env\n' > .gitignore && printf 'TOKEN=1\n' > .env && printf '[files]\ncopy = [".env"]\n' > .wt.toml
+        expect:
+          exit_code: 0
+      - run: $WT_BIN create nocopy-flag --no-copy
+        expect:
+          exit_code: 0
+          output_not_contains: "Copied"
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/nocopy-flag/.env" && echo "COPIED" || echo "NOT_COPIED"
+        expect:
+          output_contains: "NOT_COPIED"
+
+  - name: no_copy_flag_suppresses_checkout
+    description: --no-copy works on checkout too
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    setup:
+      - create_branch: nocopy-co
+      - git_checkout: main
+    steps:
+      - run: printf '.env\n' > .gitignore && printf 'TOKEN=1\n' > .env && printf '[files]\ncopy = [".env"]\n' > .wt.toml
+        expect:
+          exit_code: 0
+      - run: $WT_BIN checkout nocopy-co --no-copy
+        expect:
+          exit_code: 0
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/nocopy-co/.env" && echo "COPIED" || echo "NOT_COPIED"
+        expect:
+          output_contains: "NOT_COPIED"
+
+  - name: env_var_suppresses_create
+    description: WT_FILES_DISABLED=1 switches the whole feature off
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: printf '.env\n' > .gitignore && printf 'TOKEN=1\n' > .env && printf '[files]\ncopy = [".env"]\n' > .wt.toml
+        expect:
+          exit_code: 0
+      - run: WT_FILES_DISABLED=1 $WT_BIN create nocopy-env
+        expect:
+          exit_code: 0
+          output_not_contains: "Copied"
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/nocopy-env/.env" && echo "COPIED" || echo "NOT_COPIED"
+        expect:
+          output_contains: "NOT_COPIED"
+
+  - name: env_var_makes_copy_command_fail_loudly
+    description: An explicit wt copy under WT_FILES_DISABLED=1 errors rather than silently doing nothing
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: printf '.env\n' > .gitignore && printf 'TOKEN=1\n' > .env && printf '[files]\ncopy = [".env"]\n' > .wt.toml
+        expect:
+          exit_code: 0
+      - run: $WT_BIN create nocopy-explicit --no-copy
+        expect:
+          exit_code: 0
+      - run: WT_FILES_DISABLED=1 $WT_BIN copy nocopy-explicit
+        expect:
+          exit_code: 1
+          output_contains: "WT_FILES_DISABLED"
+
+  - name: unconfigured_repo_copies_nothing
+    description: Without [files] the default is to copy nothing at all
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: printf '.env\n' > .gitignore && printf 'TOKEN=1\n' > .env
+        expect:
+          exit_code: 0
+      - run: $WT_BIN create nocopy-default
+        expect:
+          exit_code: 0
+          output_not_contains: "Copied"
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/nocopy-default/.env" && echo "COPIED" || echo "NOT_COPIED"
+        expect:
+          output_contains: "NOT_COPIED"

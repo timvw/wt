@@ -77,6 +77,7 @@ git config --global wt.root ~/projects/worktrees
 | `wt.pattern` | `pattern` |
 | `wt.separator` | `separator` |
 | `wt.repo_pattern` | `repo_pattern` |
+| `wt.copyIgnored` | `[files] copy_ignored` (see [Files](#files)) |
 | `wt.context.<name>.whenpath` / `.env` | `[[context]]` (**`--global` only**) |
 
 Notes:
@@ -93,7 +94,7 @@ Notes:
 
 Configuration values are resolved in this order (highest priority first):
 
-1. **Environment variables** (`WORKTREE_ROOT`, `WORKTREE_STRATEGY`, `WORKTREE_PATTERN`, `WORKTREE_SEPARATOR`, `WT_REPO_ROOT`, `WT_REPO_PATTERN`)
+1. **Environment variables** (`WORKTREE_ROOT`, `WORKTREE_STRATEGY`, `WORKTREE_PATTERN`, `WORKTREE_SEPARATOR`, `WT_REPO_ROOT`, `WT_REPO_PATTERN`, `WT_COPY_IGNORED`)
 2. **Local git config** (`.git/config`, via `git config --local wt.*`)
 3. **Repo config file** (`<repo>/.wt.toml`)
 4. **Config file** (`~/.config/wt/config.toml`)
@@ -103,6 +104,10 @@ Configuration values are resolved in this order (highest priority first):
 `--config` and `WT_CONFIG` are not a precedence level of their own: they select
 *which* TOML file is loaded at level 4. Values in that file are still overridden
 by `.wt.toml`, local git config, and environment variables.
+
+Two settings are lists rather than scalars and so do not "win" — `[hooks]` and
+the `[files]` list keys accumulate across layers instead. See
+[Files › Accumulation](#accumulation).
 
 Run `wt config show` to see the effective value and source of each setting:
 
@@ -399,6 +404,228 @@ Unlike a `[[context]]` rule, direnv keys off the directory you run the command
 `repo_root` and its worktrees under `worktree_root`, so covering only one loses
 the category on the hop between them.
 
+## Files
+
+A fresh worktree contains everything git tracks and nothing else. The files that
+make a checkout *usable* — `.env`, `.envrc`, `.claude/settings.local.json`,
+editor state — are exactly the ones you keep out of git, so every new worktree
+starts subtly broken until you copy them across by hand.
+
+The `[files]` section declares what should be materialised into every new
+worktree. It runs automatically on `wt create`, `wt checkout`, `wt pr` and
+`wt mr`, after `git worktree add` and before the `post_*` hooks — and on any of
+those four when the worktree already exists, which is what lets one made before
+`[files]` was configured catch up. Re-running it costs nothing: files already
+there are skipped, never overwritten.
+
+```toml
+[files]
+# Untracked/ignored paths to copy from the main worktree. gitignore syntax.
+copy = [".env", ".envrc", ".claude/settings.local.json"]
+
+# Paths to symlink instead of copy — for large caches you want shared.
+link = ["node_modules", ".venv"]
+
+# Never materialised, whatever anything else says. Applied last.
+exclude = ["*.pem", "*.key"]
+
+# Copy every ignored file. Off by default; think before turning it on.
+copy_ignored = false
+```
+
+**Nothing is copied by default.** Without a `[files]` section, a
+`.worktreeinclude` file, or `copy_ignored = true`, `wt create` behaves exactly as
+it did before.
+
+### `.worktreeinclude`
+
+A `.worktreeinclude` file at the **main worktree root** lists the same kind of
+patterns, one per line, in gitignore syntax:
+
+```gitignore
+# Untracked files that every worktree needs
+.env
+.envrc
+.claude/settings.local.json
+!.claude/**/*.log
+```
+
+Its patterns are unioned into `copy`. The name is shared with worktrunk, gtr and
+Claude Code's worktree support, so a repo that adds one gets working behaviour
+from all of them at once.
+
+Unlike `.wt.toml`, this file is meant to be committed: it describes what the
+*project* needs, so a new contributor gets working worktrees without configuring
+anything. Because it is committed, it has to be a regular file — a
+`.worktreeinclude` that is a symlink is refused rather than followed, so a repo
+cannot point it at something outside the worktree.
+
+### Accumulation
+
+The three list keys **accumulate** across layers rather than replacing each
+other:
+
+```
+config file  →  repo .wt.toml  →  .worktreeinclude
+```
+
+A user whose own config says "always copy `.env`" and who then works in a repo
+whose `.wt.toml` adds `config/local.yml` gets both. With replace semantics the
+repo would silently drop the `.env`. Excludes accumulate for the mirror-image
+reason: a global "never copy `*.pem`" has to hold against any repository's
+config.
+
+Duplicates are dropped, keeping first-seen order, so `wt info` lists the
+effective set in layer order with the source of each pattern.
+
+`exclude` is always applied **last** and cannot be overridden — not by a later
+layer's `copy`, not by `copy_ignored`, and not by `link`. An excluded path is
+reported as skipped rather than materialised.
+
+Because the layers accumulate with the repo's `.wt.toml` applied *after* your own
+config, a `!` in `exclude` would let a committed file undo the protection you set
+globally. So `exclude` and `link` reject negated patterns outright, naming the
+pattern and the layer it came from. `!` remains available in `copy`, where it
+only ever removes.
+
+A directory pattern covers everything below it, in both lists: `exclude =
+["secrets/"]` keeps `secrets/key.pem` out, and `copy = ["cache/"]` brings the
+whole tree in.
+
+A `!` in `copy` names a path you do *not* want, and it wins over any blanket
+yes — a matched parent directory or `copy_ignored`:
+
+```toml
+[files]
+copy = ["cache/", "!cache/private.key"]   # everything under cache/ except that one
+```
+
+This is a deliberate divergence from gitignore, where a file cannot be
+re-included once a parent directory is excluded. It only ever selects *fewer*
+files, which is the safe direction when the thing being materialised is
+somebody's `.env`.
+
+`copy_ignored` is a scalar, so it follows the normal
+[precedence chain](#precedence) instead: env var `WT_COPY_IGNORED`, local git
+config `wt.copyIgnored`, `.wt.toml`, config file, global git config, then the
+default `false`. It is the only `[files]` key readable from git config — the list
+keys would need `--get-all` handling for multi-valued keys and have no
+accumulation story across git scopes, so they stay TOML-only.
+
+Note the spelling: in git config it is `wt.copyIgnored`, not `wt.copy_ignored`.
+git config variable names allow only alphanumerics and `-`, and git rejects an
+underscore outright — a config *file* containing one fails to parse entirely.
+The name is case-insensitive, so `wt.copyignored` works just as well, and as
+with any git boolean the value may be omitted to mean true:
+
+```bash
+git config --local wt.copyIgnored true
+```
+
+### Which files are candidates
+
+Candidates come from `git ls-files --others --ignored --exclude-standard`, so:
+
+- **Tracked files are never copied.** They are already in the new worktree via
+  the checkout, and copying them would overwrite it with the main worktree's
+  uncommitted working state. `link` names its paths literally rather than
+  drawing them from this list, so it checks the index directly and skips
+  anything tracked.
+- Nested `.gitignore` files, `core.excludesFile` and `.git/info/exclude` all
+  work, because git resolves them rather than `wt`.
+- `.git/`, `.bzr/`, `.hg/`, `.jj/`, `.pijul/`, `.sl/` and `.svn/` are never
+  copied whatever the patterns say, and neither is any path that is itself a
+  registered worktree — otherwise the `inside-dotdir` strategy would copy every
+  worktree into every new worktree.
+
+### Copy method
+
+Files are cloned with a **reflink** where the filesystem supports it — APFS on
+macOS, Btrfs and XFS on Linux — so a multi-gigabyte `node_modules` costs
+metadata rather than disk, and the two copies diverge only as they are written
+to. Everywhere else, including Windows, a buffered copy is used. `--format json`
+reports the `method` per file (`reflink`, `copy` or `symlink`), so you can check
+which you got. `--dry-run` predicts it without writing to the source worktree:
+it compares filesystems first and probes inside the destination only.
+
+An existing destination file is **skipped, never overwritten**, unless you pass
+`--force`. Symlinks are recreated as symlinks and never dereferenced, and a
+destination whose parent directory is a symlink is refused outright rather than
+written through — a worktree can legitimately contain a tracked symlink.
+
+A path the **destination branch tracks** is never written, `--force` included:
+candidates are the source worktree's ignored files, and one branch's untracked
+`.env` is no reason to put an uncommitted file where another branch keeps a
+committed one. That holds whether or not the file is currently present there —
+deleted, or left out by a sparse checkout, it is still tracked. The same applies
+below a tracked path: if the destination branch keeps `cache` as a file, no
+`cache/…` is written over it. Those paths are reported as skipped with the
+reason `tracked by git in the destination`.
+
+On a **case-insensitive destination** — the macOS and Windows default, and also
+an ext4 casefold directory or a CIFS mount, which wt probes for rather than
+assumes — two source paths that differ only in case are one path there. A source checked
+out on a case-sensitive filesystem can hold both `Cache/` and `cache/`; only the
+first is materialised, and the second, along with anything under it, is reported
+as skipped with the reason `case-insensitive collision with <path>` rather than
+merged into the tree that got there first.
+
+### `wt copy`
+
+The same materialisation on demand — after adding a pattern, or after the source
+file changed:
+
+```console
+$ wt copy --dry-run          # show what would happen, change nothing
+would copy   .env   (reflink)
+would skip   .envrc (exists)
+would mkdir  cache  (directory)
+
+$ wt copy                    # into the current worktree, from the main one
+Copied 1 file (1 reflinked), created 1 directory
+
+$ wt copy feature-branch --force        # overwrite what is already there
+$ wt copy feature-branch --from other   # seed from a sibling worktree
+```
+
+`--dry-run` leaves both worktrees exactly as it found them, with one deliberate
+exception: to report `(reflink)` rather than guess, it clones a probe file
+inside the *destination* worktree and removes it again. Whether a filesystem
+supports reflink cannot be established any other way — the type is not enough,
+since XFS only supports it when the filesystem was created with `reflink=1`. The
+probe never touches the source worktree, which may well be read-only, and its
+result is cached for the run.
+
+### Turning it off
+
+- `--no-copy` on `wt create`, `wt checkout`, `wt pr` and `wt mr` skips it once.
+- `WT_FILES_DISABLED=1` switches the feature off entirely, mirroring
+  `WT_HOOKS_DISABLED`.
+
+Failure is never fatal: an unreadable file is reported as `failed` and the
+worktree survives. You do not lose a worktree over a missing `.env`.
+
+### Why `[files]` needs no trust prompt
+
+`[hooks]` from a committed `.wt.toml` needs [approval](#hook-trust) because it is
+arbitrary command execution. `[files]` is declarative data with a much smaller
+blast radius, and it is held there by invariants that are individually tested:
+
+| | Invariant |
+| --- | --- |
+| F1 | Source patterns resolve strictly inside the main worktree |
+| F2 | Destination paths resolve strictly inside the new worktree |
+| F3 | `..` path segments are rejected at config-resolution time |
+| F4 | Symlinks are copied as symlinks, never dereferenced |
+| F5 | Files tracked by git are never copied |
+| F6 | An existing destination is never overwritten without `--force` |
+| F7 | Nothing outside the two worktrees and `TMPDIR` is read or written |
+
+A hostile `.wt.toml` can therefore ask for your `.env` to be copied from your own
+main worktree into your own new worktree — which is where it already was — and
+nothing else. Gating it behind a prompt would also defeat the point: the whole
+value is that a new worktree just works.
+
 ## Hooks
 
 Hooks let you run custom commands before or after `wt` operations. Define them in the `[hooks]` section of your config file:
@@ -525,16 +752,16 @@ The examples below — and everything in [examples.md](examples.md) — are POSI
 ```toml
 [hooks]
 # PowerShell / cmd on Windows: cmd syntax, %VAR% expansion
-post_create = ["if exist %WT_MAIN%\\.env copy %WT_MAIN%\\.env %WT_PATH%\\.env"]
+post_create = ["cd /d %WT_PATH% && npm install"]
 ```
+
+Copying files is the one case you no longer need a hook for: [`[files]`](#files)
+does it natively, in one shell-independent form that works on Windows too.
 
 **Common patterns:**
 
 ```toml
 [hooks]
-# Copy .env file to new worktrees (only if it exists in main)
-post_create = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]
-
 # Install dependencies after checkout
 post_checkout = ["cd $WT_PATH && npm install"]
 

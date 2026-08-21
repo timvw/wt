@@ -1,0 +1,152 @@
+# E2E tests for the built-in file copy driven by [files] in .wt.toml
+name: files-copy-basic
+description: Test that [files] copy materialises untracked files into new worktrees
+
+scenarios:
+  - name: copy_pattern_from_repo_config
+    description: A [files] copy pattern in .wt.toml lands the file in a new worktree
+    skip_shells: [powershell, pwsh] # steps use POSIX shell syntax
+    skip_shellenv: true
+    steps:
+      - run: printf '.env\n' > .gitignore && printf 'TOKEN=secret\n' > .env && printf '[files]\ncopy = [".env"]\n' > .wt.toml
+        expect:
+          exit_code: 0
+      - run: $WT_BIN create files-basic
+        expect:
+          exit_code: 0
+          output_contains: "Copied 1 file"
+      - run: cat "$WORKTREE_ROOT_POSIX/test-repo/files-basic/.env"
+        expect:
+          exit_code: 0
+          output_contains: "TOKEN=secret"
+
+  - name: tracked_files_are_not_copied
+    description: Only ignored files are candidates; a tracked file keeps its checked-out content
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: printf 'committed\n' > tracked.txt && git add tracked.txt && git commit -m 'add tracked file' --quiet
+        expect:
+          exit_code: 0
+      # Diverge the working copy. If tracked files were copied, this is what
+      # would silently overwrite the new worktree's checkout.
+      - run: printf 'uncommitted\n' > tracked.txt && printf '[files]\ncopy_ignored = true\n' > .wt.toml
+        expect:
+          exit_code: 0
+      - run: $WT_BIN create files-tracked
+        expect:
+          exit_code: 0
+      - run: cat "$WORKTREE_ROOT_POSIX/test-repo/files-tracked/tracked.txt"
+        expect:
+          exit_code: 0
+          output_contains: "committed"
+      - run: cat "$WORKTREE_ROOT_POSIX/test-repo/files-tracked/tracked.txt"
+        expect:
+          output_not_contains: "uncommitted"
+
+  - name: exclude_wins_over_copy
+    description: An exclude pattern is applied last and cannot be overridden
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: printf '*.env\n*.pem\n' > .gitignore && printf 'TOKEN=1\n' > app.env && printf 'KEY\n' > server.pem
+        expect:
+          exit_code: 0
+      - run: printf '[files]\ncopy = ["*.env", "*.pem"]\nexclude = ["*.pem"]\n' > .wt.toml
+        expect:
+          exit_code: 0
+      - run: $WT_BIN create files-exclude
+        expect:
+          exit_code: 0
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/files-exclude/app.env" && echo "ENV_COPIED"
+        expect:
+          output_contains: "ENV_COPIED"
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/files-exclude/server.pem" && echo "PEM_COPIED" || echo "PEM_EXCLUDED"
+        expect:
+          output_contains: "PEM_EXCLUDED"
+
+  - name: existing_destination_is_not_overwritten
+    description: A file already present in the worktree is skipped, not clobbered
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: printf '.env\n' > .gitignore && printf 'FROM_MAIN=1\n' > .env && printf '[files]\ncopy = [".env"]\n' > .wt.toml
+        expect:
+          exit_code: 0
+      - run: $WT_BIN create files-noclobber
+        expect:
+          exit_code: 0
+      - run: printf 'EDITED_IN_WORKTREE=1\n' > "$WORKTREE_ROOT_POSIX/test-repo/files-noclobber/.env" && $WT_BIN copy files-noclobber
+        expect:
+          exit_code: 0
+          output_contains: "skipped 1"
+      - run: cat "$WORKTREE_ROOT_POSIX/test-repo/files-noclobber/.env"
+        expect:
+          output_contains: "EDITED_IN_WORKTREE=1"
+
+  - name: checkout_of_an_existing_worktree_still_materialises
+    description: A worktree made before [files] existed catches up on the next checkout
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    setup:
+      - create_branch: files-recheckout
+      - git_checkout: main
+    steps:
+      - run: printf '.env\n' > .gitignore && printf 'TOKEN=1\n' > .env
+        expect:
+          exit_code: 0
+      # No [files] yet: the worktree is created without the .env.
+      - run: $WT_BIN checkout files-recheckout
+        expect:
+          exit_code: 0
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/files-recheckout/.env" && echo "COPIED" || echo "NOT_COPIED"
+        expect:
+          output_contains: "NOT_COPIED"
+      # Configure it, then check the same branch out again.
+      - run: printf '[files]\ncopy = [".env"]\n' > .wt.toml && $WT_BIN checkout files-recheckout
+        expect:
+          exit_code: 0
+          output_contains: "Copied 1 file"
+      - run: cat "$WORKTREE_ROOT_POSIX/test-repo/files-recheckout/.env"
+        expect:
+          output_contains: "TOKEN=1"
+
+  - name: create_of_an_existing_worktree_still_materialises
+    description: Landing in a worktree that already exists materialises there too
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: printf '.env\n' > .gitignore && printf 'TOKEN=1\n' > .env
+        expect:
+          exit_code: 0
+      # No [files] yet: the worktree is created without the .env.
+      - run: $WT_BIN create files-recreate
+        expect:
+          exit_code: 0
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/files-recreate/.env" && echo "COPIED" || echo "NOT_COPIED"
+        expect:
+          output_contains: "NOT_COPIED"
+      - run: printf '[files]\ncopy = [".env"]\n' > .wt.toml && $WT_BIN create files-recreate
+        expect:
+          exit_code: 0
+          output_contains: "Copied 1 file"
+      - run: cat "$WORKTREE_ROOT_POSIX/test-repo/files-recreate/.env"
+        expect:
+          output_contains: "TOKEN=1"
+
+  - name: json_output_includes_files_summary
+    description: The create payload carries a files summary in JSON mode
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: printf '.env\n' > .gitignore && printf 'TOKEN=1\n' > .env && printf '[files]\ncopy = [".env"]\n' > .wt.toml
+        expect:
+          exit_code: 0
+      - run: $WT_BIN --format json create files-json
+        expect:
+          exit_code: 0
+          output_contains: '"files"'
+      - run: $WT_BIN --format json copy files-json
+        expect:
+          exit_code: 0
+          output_contains: '"summary"'

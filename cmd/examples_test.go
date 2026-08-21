@@ -93,6 +93,7 @@ func TestExamplesCoverAllTopLevelCommands(t *testing.T) {
 		"mr",
 		"list",
 		"remove",
+		"copy",
 		"cleanup",
 		"migrate",
 		"prune",

@@ -21,11 +21,25 @@ type Config struct {
 	Hooks       Hooks  `toml:"hooks"`
 	HooksPolicy string `toml:"hooks_policy"`
 	RepoPattern string `toml:"repo_pattern"`
+	Files       Files  `toml:"files"`
 
 	// Context holds path-matched rules supplying environment variables to
 	// pattern rendering. Decoded from the user's config file only — see
 	// contextRules in context.go.
 	Context []ContextRule `toml:"context"`
+}
+
+// Files controls materialisation of untracked/ignored files into new worktrees.
+//
+// Unlike every other setting, the three list keys accumulate across config
+// layers instead of replacing: a user who wants .env everywhere plus whatever
+// a project adds has no way to express that if the layers overwrite each
+// other. See accumulateFilePatterns.
+type Files struct {
+	Copy        []string `toml:"copy"`
+	Link        []string `toml:"link"`
+	Exclude     []string `toml:"exclude"`
+	CopyIgnored bool     `toml:"copy_ignored"`
 }
 
 // Hooks holds pre/post command hook commands.
@@ -53,6 +67,7 @@ type configSource struct {
 	Separator   string
 	RepoPattern string
 	HooksPolicy string
+	CopyIgnored string
 }
 
 // configFilePath is the resolved path to the config file (set during loading).
@@ -100,6 +115,27 @@ var hookSources = map[string]string{}
 // hooksPolicy is the configured hook approval policy (see hookPolicy* in
 // hooks.go). Deliberately loaded from the user's config file only.
 var hooksPolicy string
+
+// The accumulated [files] pattern lists, in layer order, each pattern tagged
+// with the layer that supplied it. See accumulateFilePatterns for why these
+// accumulate rather than replace, and resolveFileConfig for the
+// .worktreeinclude layer that is added on top of them at use time.
+var (
+	filesCopy    []layeredPattern
+	filesLink    []layeredPattern
+	filesExclude []layeredPattern
+)
+
+// filesCopyIgnored is the resolved copy_ignored setting. It is a scalar, so
+// unlike the lists it follows the ordinary precedence chain.
+var filesCopyIgnored bool
+
+// layeredPattern is one [files] pattern together with the config layer it came
+// from, so `wt info` can explain why a pattern is in effect.
+type layeredPattern struct {
+	Pattern string `json:"pattern"`
+	Source  string `json:"source"`
+}
 
 // Clone placement configuration, loaded by loadWorktreeConfig.
 var (
@@ -152,6 +188,13 @@ type gitConfigEntry struct {
 // It is a variable so tests can inject a fake implementation.
 var gitConfigFn = defaultGitConfig
 
+// gitConfigBoolKeys names the wt.* keys read as git booleans. They are the only
+// ones for which a valueless key is meaningful: `[wt]\n\tcopyIgnored` with no
+// "=" is how git spells true.
+var gitConfigBoolKeys = map[string]bool{
+	"wt.copyignored": true,
+}
+
 // defaultGitConfig reads wt.* keys from the given git config scope, in the
 // order git reports them.
 //
@@ -178,10 +221,12 @@ func defaultGitConfig(scope gitConfigScope) []gitConfigEntry {
 			continue
 		}
 		key, value, hasValue := strings.Cut(record, "\n")
-		if !hasValue {
+		if !hasValue && !gitConfigBoolKeys[strings.ToLower(key)] {
 			// `[wt]\n\tseparator` with no "=": git reports it as valueless.
-			// There is no setting for which that is meaningful, so it is
-			// treated as unset rather than as an empty string.
+			// For a string setting that means nothing, so it is treated as
+			// unset rather than as an empty string. A valueless boolean is
+			// git's spelling of true, and parseGitBool reads the empty value
+			// that way, so those are kept.
 			continue
 		}
 		entries = append(entries, gitConfigEntry{Key: key, Value: value})
@@ -243,6 +288,70 @@ func applyGitConfig(entries []gitConfigEntry, sourceLabel string) {
 		repoPattern = v
 		configSources.RepoPattern = sourceLabel
 	}
+	// copy_ignored is the one [files] key readable from git config: it is a
+	// scalar. The list keys would need --get-all handling for multi-valued
+	// keys, and there is no accumulation story for git config layers, so they
+	// stay TOML-only (documented in docs/configuration.md).
+	//
+	// It is spelled wt.copyIgnored there, not wt.copy_ignored: git config
+	// variable names allow only alphanumerics and "-", and it rejects an
+	// underscore outright ("error: invalid key"), a whole config file holding
+	// one included. git lowercases the name it reports, hence the lookup key.
+	if v, ok := values["wt.copyignored"]; ok {
+		if b, ok := parseGitBool(v); ok {
+			filesCopyIgnored = b
+			configSources.CopyIgnored = sourceLabel
+		}
+	}
+}
+
+// parseGitBool interprets a git-config boolean. git accepts several spellings
+// for each value, and a key present with no value means true.
+func parseGitBool(v string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "true", "yes", "on", "1", "":
+		return true, true
+	case "false", "no", "off", "0":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+// accumulateFilePatterns appends patterns to an accumulated list, tagging each
+// with the layer that supplied it and dropping duplicates.
+//
+// Accumulating rather than replacing is deliberate and is the only sane
+// behaviour here: a user whose own config says "always copy .env" and who then
+// works in a repo whose .wt.toml adds "copy config/local.yml" wants both, and
+// with replace semantics the repo would silently drop the .env. Excludes
+// accumulate for the mirror-image reason — a global "never copy *.pem" has to
+// hold against any repository's config.
+//
+// First-seen order is preserved so the effective list reads as
+// config file, then repo config, then .worktreeinclude.
+func accumulateFilePatterns(dst []layeredPattern, patterns []string, source string) []layeredPattern {
+	for _, p := range patterns {
+		// Patterns are kept verbatim: gitignore gives a trailing space meaning
+		// (it is stripped unless escaped, as in "file\ "), so trimming here
+		// would turn "file\ " into "file\" before the ignore parser ever saw
+		// it. Blank-only entries are the one thing worth dropping.
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		duplicate := false
+		for _, existing := range dst {
+			if existing.Pattern == p {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		dst = append(dst, layeredPattern{Pattern: p, Source: source})
+	}
+	return dst
 }
 
 // defaultConfigTemplate is the content written by `wt config init`.
@@ -309,6 +418,24 @@ const defaultConfigTemplate = `# wt configuration file
 # when_path = "~/dev/repos/personal"
 # env = { WT_CATEGORY = "personal" }
 
+# Files — materialise untracked files into every new worktree
+# Runs on create/checkout/pr/mr, after 'git worktree add' and before post_* hooks.
+# Patterns use gitignore syntax and are relative to the main worktree root.
+# Only untracked, git-ignored files are candidates: tracked files are already in
+# the new worktree via the checkout and are never touched.
+# Copies use a reflink on APFS/Btrfs/XFS, so size is not a reason to hesitate.
+# An existing destination file is skipped, never overwritten (use 'wt copy --force').
+# Skip once with --no-copy; switch the feature off with WT_FILES_DISABLED=1.
+#
+# The three list keys accumulate with a repo's .wt.toml and its .worktreeinclude
+# rather than being replaced by them; 'exclude' is applied last and always wins.
+#
+# [files]
+# copy = [".env", ".envrc", ".claude/settings.local.json"]
+# link = ["node_modules", ".venv"]
+# exclude = ["*.pem", "*.key"]
+# copy_ignored = false
+
 # Hooks — run commands before/after wt operations
 # Available env vars in hooks: $WT_PATH, $WT_BRANCH, $WT_MAIN,
 #                              $WT_REPO_NAME, $WT_REPO_HOST, $WT_REPO_OWNER
@@ -326,7 +453,7 @@ const defaultConfigTemplate = `# wt configuration file
 # NOTE: Always quote path variables ("$WT_PATH") to handle spaces in paths.
 #
 # [hooks]
-# post_create = ["test -f \"$WT_MAIN/.env\" && cp \"$WT_MAIN/.env\" \"$WT_PATH/.env\" || true"]
+# post_create = ["cd \"$WT_PATH\" && direnv allow"]
 # post_checkout = ["cd \"$WT_PATH\" && npm install"]
 # pre_remove = ["echo \"Removing $WT_PATH\""]
 # post_clone = ["cd \"$WT_PATH\" && git status"]
@@ -387,6 +514,7 @@ func loadWorktreeConfig() {
 		Separator:   "default",
 		RepoPattern: "default",
 		HooksPolicy: "default",
+		CopyIgnored: "default",
 	}
 
 	// Reset hooks
@@ -395,6 +523,12 @@ func loadWorktreeConfig() {
 	hookSources = map[string]string{}
 	hooksPolicy = ""
 	contextRules = nil
+
+	// Reset [files]
+	filesCopy = nil
+	filesLink = nil
+	filesExclude = nil
+	filesCopyIgnored = false
 
 	repoPattern = defaultRepoPattern
 
@@ -412,7 +546,7 @@ func loadWorktreeConfig() {
 	if _, err := os.Stat(configFilePath); err == nil {
 		configFileFound = true
 		var cfg Config
-		if _, err := toml.DecodeFile(configFilePath, &cfg); err == nil {
+		if md, err := toml.DecodeFile(configFilePath, &cfg); err == nil {
 			if cfg.Root != "" {
 				worktreeRoot = expandHome(cfg.Root)
 				configSources.Root = "config file"
@@ -456,6 +590,17 @@ func loadWorktreeConfig() {
 			// some unrelated tree keeps working instead of silently vanishing
 			// the moment a [[context]] block is added to this file.
 			contextRules = append(contextRules, cfg.Context...)
+
+			filesCopy = accumulateFilePatterns(filesCopy, cfg.Files.Copy, "config file")
+			filesLink = accumulateFilePatterns(filesLink, cfg.Files.Link, "config file")
+			filesExclude = accumulateFilePatterns(filesExclude, cfg.Files.Exclude, "config file")
+			// IsDefined rather than a non-zero check: copy_ignored is a bool,
+			// so "written as false" and "not written" are the same value and
+			// only the metadata can tell them apart.
+			if md.IsDefined("files", "copy_ignored") {
+				filesCopyIgnored = cfg.Files.CopyIgnored
+				configSources.CopyIgnored = "config file"
+			}
 		}
 	}
 
@@ -483,7 +628,7 @@ func loadWorktreeConfig() {
 				configRepoKey = key
 			}
 			var repoCfg Config
-			if _, err := toml.Decode(string(data), &repoCfg); err == nil {
+			if md, err := toml.Decode(string(data), &repoCfg); err == nil {
 				// root, repo_root and repo_pattern are intentionally NOT loaded
 				// from repo config
 				if repoCfg.Strategy != "" {
@@ -518,6 +663,21 @@ func loadWorktreeConfig() {
 					}
 					setHooks(&worktreeHooks, event, cmds)
 					hookSources[event] = hookSourceRepoConfig
+				}
+
+				// [files] needs no trust gate. Hooks are arbitrary command
+				// execution, which is why they have one; [files] is
+				// declarative data whose only power is to move bytes from the
+				// main worktree into the new worktree — see the F1-F7
+				// invariants in files.go. Gating it would also defeat its main
+				// purpose, which is exactly the team-config case: a repo
+				// declaring "everyone needs .env here".
+				filesCopy = accumulateFilePatterns(filesCopy, repoCfg.Files.Copy, "repo config")
+				filesLink = accumulateFilePatterns(filesLink, repoCfg.Files.Link, "repo config")
+				filesExclude = accumulateFilePatterns(filesExclude, repoCfg.Files.Exclude, "repo config")
+				if md.IsDefined("files", "copy_ignored") {
+					filesCopyIgnored = repoCfg.Files.CopyIgnored
+					configSources.CopyIgnored = "repo config"
 				}
 			}
 		}
@@ -558,6 +718,12 @@ func loadWorktreeConfig() {
 	if v, ok := os.LookupEnv("WORKTREE_SEPARATOR"); ok {
 		worktreeSeparator = v
 		configSources.Separator = "env: WORKTREE_SEPARATOR"
+	}
+	if v, ok := os.LookupEnv("WT_COPY_IGNORED"); ok {
+		if b, ok := parseGitBool(v); ok {
+			filesCopyIgnored = b
+			configSources.CopyIgnored = "env: WT_COPY_IGNORED"
+		}
 	}
 }
 

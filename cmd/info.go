@@ -44,6 +44,8 @@ var infoCmd = &cobra.Command{
 			"post_clone":    worktreeHooks.PostClone,
 		}
 
+		filesInfo := describeFileConfig()
+
 		if jsonMode {
 			configData := map[string]string{
 				"path":      configFilePath,
@@ -71,6 +73,7 @@ var infoCmd = &cobra.Command{
 				},
 				"pattern_variables": []string{"{.repo.Name}", "{.repo.Main}", "{.repo.Owner}", "{.repo.Host}", "{.branch}", "{.worktreeRoot}", "{.env.VARNAME}", "{.env.VARNAME:-default}"},
 				"hooks":             hooks,
+				"files":             filesInfo,
 				"repo_pattern": map[string]any{
 					"value":     repoPattern,
 					"variables": []string{"{.repoRoot}", "{.repo.Host}", "{.repo.Owner}", "{.repo.Name}", "{.branch}", "{.env.VARNAME}", "{.env.VARNAME:-default}"},
@@ -153,6 +156,90 @@ Note: {.env.VARNAME} accesses the environment variable VARNAME (e.g. {.env.HOME}
 			fmt.Println()
 		}
 
+		printFilesSection(filesInfo)
+
 		return nil
 	},
+}
+
+// describeFileConfig resolves the effective [files] configuration for display.
+//
+// It reports rather than fails on a bad pattern: `wt info` is exactly where a
+// user goes to find out why the copy refused to run, so it must still print.
+func describeFileConfig() map[string]any {
+	out := map[string]any{
+		"copy_ignored": map[string]any{
+			"value":  filesCopyIgnored,
+			"source": configSources.CopyIgnored,
+		},
+		"copy":                  []layeredPattern{},
+		"link":                  []layeredPattern{},
+		"exclude":               []layeredPattern{},
+		"worktreeinclude_found": false,
+		"disabled":              filesDisabled(),
+	}
+
+	main := ""
+	if info, err := getRepoInfo(); err == nil {
+		main = info.Main
+	}
+	cfg, err := resolveFileConfig(main)
+	if len(cfg.Copy) > 0 {
+		out["copy"] = cfg.Copy
+	}
+	if len(cfg.Link) > 0 {
+		out["link"] = cfg.Link
+	}
+	if len(cfg.Exclude) > 0 {
+		out["exclude"] = cfg.Exclude
+	}
+	out["worktreeinclude_found"] = cfg.IncludeFileFound
+	if cfg.IncludeFilePath != "" {
+		out["worktreeinclude_path"] = cfg.IncludeFilePath
+	}
+	if err != nil {
+		out["error"] = err.Error()
+	}
+	return out
+}
+
+// printFilesSection renders the Files block of `wt info`.
+func printFilesSection(files map[string]any) {
+	copyPatterns, _ := files["copy"].([]layeredPattern)
+	linkPatterns, _ := files["link"].([]layeredPattern)
+	excludePatterns, _ := files["exclude"].([]layeredPattern)
+	copyIgnored, _ := files["copy_ignored"].(map[string]any)
+
+	fmt.Println("Files:")
+	fmt.Printf("  %-15s %v (%v)\n", "copy_ignored:", copyIgnored["value"], copyIgnored["source"])
+	for _, group := range []struct {
+		label    string
+		patterns []layeredPattern
+	}{
+		{"copy", copyPatterns},
+		{"link", linkPatterns},
+		{"exclude", excludePatterns},
+	} {
+		for _, p := range group.patterns {
+			fmt.Printf("  %-15s %-30s (%s)\n", group.label+":", p.Pattern, p.Source)
+		}
+	}
+
+	if path, ok := files["worktreeinclude_path"].(string); ok {
+		status := "not found"
+		if found, _ := files["worktreeinclude_found"].(bool); found {
+			status = "found"
+		}
+		fmt.Printf("  %-15s %s (%s)\n", worktreeIncludeFile+":", path, status)
+	}
+	if disabled, _ := files["disabled"].(bool); disabled {
+		fmt.Printf("  %-15s copying is off (WT_FILES_DISABLED=1)\n", "status:")
+	}
+	if msg, ok := files["error"].(string); ok {
+		fmt.Printf("  %-15s %s\n", "error:", msg)
+	}
+	if len(copyPatterns) == 0 && len(linkPatterns) == 0 && len(excludePatterns) == 0 {
+		fmt.Println("  (nothing configured — see 'wt copy --help')")
+	}
+	fmt.Println()
 }
