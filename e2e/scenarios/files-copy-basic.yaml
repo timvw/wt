@@ -111,6 +111,29 @@ scenarios:
         expect:
           output_contains: "TOKEN=1"
 
+  - name: create_of_an_existing_worktree_still_materialises
+    description: Landing in a worktree that already exists materialises there too
+    skip_shells: [powershell, pwsh]
+    skip_shellenv: true
+    steps:
+      - run: printf '.env\n' > .gitignore && printf 'TOKEN=1\n' > .env
+        expect:
+          exit_code: 0
+      # No [files] yet: the worktree is created without the .env.
+      - run: $WT_BIN create files-recreate
+        expect:
+          exit_code: 0
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/files-recreate/.env" && echo "COPIED" || echo "NOT_COPIED"
+        expect:
+          output_contains: "NOT_COPIED"
+      - run: printf '[files]\ncopy = [".env"]\n' > .wt.toml && $WT_BIN create files-recreate
+        expect:
+          exit_code: 0
+          output_contains: "Copied 1 file"
+      - run: cat "$WORKTREE_ROOT_POSIX/test-repo/files-recreate/.env"
+        expect:
+          output_contains: "TOKEN=1"
+
   - name: json_output_includes_files_summary
     description: The create payload carries a files summary in JSON mode
     skip_shells: [powershell, pwsh]

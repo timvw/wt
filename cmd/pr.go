@@ -150,15 +150,24 @@ func checkoutPROrMR(cmd *cobra.Command, input string, remoteType RemoteType) err
 
 	// Check if worktree already exists for this branch
 	if existingPath, exists := worktreeExists(branch); exists {
+		// Same reasoning as checkout: `wt pr 123` on a worktree made before
+		// [files] existed is how that worktree catches up. On one that already
+		// has everything this is a no-op — existing destinations are skipped.
+		files := materialiseFiles(info, existingPath, noCopyFiles)
+
 		if jsonMode {
-			return emitJSONSuccess(cmd, map[string]any{
+			data := map[string]any{
 				"status":      "exists",
 				"id":          prNumber,
 				"kind":        prefix,
 				"branch":      branch,
 				"path":        existingPath,
 				"navigate_to": existingPath,
-			})
+			}
+			if files != nil {
+				data["files"] = files
+			}
+			return emitJSONSuccess(cmd, data)
 		}
 		fmt.Printf("✓ Worktree already exists: %s\n", existingPath)
 		printCDMarker(existingPath)

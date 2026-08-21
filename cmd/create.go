@@ -33,14 +33,23 @@ var createCmd = &cobra.Command{
 
 		// Check if worktree already exists
 		if existingPath, exists := worktreeExists(branch); exists {
+			// Landing in an existing worktree materialises too, as it does on
+			// checkout and pr/mr: the command that puts you in a worktree is
+			// the one that owes you its [files].
+			files := materialiseFiles(info, existingPath, noCopyFiles)
+
 			if isJSONOutput() {
-				return emitJSONSuccess(cmd, map[string]any{
+				data := map[string]any{
 					"status":      "exists",
 					"branch":      branch,
 					"base":        base,
 					"path":        existingPath,
 					"navigate_to": existingPath,
-				})
+				}
+				if files != nil {
+					data["files"] = files
+				}
+				return emitJSONSuccess(cmd, data)
 			}
 			fmt.Printf("✓ Worktree already exists: %s\n", existingPath)
 			printCDMarker(existingPath)
