@@ -41,6 +41,7 @@ var vcsDirs = map[string]bool{
 const (
 	fileActionCopied  = "copied"
 	fileActionLinked  = "linked"
+	fileActionCreated = "created" // a selected directory that did not exist yet
 	fileActionSkipped = "skipped"
 	fileActionFailed  = "failed"
 )
@@ -101,13 +102,14 @@ type copySummary struct {
 	Copied    int `json:"copied"`
 	Reflinked int `json:"reflinked"`
 	Linked    int `json:"linked"`
+	Created   int `json:"created"`
 	Skipped   int `json:"skipped"`
 	Failed    int `json:"failed"`
 }
 
 // empty reports whether the copy did nothing at all.
 func (s copySummary) empty() bool {
-	return s.Copied == 0 && s.Linked == 0 && s.Skipped == 0 && s.Failed == 0
+	return s.Copied == 0 && s.Linked == 0 && s.Created == 0 && s.Skipped == 0 && s.Failed == 0
 }
 
 // copyResult is the full record of one copy run.
@@ -306,6 +308,14 @@ func dirIsSafeToCreate(dst, rel string) bool {
 	}
 	// Lstat, so a symlink to a directory reports false — which is the point.
 	return info.IsDir()
+}
+
+// dirExists reports whether path is already a real directory, which is what
+// separates a selected directory that changes the worktree from one that was
+// there all along. Lstat, so a symlink to a directory is not "already there".
+func dirExists(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.IsDir()
 }
 
 // noSymlinkComponents reports whether every existing directory component
@@ -806,8 +816,13 @@ func copyPlannedFiles(src, dst string, plan copyPlan, opts copyOptions, destTrac
 // errors would let `wt copy` say "nothing to copy" for a run whose entire
 // content was a directory that never appeared.
 //
-// A dry run makes the two refusals that can be checked without writing, and
-// says nothing about the rest: an mkdir that will fail on permissions cannot be
+// A directory that has to be brought into existence is reported too. A plan
+// whose whole content is an empty cache/ changes the worktree, and both the
+// dry run and the real run have to say so rather than print "Nothing to copy".
+// One that is already there is no change and stays unreported.
+//
+// A dry run makes the refusals that can be checked without writing, and says
+// nothing about the rest: an mkdir that will fail on permissions cannot be
 // predicted without attempting it.
 func createPlannedDirs(src, dst string, dirs []string, dryRun bool, destTracked trackedIndex) []fileResult {
 	var results []fileResult
@@ -824,12 +839,16 @@ func createPlannedDirs(src, dst string, dirs []string, dryRun bool, destTracked 
 			results = append(results, fileResult{Path: rel, Action: fileActionSkipped, Reason: "tracked by git in the destination"})
 		case !dirIsSafeToCreate(dst, rel):
 			results = append(results, fileResult{Path: rel, Action: fileActionFailed, Reason: "destination exists and is not a directory"})
+		case dirExists(dir):
+			// Already there: nothing changes, nothing to report.
 		case dryRun:
-			// Nothing to create.
+			results = append(results, fileResult{Path: rel, Action: fileActionCreated})
 		default:
 			if err := fileops.MkdirAllFrom(dir, filepath.Join(src, filepath.FromSlash(rel))); err != nil {
 				results = append(results, fileResult{Path: rel, Action: fileActionFailed, Reason: err.Error()})
+				continue
 			}
+			results = append(results, fileResult{Path: rel, Action: fileActionCreated})
 		}
 	}
 	return results
@@ -1024,11 +1043,10 @@ func reflinkAvailable(src, dst string) bool {
 // nothing" has to mean it. So take a name that already exists — an entry in
 // dst, or failing that dst itself and its ancestors — flip its case, and ask
 // whether the two names lead to the same file.
+// The probe runs everywhere rather than on macOS and Windows alone: an ext4
+// casefold directory, a CIFS mount or a case-insensitive ZFS dataset folds case
+// on Linux too, and a worktree that lives on one deserves the same answer.
 func caseInsensitiveWorktree(dst string) bool {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
-		return false
-	}
-
 	if entries, err := os.ReadDir(dst); err == nil {
 		for _, entry := range entries {
 			if answer, ok := sameFileWithFlippedCase(filepath.Join(dst, entry.Name())); ok {
@@ -1048,10 +1066,11 @@ func caseInsensitiveWorktree(dst string) bool {
 		}
 		path = parent
 	}
-	// Nothing along the way held a letter to flip. Both platforms that reach
-	// this line are case-insensitive by default, and guessing that way costs a
-	// reported collision rather than a silent overwrite.
-	return true
+	// Nothing along the way held a letter to flip, so fall back to the platform
+	// default: macOS and Windows fold case unless someone went out of their way,
+	// and elsewhere it is the exception. Where it is the default, guessing that
+	// way costs a reported collision rather than a silent overwrite.
+	return runtime.GOOS == "darwin" || runtime.GOOS == "windows"
 }
 
 // sameFileWithFlippedCase reports whether path and the same path with the case
@@ -1298,6 +1317,8 @@ func summarise(results []fileResult) copySummary {
 			}
 		case fileActionLinked:
 			s.Linked++
+		case fileActionCreated:
+			s.Created++
 		case fileActionSkipped:
 			s.Skipped++
 		case fileActionFailed:
@@ -1395,6 +1416,9 @@ func formatCopySummary(s copySummary) string {
 	if s.Linked > 0 {
 		parts = append(parts, fmt.Sprintf("linked %d", s.Linked))
 	}
+	if s.Created > 0 {
+		parts = append(parts, fmt.Sprintf("created %s", pluralDirectories(s.Created)))
+	}
 	if s.Skipped > 0 {
 		parts = append(parts, fmt.Sprintf("skipped %d", s.Skipped))
 	}
@@ -1412,4 +1436,11 @@ func pluralFiles(n int) string {
 		return "1 file"
 	}
 	return fmt.Sprintf("%d files", n)
+}
+
+func pluralDirectories(n int) string {
+	if n == 1 {
+		return "1 directory"
+	}
+	return fmt.Sprintf("%d directories", n)
 }

@@ -161,6 +161,8 @@ func copyVerb(action string) string {
 		return "copy"
 	case fileActionLinked:
 		return "link"
+	case fileActionCreated:
+		return "mkdir"
 	case fileActionFailed:
 		return "fail"
 	default:
@@ -175,6 +177,8 @@ func copyDetail(f fileResult) string {
 		return "-> " + f.Target
 	case fileActionCopied:
 		return "(" + f.Method + ")"
+	case fileActionCreated:
+		return "(directory)"
 	default:
 		return "(" + f.Reason + ")"
 	}

@@ -1103,6 +1103,46 @@ func TestDropCaseCollisionsIsANoOpOnCaseSensitiveFS(t *testing.T) {
 	}
 }
 
+// A plan whose entire content is an empty selected directory still changes the
+// worktree. Reporting nothing would have both runs print "Nothing to copy"
+// while the real one creates the directory.
+func TestAnEmptySelectedDirectoryIsReported(t *testing.T) {
+	src := newFilesRepo(t, "cache/\n")
+	if err := os.MkdirAll(filepath.Join(src, "cache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dst := newDestination(t)
+	setFileConfig(t, []string{"cache/"}, nil, nil, false)
+
+	dry, err := runFileCopy(src, dst, copyOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if dry.Summary.Created != 1 || dry.Summary.empty() {
+		t.Errorf("dry run summary = %+v, want one created directory", dry.Summary)
+	}
+
+	real, err := runFileCopy(src, dst, copyOptions{})
+	if err != nil {
+		t.Fatalf("real run: %v", err)
+	}
+	if real.Summary.Created != 1 {
+		t.Errorf("real run summary = %+v, want one created directory", real.Summary)
+	}
+	if !dirExists(filepath.Join(dst, "cache")) {
+		t.Error("cache/ was reported as created but is not there")
+	}
+
+	// Saying it twice would be a lie: the second run changes nothing.
+	again, err := runFileCopy(src, dst, copyOptions{})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if again.Summary.Created != 0 || !again.Summary.empty() {
+		t.Errorf("second run summary = %+v, want nothing to report", again.Summary)
+	}
+}
+
 // Directories are created before any file is copied, so they have to go through
 // the same collision pass: otherwise a selected "Cache/Config/" is made first
 // and a file "cache/config" lands on a directory — with a dry run that promised

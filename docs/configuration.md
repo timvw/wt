@@ -514,8 +514,9 @@ below a tracked path: if the destination branch keeps `cache` as a file, no
 `cache/…` is written over it. Those paths are reported as skipped with the
 reason `tracked by git in the destination`.
 
-On a **case-insensitive destination** — the default macOS and Windows setup —
-two source paths that differ only in case are one path there. A source checked
+On a **case-insensitive destination** — the macOS and Windows default, and also
+an ext4 casefold directory or a CIFS mount, which wt probes for rather than
+assumes — two source paths that differ only in case are one path there. A source checked
 out on a case-sensitive filesystem can hold both `Cache/` and `cache/`; only the
 first is materialised, and the second, along with anything under it, is reported
 as skipped with the reason `case-insensitive collision with <path>` rather than
@@ -528,11 +529,12 @@ file changed:
 
 ```console
 $ wt copy --dry-run          # show what would happen, change nothing
-would copy .env              (reflink)
-would skip .envrc            (exists)
+would copy   .env   (reflink)
+would skip   .envrc (exists)
+would mkdir  cache  (directory)
 
 $ wt copy                    # into the current worktree, from the main one
-Copied 1 file (1 reflinked)
+Copied 1 file (1 reflinked), created 1 directory
 
 $ wt copy feature-branch --force        # overwrite what is already there
 $ wt copy feature-branch --from other   # seed from a sibling worktree

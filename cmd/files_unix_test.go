@@ -35,14 +35,21 @@ func TestDryRunPredictsTheFailureOnASpecialFile(t *testing.T) {
 		t.Fatalf("real run: %v", err)
 	}
 
-	if len(dry.Files) != 1 || len(real.Files) != 1 {
-		t.Fatalf("dry %+v, real %+v; want one entry each", dry.Files, real.Files)
+	// The selected directory is reported as created by both runs; the fifo
+	// inside it is what this test is about.
+	action := func(results []fileResult) string {
+		for _, r := range results {
+			if r.Path == "run/daemon.sock" {
+				return r.Action
+			}
+		}
+		return "<absent>"
 	}
-	if dry.Files[0].Action != fileActionFailed {
-		t.Errorf("dry run action = %q, want %q", dry.Files[0].Action, fileActionFailed)
+	if got := action(dry.Files); got != fileActionFailed {
+		t.Errorf("dry run action = %q, want %q (%+v)", got, fileActionFailed, dry.Files)
 	}
-	if dry.Files[0].Action != real.Files[0].Action {
-		t.Errorf("dry %+v, real %+v", dry.Files[0], real.Files[0])
+	if got, want := action(real.Files), action(dry.Files); got != want {
+		t.Errorf("dry %+v, real %+v", dry.Files, real.Files)
 	}
 	if _, err := os.Lstat(filepath.Join(dst, "run", "daemon.sock")); !os.IsNotExist(err) {
 		t.Error("the special file was copied into the destination")
