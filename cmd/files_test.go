@@ -27,7 +27,7 @@ func isolateFileConfig(t *testing.T) {
 		configFlag = origConfigFlag
 	})
 
-	gitConfigFn = func(gitConfigScope) map[string]string { return nil }
+	gitConfigFn = func(gitConfigScope) []gitConfigEntry { return nil }
 	gitRepoRootFn = func() (string, error) { return "", os.ErrNotExist }
 	configFlag = ""
 	t.Setenv("WT_CONFIG", "/nonexistent/config.toml")
@@ -36,6 +36,16 @@ func isolateFileConfig(t *testing.T) {
 	t.Setenv("WORKTREE_PATTERN", "")
 	os.Unsetenv("WT_COPY_IGNORED")
 	os.Unsetenv("WT_FILES_DISABLED")
+}
+
+// gitEntriesFrom turns the map form these tests are written in into the entry
+// list the loader reads. Each key appears once, so the order is immaterial.
+func gitEntriesFrom(values map[string]string) []gitConfigEntry {
+	var out []gitConfigEntry
+	for key, value := range values {
+		out = append(out, gitConfigEntry{Key: key, Value: value})
+	}
+	return out
 }
 
 func patternsFrom(list []layeredPattern) []string {
@@ -472,11 +482,11 @@ func TestCopyIgnoredPrecedence(t *testing.T) {
 				writeFile(t, filepath.Join(repoDir, ".wt.toml"), tt.repoConfig)
 			}
 			gitRepoRootFn = func() (string, error) { return repoDir, nil }
-			gitConfigFn = func(scope gitConfigScope) map[string]string {
+			gitConfigFn = func(scope gitConfigScope) []gitConfigEntry {
 				if scope == gitScopeLocal {
-					return tt.local
+					return gitEntriesFrom(tt.local)
 				}
-				return tt.global
+				return gitEntriesFrom(tt.global)
 			}
 			if tt.env != "" {
 				t.Setenv("WT_COPY_IGNORED", tt.env)
@@ -499,8 +509,8 @@ func TestCopyIgnoredPrecedence(t *testing.T) {
 func TestListKeysAreNotReadFromGitConfig(t *testing.T) {
 	isolateFileConfig(t)
 
-	gitConfigFn = func(gitConfigScope) map[string]string {
-		return map[string]string{"wt.copy": ".env", "wt.files_copy": ".env"}
+	gitConfigFn = func(gitConfigScope) []gitConfigEntry {
+		return gitEntriesFrom(map[string]string{"wt.copy": ".env", "wt.files_copy": ".env"})
 	}
 	loadWorktreeConfig()
 
