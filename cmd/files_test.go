@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/timvw/wt/internal/fileops"
+	"github.com/timvw/wt/internal/ignore"
 )
 
 // isolateFileConfig points loadWorktreeConfig at a scratch environment so the
@@ -504,18 +505,132 @@ func TestCopyIgnoredPrecedence(t *testing.T) {
 	}
 }
 
-// The list keys are deliberately not readable from git config: they would need
-// --get-all handling and have no accumulation story across git scopes.
-func TestListKeysAreNotReadFromGitConfig(t *testing.T) {
+// gitScopedEntries serves ordered entries per scope. gitEntriesFrom cannot: it
+// takes a map, and a multi-valued key is several entries sharing one name whose
+// order is the order git reports them in.
+func gitScopedEntries(global, local []gitConfigEntry) func(gitConfigScope) []gitConfigEntry {
+	return func(scope gitConfigScope) []gitConfigEntry {
+		switch scope {
+		case gitScopeGlobal:
+			return global
+		case gitScopeLocal:
+			return local
+		}
+		return nil
+	}
+}
+
+// gitList spells one multi-valued key, as `git config --add <key>` repeated.
+func gitList(key string, values ...string) []gitConfigEntry {
+	out := make([]gitConfigEntry, 0, len(values))
+	for _, v := range values {
+		out = append(out, gitConfigEntry{Key: key, Value: v})
+	}
+	return out
+}
+
+// The three list keys are readable from both git scopes as wt.copy, wt.link and
+// wt.exclude. --local is the scope issue #125 asked for: per-repo file
+// materialisation with nothing committed to carry it.
+//
+// The two values under one key are the point. Reading these through
+// gitConfigValues would collapse them to the last one, which is why they are
+// accumulated from the raw entries instead.
+func TestFileListKeysFromGitConfig(t *testing.T) {
 	isolateFileConfig(t)
 
-	gitConfigFn = func(gitConfigScope) []gitConfigEntry {
-		return gitEntriesFrom(map[string]string{"wt.copy": ".env", "wt.files_copy": ".env"})
-	}
+	global := append(gitList("wt.copy", ".env", ".envrc"), gitList("wt.exclude", "*.pem")...)
+	local := append(gitList("wt.copy", "config/local.yml"), gitList("wt.link", "node_modules")...)
+	gitConfigFn = gitScopedEntries(global, local)
 	loadWorktreeConfig()
 
-	if len(filesCopy) != 0 {
-		t.Errorf("filesCopy = %v, want empty", filesCopy)
+	wantCopy := []string{
+		".env@git config (global)",
+		".envrc@git config (global)",
+		"config/local.yml@git config (local)",
+	}
+	if got := patternsFrom(filesCopy); !equalStrings(got, wantCopy) {
+		t.Errorf("copy = %v, want %v", got, wantCopy)
+	}
+	if got := patternsFrom(filesExclude); !equalStrings(got, []string{"*.pem@git config (global)"}) {
+		t.Errorf("exclude = %v, want [*.pem@git config (global)]", got)
+	}
+	if got := patternsFrom(filesLink); !equalStrings(got, []string{"node_modules@git config (local)"}) {
+		t.Errorf("link = %v, want [node_modules@git config (local)]", got)
+	}
+}
+
+// The git scopes accumulate at the loader steps they already occupy, so the
+// effective list reads in layer order. A pattern more than one layer supplies is
+// listed once, credited to the lowest — here .env, set globally and repeated by
+// the repo's committed .wt.toml.
+func TestFileListKeysAccumulateWithTOMLLayers(t *testing.T) {
+	isolateFileConfig(t)
+
+	tmp := t.TempDir()
+	globalCfg := filepath.Join(tmp, "config.toml")
+	writeFile(t, globalCfg, `[files]
+copy = ["shared.conf"]
+`)
+
+	repoDir := newFilesRepo(t, "")
+	writeFile(t, filepath.Join(repoDir, ".wt.toml"), `[files]
+copy = ["config/local.yml", ".env"]
+`)
+	writeFile(t, filepath.Join(repoDir, worktreeIncludeFile), "committed.txt\n")
+
+	t.Setenv("WT_CONFIG", globalCfg)
+	gitRepoRootFn = func() (string, error) { return repoDir, nil }
+	gitConfigFn = gitScopedEntries(gitList("wt.copy", ".env"), gitList("wt.copy", "local-only.txt"))
+	loadWorktreeConfig()
+
+	cfg, err := resolveFileConfig(repoDir)
+	if err != nil {
+		t.Fatalf("resolveFileConfig: %v", err)
+	}
+
+	want := []string{
+		".env@git config (global)",
+		"shared.conf@config file",
+		"config/local.yml@repo config",
+		"local-only.txt@git config (local)",
+		"committed.txt@" + worktreeIncludeFile,
+	}
+	if got := patternsFrom(cfg.Copy); !equalStrings(got, want) {
+		t.Errorf("copy = %v, want %v", got, want)
+	}
+}
+
+// Layer order is display and attribution only: it cannot decide which files are
+// materialised. A "!" deny in the LOWEST layer beats a positive pattern in the
+// highest, because negations are hoisted out of the copy matcher and applied
+// unconditionally. That is the escape hatch for an inherited pattern — the only
+// way to un-add one — and it has to work from git config for #125's user, who
+// has no committed file to put it in.
+func TestGitConfigDenyBeatsHigherLayerCopy(t *testing.T) {
+	isolateFileConfig(t)
+
+	src := newFilesRepo(t, "*.env\n")
+	writeFile(t, filepath.Join(src, "app.env"), "TOKEN=1")
+	writeFile(t, filepath.Join(src, "keep.env"), "OK=1")
+	// The repo's committed .wt.toml asks for everything the global deny refuses.
+	writeFile(t, filepath.Join(src, ".wt.toml"), `[files]
+copy = ["*.env"]
+`)
+
+	gitRepoRootFn = func() (string, error) { return src, nil }
+	gitConfigFn = gitScopedEntries(gitList("wt.copy", "!app.env"), nil)
+	loadWorktreeConfig()
+
+	cfg, err := resolveFileConfig(src)
+	if err != nil {
+		t.Fatalf("resolveFileConfig: %v", err)
+	}
+	if cfg.copyDenyMatcher.Decide("app.env", false) == ignore.Unmatched {
+		t.Error("app.env: deny from git config (global) did not reach the deny matcher")
+	}
+	if cfg.copyDenyMatcher.Decide("keep.env", false) != ignore.Unmatched {
+		t.Error("keep.env: denied by a pattern that does not name it")
 	}
 }
 

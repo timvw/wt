@@ -221,7 +221,12 @@ func printFilesSection(files map[string]any) {
 		{"exclude", excludePatterns},
 	} {
 		for _, p := range group.patterns {
-			fmt.Printf("  %-15s %-30s (%s)\n", group.label+":", p.Pattern, p.Source)
+			// %q, matching the validation errors in files.go. A pattern is
+			// attacker-influenced text — a repo's committed .wt.toml or a
+			// .git/config that arrived with a handed-over directory — and it
+			// can carry control bytes. Quoting also makes a trailing space
+			// visible, which is the one whitespace the ignore parser honours.
+			fmt.Printf("  %-15s %-30q (%s)\n", group.label+":", p.Pattern, p.Source)
 		}
 	}
 

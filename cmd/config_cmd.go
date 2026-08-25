@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -59,6 +60,12 @@ var configShowCmd = &cobra.Command{
 					"repo_pattern": map[string]string{"value": repoPattern, "source": configSources.RepoPattern},
 					"hooks_policy": map[string]string{"value": hooksPolicyValue, "source": hooksPolicySource},
 					"copy_ignored": map[string]string{"value": fmt.Sprintf("%t", filesCopyIgnored), "source": configSources.CopyIgnored},
+					// The lists are summarised, not enumerated: `wt info` prints
+					// them pattern by pattern. This answers "is my git config
+					// being read at all", which is what sends people here.
+					"copy":    listSummary(filesCopy),
+					"link":    listSummary(filesLink),
+					"exclude": listSummary(filesExclude),
 				},
 			}
 			if configRepoFound {
@@ -85,6 +92,15 @@ var configShowCmd = &cobra.Command{
 			{"hooks_policy", hooksPolicyValue, hooksPolicySource},
 			{"copy_ignored", fmt.Sprintf("%t", filesCopyIgnored), configSources.CopyIgnored},
 		}
+		for _, list := range []struct {
+			key      string
+			patterns []layeredPattern
+		}{
+			{"copy", filesCopy}, {"link", filesLink}, {"exclude", filesExclude},
+		} {
+			s := listSummary(list.patterns)
+			rows = append(rows, struct{ key, value, source string }{list.key, s["value"], s["source"]})
+		}
 		// Size the value column to the widest value (min 40) so long patterns
 		// don't push their source marker out of the column.
 		width := 40
@@ -108,6 +124,42 @@ func configShowPatternValue() string {
 	}
 
 	return "(none)"
+}
+
+// listSummary renders one [files] list as a count and the layers that fed it,
+// in the shape the scalar rows use.
+//
+// A count rather than the patterns themselves: the lists accumulate, so there
+// can be many, and no single one of them is "the effective value" the way a
+// scalar has one. The layers are what the reader is usually after — "is my
+// .git/config being read at all" is the question that sends people to
+// `wt config show`. `wt info` prints the patterns individually.
+//
+// Sources are listed in the order the layers apply, deduplicated, so a repeated
+// layer name does not pad the column.
+func listSummary(patterns []layeredPattern) map[string]string {
+	if len(patterns) == 0 {
+		return map[string]string{"value": "(none)", "source": "default"}
+	}
+
+	var sources []string
+	seen := map[string]bool{}
+	for _, p := range patterns {
+		if seen[p.Source] {
+			continue
+		}
+		seen[p.Source] = true
+		sources = append(sources, p.Source)
+	}
+
+	unit := "patterns"
+	if len(patterns) == 1 {
+		unit = "pattern"
+	}
+	return map[string]string{
+		"value":  fmt.Sprintf("%d %s", len(patterns), unit),
+		"source": strings.Join(sources, ", "),
+	}
 }
 
 var configPathCmd = &cobra.Command{

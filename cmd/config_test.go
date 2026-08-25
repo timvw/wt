@@ -1286,6 +1286,51 @@ func TestGitConfigRejectsUnderscoreKeys(t *testing.T) {
 	}
 }
 
+// TestFileListKeysAreMultiValuedInRealGit is the companion to
+// TestAdvertisedGitConfigKeysAreSettable for the three list keys, and it pins
+// the property the whole design rests on: `git config --add` repeated under one
+// name round-trips as several entries, in file order.
+//
+// Reading these through gitConfigValues would compile and pass every stubbed
+// test while silently keeping only the last pattern, so the guard has to be
+// real git.
+func TestFileListKeysAreMultiValuedInRealGit(t *testing.T) {
+	repoDir, gitIn := scratchGitRepo(t)
+
+	adds := []struct{ key, value string }{
+		{"wt.copy", ".env"},
+		{"wt.copy", ".envrc"},
+		{"wt.copy", "!secrets.env"},
+		{"wt.link", "node_modules"},
+		{"wt.exclude", "*.pem"},
+	}
+	for _, a := range adds {
+		if out, err := gitIn("config", "--local", "--add", a.key, a.value); err != nil {
+			t.Fatalf("git config --add %s %s: %v: %s", a.key, a.value, err, out)
+		}
+	}
+
+	origCopy, origLink, origExclude := filesCopy, filesLink, filesExclude
+	t.Cleanup(func() { filesCopy, filesLink, filesExclude = origCopy, origLink, origExclude })
+	filesCopy, filesLink, filesExclude = nil, nil, nil
+
+	t.Chdir(repoDir)
+	accumulateGitConfigFilePatterns(defaultGitConfig(gitScopeLocal), "git config (local)")
+
+	// Order is the order git reports, and the "!" survives verbatim: it is the
+	// documented way to un-add an inherited pattern.
+	wantCopy := []string{".env", ".envrc", "!secrets.env"}
+	if got := patternStrings(filesCopy); !equalStrings(got, wantCopy) {
+		t.Errorf("copy = %v, want %v", got, wantCopy)
+	}
+	if got := patternStrings(filesLink); !equalStrings(got, []string{"node_modules"}) {
+		t.Errorf("link = %v, want [node_modules]", got)
+	}
+	if got := patternStrings(filesExclude); !equalStrings(got, []string{"*.pem"}) {
+		t.Errorf("exclude = %v, want [*.pem]", got)
+	}
+}
+
 func TestDefaultGitConfigMultilineAndValuelessKeys(t *testing.T) {
 	// git config values may contain newlines, and a key may be present with no
 	// value at all. Both must survive parsing without corrupting neighbours.

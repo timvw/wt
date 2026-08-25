@@ -35,6 +35,9 @@ type Config struct {
 // layers instead of replacing: a user who wants .env everywhere plus whatever
 // a project adds has no way to express that if the layers overwrite each
 // other. See accumulateFilePatterns.
+//
+// They are also readable from git config, as the multi-valued keys wt.copy,
+// wt.link and wt.exclude — see accumulateGitConfigFilePatterns.
 type Files struct {
 	Copy        []string `toml:"copy"`
 	Link        []string `toml:"link"`
@@ -251,17 +254,30 @@ func gitConfigValues(entries []gitConfigEntry) map[string]string {
 	return values
 }
 
-// applyGitConfig applies wt.* scalar settings from one git config scope.
+// applyGitConfig applies wt.* scalar settings from one git config scope. The
+// [files] list keys arrive separately, via accumulateGitConfigFilePatterns.
 //
-// Hooks are intentionally not read from git config. The list itself could be
-// carried by a multi-valued key, and the TOML merge is already decided —
-// loadWorktreeConfig resolves each event on its own, the highest layer naming
-// an event supplying that event's whole command list. What git config cannot
-// carry is the trust story: .git/config is per-repo but is not always the
-// reader's own, since a repo handed over as a directory rather than a clone
-// brings its .git/config along (see the trust store rationale in trust.go), and
-// nothing in the scalar path gates a source the way `wt trust` gates a
-// committed .wt.toml. So git config stays scalar-only.
+// The dividing line is not scalar versus list — it is that git config carries
+// settings, never commands, nor the policy that gates commands:
+//
+//   - [hooks] is never read from git config, at any scope. Not because a
+//     multi-valued key could not carry the commands, and not because the merge
+//     is undecided (loadWorktreeConfig resolves each event on its own, the
+//     highest layer naming an event supplying that event's whole list). It is
+//     because approveHooks fails OPEN: it gates on the source label, prompting
+//     only when hookSources says hookSourceRepoConfig, and returns true for
+//     everything else. A hook arriving under any new label would therefore run
+//     unprompted — and .git/config is not reliably the reader's own file, since
+//     a repo handed over as a directory rather than a clone brings its
+//     .git/config along (see the trust store rationale in trust.go). Adding a
+//     source here means teaching approveHooks about it first.
+//   - hooks_policy is never read from git config either, for the reason in
+//     resolveHooksPolicy: it is the gate on that execution, and a repository
+//     choosing how closely wt scrutinises its own hooks defeats the mechanism.
+//   - [files] copy/link/exclude may come in, because they are declarative data
+//     bounded by invariants F1-F7 rather than commands. The copy universe is
+//     the ignored set of the main worktree, a strict subset of what
+//     wt.copyIgnored already selects from this same scope with no gate.
 //
 // Key spelling: a git config key is the TOML key with any section flattened and
 // multi-word names camelCased — wt.repoRoot, wt.repoPattern, wt.copyIgnored.
@@ -302,10 +318,8 @@ func applyGitConfig(entries []gitConfigEntry, sourceLabel string) {
 		repoPattern = v
 		configSources.RepoPattern = sourceLabel
 	}
-	// copy_ignored is the one [files] key readable from git config: it is a
-	// scalar. The list keys would need --get-all handling for multi-valued
-	// keys, and there is no accumulation story for git config layers, so they
-	// stay TOML-only (documented in docs/configuration.md).
+	// The [files] scalar. Its list siblings are not read here because they do
+	// not collapse to one value per key — see accumulateGitConfigFilePatterns.
 	if v, ok := values["wt.copyignored"]; ok {
 		if b, ok := parseGitBool(v); ok {
 			filesCopyIgnored = b
@@ -337,8 +351,17 @@ func parseGitBool(v string) (bool, bool) {
 // accumulate for the mirror-image reason — a global "never copy *.pem" has to
 // hold against any repository's config.
 //
-// First-seen order is preserved so the effective list reads as
-// config file, then repo config, then .worktreeinclude.
+// First-seen order is preserved, so the effective list reads in layer order:
+// git config (global), config file, repo config, git config (local), then
+// .worktreeinclude. A pattern contributed by more than one layer is listed once
+// and credited to the first — the lowest — that supplied it.
+//
+// That order is for display and attribution only. It cannot decide which files
+// are materialised, because every matcher built from these lists is pure
+// any-match: copy negations are hoisted into a deny matcher applied
+// unconditionally, and exclude and link reject negation outright (see
+// splitCopyNegations and validateFilePatterns). A deny therefore beats a
+// positive pattern from any layer, including a higher one.
 func accumulateFilePatterns(dst []layeredPattern, patterns []string, source string) []layeredPattern {
 	for _, p := range patterns {
 		// Patterns are kept verbatim: gitignore gives a trailing space meaning
@@ -361,6 +384,39 @@ func accumulateFilePatterns(dst []layeredPattern, patterns []string, source stri
 		dst = append(dst, layeredPattern{Pattern: p, Source: source})
 	}
 	return dst
+}
+
+// gitConfigFileListKeys maps a git config key to the accumulated list it feeds.
+// The keys are lowercase because that is how git reports a variable name.
+//
+// The spellings drop the [files] section rather than prefixing it, following
+// wt.copyIgnored, which is [files] copy_ignored.
+var gitConfigFileListKeys = map[string]func() *[]layeredPattern{
+	"wt.copy":    func() *[]layeredPattern { return &filesCopy },
+	"wt.link":    func() *[]layeredPattern { return &filesLink },
+	"wt.exclude": func() *[]layeredPattern { return &filesExclude },
+}
+
+// accumulateGitConfigFilePatterns folds the [files] list keys from one git
+// config scope into the accumulated lists.
+//
+// It reads the raw entries rather than the gitConfigValues map, because these
+// keys are multi-valued: `git config --add wt.copy` twice is two patterns, and
+// collapsing to one value per key would silently keep only the last. git
+// reports repeats in file order, and defaultGitConfig preserves them.
+//
+// Values are taken verbatim. A pattern's leading "!" and trailing whitespace
+// both carry meaning to the ignore parser, and accumulateFilePatterns is what
+// decides that a blank entry is worth dropping.
+func accumulateGitConfigFilePatterns(entries []gitConfigEntry, sourceLabel string) {
+	for _, entry := range entries {
+		target, ok := gitConfigFileListKeys[strings.ToLower(entry.Key)]
+		if !ok {
+			continue
+		}
+		list := target()
+		*list = accumulateFilePatterns(*list, []string{entry.Value}, sourceLabel)
+	}
 }
 
 // defaultConfigTemplate is the content written by `wt config init`.
@@ -436,8 +492,11 @@ const defaultConfigTemplate = `# wt configuration file
 # An existing destination file is skipped, never overwritten (use 'wt copy --force').
 # Skip once with --no-copy; switch the feature off with WT_FILES_DISABLED=1.
 #
-# The three list keys accumulate with a repo's .wt.toml and its .worktreeinclude
-# rather than being replaced by them; 'exclude' is applied last and always wins.
+# The three list keys are a union across every layer — this file, git config
+# (wt.copy / wt.link / wt.exclude, multi-valued, 'git config --add' per pattern),
+# a repo's .wt.toml and its .worktreeinclude — rather than one replacing another.
+# 'exclude' is applied last and always wins. To drop a pattern a lower layer
+# contributed, deny it: a "!" entry in 'copy' beats every layer's copy patterns.
 #
 # [files]
 # copy = [".env", ".envrc", ".claude/settings.local.json"]
@@ -542,10 +601,12 @@ func loadWorktreeConfig() {
 	repoPattern = defaultRepoPattern
 
 	// 2. Global git config (~/.gitconfig) — the broadest fallback, below wt's
-	// own config file. Read once and used twice: the scalar settings, and the
-	// wt.context.* rules, which no other git scope may supply.
+	// own config file. Read once and used three times: the scalar settings, the
+	// [files] list keys, and the wt.context.* rules, which no other git scope
+	// may supply.
 	globalGit := gitConfigFn(gitScopeGlobal)
 	applyGitConfig(globalGit, "git config (global)")
+	accumulateGitConfigFilePatterns(globalGit, "git config (global)")
 	contextRules = contextRulesFromGitConfig(globalGit)
 
 	// 3. Load config file
@@ -701,7 +762,13 @@ func loadWorktreeConfig() {
 	// once in the main checkout applies from every worktree of that repo.
 	//
 	// wt.context.* is deliberately not read here — see contextRulesFromGitConfig.
-	applyGitConfig(gitConfigFn(gitScopeLocal), "git config (local)")
+	//
+	// The [files] lists are read here, and this is the scope that answers "keep
+	// my untracked files coming across, per repo, with nothing committed": it
+	// needs no file the repository would carry in a pull request.
+	localGit := gitConfigFn(gitScopeLocal)
+	applyGitConfig(localGit, "git config (local)")
+	accumulateGitConfigFilePatterns(localGit, "git config (local)")
 
 	// 6. Environment variables override every file-based source
 	if v := os.Getenv("WORKTREE_ROOT"); v != "" {
