@@ -39,6 +39,7 @@ var configShowCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		pattern := configShowPatternValue()
 		hooksPolicyValue, hooksPolicySource := resolveHooksPolicy()
+		copyList, linkList, excludeList := resolvedFileLists()
 
 		configStatus := "not found"
 		if configFileFound {
@@ -63,9 +64,9 @@ var configShowCmd = &cobra.Command{
 					// The lists are summarised, not enumerated: `wt info` prints
 					// them pattern by pattern. This answers "is my git config
 					// being read at all", which is what sends people here.
-					"copy":    listSummary(filesCopy),
-					"link":    listSummary(filesLink),
-					"exclude": listSummary(filesExclude),
+					"copy":    listSummary(copyList),
+					"link":    listSummary(linkList),
+					"exclude": listSummary(excludeList),
 				},
 			}
 			if configRepoFound {
@@ -96,7 +97,7 @@ var configShowCmd = &cobra.Command{
 			key      string
 			patterns []layeredPattern
 		}{
-			{"copy", filesCopy}, {"link", filesLink}, {"exclude", filesExclude},
+			{"copy", copyList}, {"link", linkList}, {"exclude", excludeList},
 		} {
 			s := listSummary(list.patterns)
 			rows = append(rows, struct{ key, value, source string }{list.key, s["value"], s["source"]})
@@ -124,6 +125,24 @@ func configShowPatternValue() string {
 	}
 
 	return "(none)"
+}
+
+// resolvedFileLists returns the three [files] lists with every layer folded in,
+// which is one more than the loader globals hold: .worktreeinclude lives at the
+// main worktree root and is read later, by resolveFileConfig.
+//
+// `wt info` resolves the same way, and the two commands disagreeing about how
+// many patterns are in effect would send the reader looking for a bug that is
+// not there. A validation error is not reported here — the lists are populated
+// before validation runs, so the counts stand, and `wt info` is where the
+// offending pattern is named.
+func resolvedFileLists() (copyList, linkList, excludeList []layeredPattern) {
+	main := ""
+	if info, err := getRepoInfo(); err == nil {
+		main = info.Main
+	}
+	cfg, _ := resolveFileConfig(main)
+	return cfg.Copy, cfg.Link, cfg.Exclude
 }
 
 // listSummary renders one [files] list as a count and the layers that fed it,

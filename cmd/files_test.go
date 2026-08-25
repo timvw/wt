@@ -699,6 +699,38 @@ func TestListSummaryReportsEffectivePatternSources(t *testing.T) {
 	}
 }
 
+// `wt config show` counts every layer, including the one the loader globals do
+// not hold: .worktreeinclude is read later, by resolveFileConfig. `wt info`
+// resolves the same way, and the two commands disagreeing about how many
+// patterns are in effect would send the reader hunting a bug that is not there.
+func TestConfigShowCountsTheWorktreeIncludeLayer(t *testing.T) {
+	isolateFileConfig(t)
+
+	repoDir := newFilesRepo(t, "")
+	writeFile(t, filepath.Join(repoDir, worktreeIncludeFile), "committed.txt\n")
+
+	gitRepoRootFn = func() (string, error) { return repoDir, nil }
+	gitConfigFn = gitScopedEntries(nil, gitList("wt.copy", ".env"))
+	loadWorktreeConfig()
+
+	// getRepoInfo shells out to git in the working directory, so this is what
+	// tells resolvedFileLists where the main worktree is.
+	t.Chdir(repoDir)
+
+	copyList, _, _ := resolvedFileLists()
+	got := listSummary(copyList)
+	if got["value"] != "2 patterns" {
+		t.Errorf("value = %q, want 2 patterns (git config + %s)", got["value"], worktreeIncludeFile)
+	}
+	if !strings.Contains(got["source"], worktreeIncludeFile) {
+		t.Errorf("source = %q, want it to name %s", got["source"], worktreeIncludeFile)
+	}
+	// The loader globals alone are what this test exists to catch.
+	if summary := listSummary(filesCopy); summary["value"] == got["value"] {
+		t.Fatalf("filesCopy already holds %s; this test no longer distinguishes the layers", worktreeIncludeFile)
+	}
+}
+
 // Layer order is display and attribution only: it cannot decide which files are
 // materialised. A "!" deny in the LOWEST layer beats a positive pattern in the
 // highest, because negations are hoisted out of the copy matcher and applied
