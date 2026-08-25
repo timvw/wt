@@ -72,13 +72,20 @@ git config --global wt.root ~/projects/worktrees
 | Key | Equivalent |
 | --- | --- |
 | `wt.root` | `root` |
-| `wt.repo_root` | `repo_root` |
+| `wt.repoRoot` | `repo_root` |
 | `wt.strategy` | `strategy` |
 | `wt.pattern` | `pattern` |
 | `wt.separator` | `separator` |
-| `wt.repo_pattern` | `repo_pattern` |
+| `wt.repoPattern` | `repo_pattern` |
 | `wt.copyIgnored` | `[files] copy_ignored` (see [Files](#files)) |
 | `wt.context.<name>.whenpath` / `.env` | `[[context]]` (**`--global` only**) |
+
+The spelling rule for the scalar settings: **a git config key is the TOML key
+with any section flattened and multi-word names camelCased.** git config
+variable names allow only alphanumerics and `-`, so `wt.repo_root` is not a
+legal key — see [Key spelling](#key-spelling) for what happens if you write one
+anyway. `wt.context.*` is not flattened: it keeps `<name>` as a git
+*subsection*, which is how one key can be repeated per context.
 
 Notes:
 
@@ -89,6 +96,36 @@ Notes:
   settings apply from every worktree of that repo.
 - `wt.context.*` is the exception to that: it is read from `--global` only.
   See [Setting the category per directory](#setting-the-category-per-directory).
+
+### Key spelling
+
+git config variable names allow only alphanumerics and `-`. An underscore is not
+a spelling variant, it is a parse error — which is why the multi-word keys are
+camelCased rather than carried over from TOML verbatim:
+
+```console
+$ git config --local wt.repo_root ~/dev/repos
+error: invalid key: wt.repo_root
+$ git config --local wt.repoRoot ~/dev/repos     # this is the key
+```
+
+Names are case-insensitive, so `wt.reporoot` works just as well.
+
+`git config` refuses the bad key, but nothing stops you writing it into
+`.git/config` by hand — or generating it, e.g. via home-manager's
+`programs.git.extraConfig`, which does not validate key names. One such line
+makes git refuse to parse the **whole file**:
+
+```console
+$ printf '[wt]\n\trepo_root = /tmp/x\n' >> .git/config
+$ git config --local --get wt.strategy
+fatal: bad config line 11 in file .git/config
+```
+
+`wt` treats an unreadable scope as "nothing configured here", so the symptom is
+that every `wt.*` setting in that file quietly stops applying — not an error.
+If git config settings seem to be ignored, run `git config --list --local` and
+`wt config show` to see which layer is actually supplying each value.
 
 ## Precedence
 
@@ -105,9 +142,18 @@ Configuration values are resolved in this order (highest priority first):
 *which* TOML file is loaded at level 4. Values in that file are still overridden
 by `.wt.toml`, local git config, and environment variables.
 
-Two settings are lists rather than scalars and so do not "win" — `[hooks]` and
-the `[files]` list keys accumulate across layers instead. See
+The `[files]` list keys do not "win": they accumulate across layers instead, so
+a later layer adds to the earlier ones rather than replacing them. See
 [Files › Accumulation](#accumulation).
+
+`[hooks]` is neither. Each hook event is resolved on its own, and the highest
+layer giving that event a **non-empty** command list supplies the whole list —
+a repo `.wt.toml` defining `post_checkout` replaces the config file's
+`post_checkout` outright, while leaving every event it does not mention alone.
+An empty list reads as "not set" rather than "cleared", so `post_checkout = []`
+in `.wt.toml` does not suppress an inherited `post_checkout`; use
+`WT_HOOKS_DISABLED=1` or `hooks_policy = "off"` to stop hooks running. See
+[Hooks](#hooks).
 
 Run `wt config show` to see the effective value and source of each setting:
 
@@ -512,11 +558,9 @@ default `false`. It is the only `[files]` key readable from git config — the l
 keys would need `--get-all` handling for multi-valued keys and have no
 accumulation story across git scopes, so they stay TOML-only.
 
-Note the spelling: in git config it is `wt.copyIgnored`, not `wt.copy_ignored`.
-git config variable names allow only alphanumerics and `-`, and git rejects an
-underscore outright — a config *file* containing one fails to parse entirely.
-The name is case-insensitive, so `wt.copyignored` works just as well, and as
-with any git boolean the value may be omitted to mean true:
+Note the spelling: in git config it is `wt.copyIgnored`, not `wt.copy_ignored`
+— see [Key spelling](#key-spelling). As with any git boolean the value may be
+omitted to mean true:
 
 ```bash
 git config --local wt.copyIgnored true

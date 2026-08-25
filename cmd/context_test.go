@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -154,17 +153,14 @@ func TestContextRulesFromGitConfig(t *testing.T) {
 // The real `git config` round trip: proves the key shape documented for users
 // is the one that comes back, and that --add really yields repeated entries.
 func TestContextRulesFromRealGitConfig(t *testing.T) {
-	repoDir := t.TempDir()
+	repoDir, gitIn := scratchGitRepo(t)
 	run := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = repoDir
-		if out, err := cmd.CombinedOutput(); err != nil {
+		if out, err := gitIn(args...); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
 
-	run("init", "-q", ".")
 	run("config", "--local", "wt.context.work.whenpath", "~/dev/repos/work")
 	run("config", "--local", "--add", "wt.context.work.env", "WT_CATEGORY=work")
 	run("config", "--local", "--add", "wt.context.work.env", "WT_ORG=acme")
