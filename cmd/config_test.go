@@ -1160,6 +1160,132 @@ func TestDefaultGitConfigParsing(t *testing.T) {
 	}
 }
 
+// scratchGitRepo initialises an empty repository and returns it alongside a git
+// runner bound to it.
+//
+// The tests below assert on what real git accepts, so they have to be the only
+// thing deciding what git sees. Three inherited channels would otherwise get a
+// say: the repository git resolves to (GIT_DIR and friends would send --local
+// writes into whatever repo the developer or CI job was already in), the config
+// files git reads (a ~/.gitconfig or /etc/gitconfig carrying an include or a
+// wt.* key of its own shows up in the readback), and command-scoped config
+// (GIT_CONFIG_PARAMETERS is how `git -c` reaches a child process; clearing
+// GIT_CONFIG_COUNT likewise disables any GIT_CONFIG_KEY_<n> pairs).
+func scratchGitRepo(t *testing.T) (string, func(args ...string) ([]byte, error)) {
+	t.Helper()
+
+	for _, name := range []string{
+		"GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
+		"GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS",
+	} {
+		if orig, ok := os.LookupEnv(name); ok {
+			key, value := name, orig
+			os.Unsetenv(key)
+			t.Cleanup(func() { os.Setenv(key, value) })
+		}
+	}
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+
+	repoDir := t.TempDir()
+	gitIn := func(args ...string) ([]byte, error) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		return cmd.CombinedOutput()
+	}
+	if out, err := gitIn("init", "-q", "."); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	return repoDir, gitIn
+}
+
+// TestAdvertisedGitConfigKeysAreSettable checks every advertised scalar wt.*
+// key against real git, and then that applyGitConfig maps the name git actually
+// reports onto the setting it is supposed to drive. The other documented keys,
+// wt.context.<name>.whenpath and .env, get the same round trip in
+// TestContextRulesFromRealGitConfig.
+//
+// The stubbed tests elsewhere in this file build entries from map literals, so
+// they agree with whatever spelling the test author typed. That is how
+// wt.repo_root and wt.repo_pattern came to be documented, read, and completely
+// unsettable — git rejects "_" in a key name outright (#149). Any new scalar
+// key belongs in this table.
+func TestAdvertisedGitConfigKeysAreSettable(t *testing.T) {
+	repoDir, gitIn := scratchGitRepo(t)
+
+	cases := []struct {
+		key   string
+		value string
+		got   func() string
+	}{
+		{"wt.root", "/tmp/wt-root", func() string { return worktreeRoot }},
+		{"wt.repoRoot", "/tmp/wt-repos", func() string { return reposRoot }},
+		{"wt.strategy", "sibling-repo", func() string { return worktreeStrategy }},
+		{"wt.pattern", "{.repo.Main}/../{.branch}", func() string { return worktreePattern }},
+		{"wt.separator", "-", func() string { return worktreeSeparator }},
+		{"wt.repoPattern", "{.repoRoot}/{.repo.Name}", func() string { return repoPattern }},
+		{"wt.copyIgnored", "true", func() string {
+			if filesCopyIgnored {
+				return "true"
+			}
+			return "false"
+		}},
+	}
+
+	for _, tc := range cases {
+		if out, err := gitIn("config", "--local", tc.key, tc.value); err != nil {
+			t.Errorf("git config --local %s: %v: %s", tc.key, err, out)
+		}
+	}
+	if t.Failed() {
+		// An unsettable key cannot be wired up; the rest of the test would
+		// only report the same defect a second time.
+		t.FailNow()
+	}
+
+	origRoot, origRepos, origStrategy := worktreeRoot, reposRoot, worktreeStrategy
+	origPattern, origSeparator := worktreePattern, worktreeSeparator
+	origRepoPattern, origIgnored := repoPattern, filesCopyIgnored
+	origSources := configSources
+	t.Cleanup(func() {
+		worktreeRoot, reposRoot, worktreeStrategy = origRoot, origRepos, origStrategy
+		worktreePattern, worktreeSeparator = origPattern, origSeparator
+		repoPattern, filesCopyIgnored = origRepoPattern, origIgnored
+		configSources = origSources
+	})
+
+	t.Chdir(repoDir)
+
+	applyGitConfig(defaultGitConfig(gitScopeLocal), "git config (local)")
+
+	for _, tc := range cases {
+		if got := tc.got(); got != tc.value {
+			t.Errorf("%s: setting = %q, want %q — key is settable but not wired up",
+				tc.key, got, tc.value)
+		}
+	}
+}
+
+// TestGitConfigRejectsUnderscoreKeys records why the multi-word keys are
+// camelCased, so the TOML spelling is not "restored" later.
+func TestGitConfigRejectsUnderscoreKeys(t *testing.T) {
+	_, gitIn := scratchGitRepo(t)
+
+	for _, key := range []string{"wt.repo_root", "wt.repo_pattern", "wt.copy_ignored"} {
+		out, err := gitIn("config", "--local", key, "x")
+		if err == nil {
+			t.Errorf("git accepted %s (%s); the camelCase spelling may be unnecessary", key, out)
+			continue
+		}
+		// Any git failure would satisfy err != nil, including a broken
+		// repository or a git too old for these arguments. Only the name
+		// itself being invalid explains the camelCase spelling.
+		if !strings.Contains(string(out), "invalid key") {
+			t.Errorf("git rejected %s for some other reason than the key name: %v: %s", key, err, out)
+		}
+	}
+}
+
 func TestDefaultGitConfigMultilineAndValuelessKeys(t *testing.T) {
 	// git config values may contain newlines, and a key may be present with no
 	// value at all. Both must survive parsing without corrupting neighbours.

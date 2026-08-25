@@ -43,7 +43,8 @@ Section B: Contributing to wt (project authors/maintainers)
 Configuration and hooks
 - Config file: ~/.config/wt/config.toml (or WT_CONFIG / --config)
 - Per-repo override: .wt.toml in the repo root (project policy; ignores root, repo_root, repo_pattern, clone hooks)
-- Git config: wt.root, wt.repo_root, wt.strategy, wt.pattern, wt.separator, wt.repo_pattern, wt.copyIgnored via git config --local/--global (scalars only, no hooks, no [files] lists)
+- Git config: wt.root, wt.repoRoot, wt.strategy, wt.pattern, wt.separator, wt.repoPattern, wt.copyIgnored via git config --local/--global (scalars only, no hooks, no [files] lists)
+- Git config key spelling: the TOML key with sections flattened and multi-word names camelCased; git rejects "_" in a key name, and one such line makes the whole config file unparseable
 - Key settings: root, strategy, pattern, separator, repo_root, repo_pattern
 - Env overrides: WORKTREE_ROOT, WORKTREE_STRATEGY, WORKTREE_PATTERN, WORKTREE_SEPARATOR, WT_REPO_ROOT, WT_REPO_PATTERN, WT_COPY_IGNORED
 - Precedence (highest first): env > local git config > .wt.toml > config file > global git config > defaults
@@ -66,7 +67,7 @@ Untracked file materialisation ([files])
 - .worktreeinclude at the MAIN worktree root (gitignore syntax, one pattern per line) is unioned into copy; meant to be committed
 - The three list keys ACCUMULATE across layers: config file -> repo .wt.toml -> .worktreeinclude; duplicates dropped, first-seen order kept
 - exclude is applied last and cannot be overridden by a later copy entry or by copy_ignored
-- copy_ignored is a scalar and follows the normal precedence chain; it is the only [files] key readable from git config, spelled wt.copyIgnored there (git config names allow no underscore)
+- copy_ignored is a scalar and follows the normal precedence chain; it is the only [files] key readable from git config, spelled wt.copyIgnored there
 - Candidates come from 'git ls-files --others --ignored --exclude-standard': tracked files are NEVER copied
 - Never copied regardless of patterns: .git/ .bzr/ .hg/ .jj/ .pijul/ .sl/ .svn/ and any registered worktree of the same repo
 - Copy method: reflink on APFS/Btrfs/XFS, buffered copy elsewhere (incl. Windows); symlinks recreated as symlinks, never dereferenced

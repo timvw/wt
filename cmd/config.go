@@ -252,10 +252,24 @@ func gitConfigValues(entries []gitConfigEntry) map[string]string {
 }
 
 // applyGitConfig applies wt.* scalar settings from one git config scope.
-// Hooks are intentionally not read from git config: representing lists is
-// possible via multi-valued keys, but the merge semantics (replace vs append,
-// and how to clear inherited hooks) are not settled for the TOML sources
-// either, so git config stays scalar-only.
+//
+// Hooks are intentionally not read from git config. The list itself could be
+// carried by a multi-valued key, and the TOML merge is already decided —
+// loadWorktreeConfig resolves each event on its own, the highest layer naming
+// an event supplying that event's whole command list. What git config cannot
+// carry is the trust story: .git/config is per-repo but is not always the
+// reader's own, since a repo handed over as a directory rather than a clone
+// brings its .git/config along (see the trust store rationale in trust.go), and
+// nothing in the scalar path gates a source the way `wt trust` gates a
+// committed .wt.toml. So git config stays scalar-only.
+//
+// Key spelling: a git config key is the TOML key with any section flattened and
+// multi-word names camelCased — wt.repoRoot, wt.repoPattern, wt.copyIgnored.
+// git config variable names allow only alphanumerics and "-", and git rejects an
+// underscore outright ("error: invalid key"), a whole config file holding one
+// included: a single `repo_root =` line makes every wt.* key in that scope
+// unreadable. git lowercases the name it reports, hence the lookup keys below.
+// TestAdvertisedGitConfigKeysAreSettable pins this against real git.
 func applyGitConfig(entries []gitConfigEntry, sourceLabel string) {
 	values := gitConfigValues(entries)
 	if len(values) == 0 {
@@ -266,7 +280,7 @@ func applyGitConfig(entries []gitConfigEntry, sourceLabel string) {
 		worktreeRoot = expandHome(v)
 		configSources.Root = sourceLabel
 	}
-	if v := strings.TrimSpace(values["wt.repo_root"]); v != "" {
+	if v := strings.TrimSpace(values["wt.reporoot"]); v != "" {
 		reposRoot = expandHome(v)
 		configSources.RepoRoot = sourceLabel
 	}
@@ -284,7 +298,7 @@ func applyGitConfig(entries []gitConfigEntry, sourceLabel string) {
 		worktreeSeparator = v
 		configSources.Separator = sourceLabel
 	}
-	if v := strings.TrimSpace(values["wt.repo_pattern"]); v != "" {
+	if v := strings.TrimSpace(values["wt.repopattern"]); v != "" {
 		repoPattern = v
 		configSources.RepoPattern = sourceLabel
 	}
@@ -292,11 +306,6 @@ func applyGitConfig(entries []gitConfigEntry, sourceLabel string) {
 	// scalar. The list keys would need --get-all handling for multi-valued
 	// keys, and there is no accumulation story for git config layers, so they
 	// stay TOML-only (documented in docs/configuration.md).
-	//
-	// It is spelled wt.copyIgnored there, not wt.copy_ignored: git config
-	// variable names allow only alphanumerics and "-", and it rejects an
-	// underscore outright ("error: invalid key"), a whole config file holding
-	// one included. git lowercases the name it reports, hence the lookup key.
 	if v, ok := values["wt.copyignored"]; ok {
 		if b, ok := parseGitBool(v); ok {
 			filesCopyIgnored = b
