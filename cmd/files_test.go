@@ -281,33 +281,68 @@ func TestExcludeAlsoAppliesToLink(t *testing.T) {
 	}
 }
 
-// A blank entry is dropped on the way in — .worktreeinclude is gitignore
-// syntax, where a blank line means nothing. A lone "!" is not blank: it reads
-// as a deny, survives accumulation, and would then be compiled away into a
-// pattern that protects nothing while the user believes otherwise.
-func TestABarePatternNegationIsRefused(t *testing.T) {
+// An entry that matches nothing is refused rather than dropped. A blank *line*
+// in .worktreeinclude is gitignore syntax for nothing at all and ignore.ParseFile
+// discards it, so anything blank still standing was written out as a list entry
+// — in TOML or with `git config --add` — and is a mistake. A lone "!" is the
+// same mistake wearing a deny: it would compile away into a pattern that
+// protects nothing while the user believes otherwise.
+func TestAPatternThatMatchesNothingIsRefused(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries string
+		want    string
+	}{
+		{name: "bare negation", entries: `".env", "!"`, want: `"!"`},
+		{name: "empty string", entries: `".env", ""`, want: `""`},
+		{name: "whitespace only", entries: `".env", "   "`, want: `"   "`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateFileConfig(t)
+
+			globalCfg := filepath.Join(t.TempDir(), "config.toml")
+			writeFile(t, globalCfg, "[files]\ncopy = ["+tt.entries+"]\n")
+
+			repoDir := newFilesRepo(t, "")
+			t.Setenv("WT_CONFIG", globalCfg)
+			gitRepoRootFn = func() (string, error) { return repoDir, nil }
+			loadWorktreeConfig()
+
+			_, err := resolveFileConfig(repoDir)
+			if err == nil {
+				t.Fatalf("expected %s to be refused", tt.name)
+			}
+			if !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), "empty") {
+				t.Errorf("error = %q, want it to name %s as empty", err, tt.want)
+			}
+		})
+	}
+}
+
+// An empty value from git config is refused the same way, and the error names
+// the scope so the reader knows which `git config --add` to go and fix rather
+// than hunting through TOML files that have nothing to do with it.
+func TestAnEmptyGitConfigPatternIsRefused(t *testing.T) {
 	isolateFileConfig(t)
 
-	globalCfg := filepath.Join(t.TempDir(), "config.toml")
-	writeFile(t, globalCfg, "[files]\ncopy = [\".env\", \"!\"]\n")
-
 	repoDir := newFilesRepo(t, "")
-	t.Setenv("WT_CONFIG", globalCfg)
 	gitRepoRootFn = func() (string, error) { return repoDir, nil }
+	gitConfigFn = gitScopedEntries(nil, gitList("wt.copy", ".env", ""))
 	loadWorktreeConfig()
 
 	_, err := resolveFileConfig(repoDir)
 	if err == nil {
-		t.Fatal("expected a bare negation to be refused")
+		t.Fatal("expected an empty git config pattern to be refused")
 	}
-	if !strings.Contains(err.Error(), `"!"`) || !strings.Contains(err.Error(), "empty") {
-		t.Errorf("error = %q, want it to name \"!\" as empty", err)
+	if !strings.Contains(err.Error(), `""`) || !strings.Contains(err.Error(), "git config (local)") {
+		t.Errorf("error = %q, want it to name \"\" and the git config scope", err)
 	}
 }
 
-// exclude accumulates with the repo's .wt.toml applied after the user's own
-// config, so a committed "!*.pem" would undo exactly what a global exclude was
-// protecting. Negation is refused in exclude and link for that reason.
+// The layers are a union, so a "!*.pem" in any of them would re-include exactly
+// what an exclude in any other was protecting — the layer either came from
+// makes no difference. Negation is refused in exclude and link for that reason.
 func TestNegationIsRefusedInExcludeAndLink(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -598,6 +633,69 @@ copy = ["config/local.yml", ".env"]
 	}
 	if got := patternsFrom(cfg.Copy); !equalStrings(got, want) {
 		t.Errorf("copy = %v, want %v", got, want)
+	}
+}
+
+// What `wt config show` says about a list, and the one thing it deliberately
+// does not say. The summary is a count plus the layers behind the *effective*
+// patterns; a layer that only repeated what a lower one already contributed has
+// not changed the effective list, so it does not appear.
+func TestListSummaryReportsEffectivePatternSources(t *testing.T) {
+	tests := []struct {
+		name         string
+		global       []gitConfigEntry
+		local        []gitConfigEntry
+		wantValue    string
+		wantSource   string
+		unwantSource string
+	}{
+		{
+			name:       "nothing set",
+			wantValue:  "(none)",
+			wantSource: "default",
+		},
+		{
+			name:       "one scope",
+			local:      gitList("wt.copy", ".env"),
+			wantValue:  "1 pattern",
+			wantSource: "git config (local)",
+		},
+		{
+			name:       "both scopes contributing",
+			global:     gitList("wt.copy", ".env"),
+			local:      gitList("wt.copy", "local.yml"),
+			wantValue:  "2 patterns",
+			wantSource: "git config (global), git config (local)",
+		},
+		{
+			// The local --add is redundant: .env is already in effect from
+			// --global, and the effective list is the same with or without it.
+			name:         "local repeats what global already set",
+			global:       gitList("wt.copy", ".env"),
+			local:        gitList("wt.copy", ".env"),
+			wantValue:    "1 pattern",
+			wantSource:   "git config (global)",
+			unwantSource: "git config (local)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateFileConfig(t)
+			gitRepoRootFn = func() (string, error) { return newFilesRepo(t, ""), nil }
+			gitConfigFn = gitScopedEntries(tt.global, tt.local)
+			loadWorktreeConfig()
+
+			got := listSummary(filesCopy)
+			if got["value"] != tt.wantValue {
+				t.Errorf("value = %q, want %q", got["value"], tt.wantValue)
+			}
+			if got["source"] != tt.wantSource {
+				t.Errorf("source = %q, want %q", got["source"], tt.wantSource)
+			}
+			if tt.unwantSource != "" && strings.Contains(got["source"], tt.unwantSource) {
+				t.Errorf("source = %q, want %q absent", got["source"], tt.unwantSource)
+			}
+		})
 	}
 }
 

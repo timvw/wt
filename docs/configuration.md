@@ -102,10 +102,11 @@ Notes:
   git config --local --add wt.copy .envrc
   ```
 
-  Plain `git config wt.copy X` **replaces** the whole list for that scope, and
-  `--unset` fails once there is more than one value — use `--unset-all wt.copy`
-  to clear it, or `--unset wt.copy <regex>` to drop one. Quote any pattern
-  starting with `!`, which interactive `bash` and `zsh` expand as history.
+  Without `--add`, `git config` refuses to touch a key that already has several
+  values: use `--replace-all wt.copy X` to collapse the list to one entry,
+  `--unset-all wt.copy` to clear it, or `--unset wt.copy <regex>` to drop one.
+  Quote any pattern starting with `!`, which interactive `bash` and `zsh` expand
+  as history.
 - The three list keys are read from **both** scopes, unlike `wt.context.*`.
   `--global` is for "always bring my `.env`"; `--local` is the per-repo case
   with nothing committed. They carry no power to redirect where a worktree

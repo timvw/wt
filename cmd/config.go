@@ -364,13 +364,14 @@ func parseGitBool(v string) (bool, bool) {
 // positive pattern from any layer, including a higher one.
 func accumulateFilePatterns(dst []layeredPattern, patterns []string, source string) []layeredPattern {
 	for _, p := range patterns {
-		// Patterns are kept verbatim: gitignore gives a trailing space meaning
-		// (it is stripped unless escaped, as in "file\ "), so trimming here
-		// would turn "file\ " into "file\" before the ignore parser ever saw
-		// it. Blank-only entries are the one thing worth dropping.
-		if strings.TrimSpace(p) == "" {
-			continue
-		}
+		// Patterns are kept verbatim, including blank ones: gitignore gives a
+		// trailing space meaning (it is stripped unless escaped, as in
+		// "file\ "), so trimming here would turn "file\ " into "file\" before
+		// the ignore parser ever saw it. A blank entry is not dropped here
+		// either — a blank *line* in .worktreeinclude is nothing at all and
+		// ignore.ParseFile has already discarded it, so anything blank that
+		// reaches this point was written out as an entry, which is a mistake
+		// worth naming. validateFilePatterns reports it with its source.
 		duplicate := false
 		for _, existing := range dst {
 			if existing.Pattern == p {
@@ -386,15 +387,22 @@ func accumulateFilePatterns(dst []layeredPattern, patterns []string, source stri
 	return dst
 }
 
-// gitConfigFileListKeys maps a git config key to the accumulated list it feeds.
-// The keys are lowercase because that is how git reports a variable name.
+// fileListForGitConfigKey returns the accumulated list a git config key feeds,
+// or nil for any key that is not one of them.
 //
-// The spellings drop the [files] section rather than prefixing it, following
-// wt.copyIgnored, which is [files] copy_ignored.
-var gitConfigFileListKeys = map[string]func() *[]layeredPattern{
-	"wt.copy":    func() *[]layeredPattern { return &filesCopy },
-	"wt.link":    func() *[]layeredPattern { return &filesLink },
-	"wt.exclude": func() *[]layeredPattern { return &filesExclude },
+// The comparison is against lowercase spellings because that is how git reports
+// a variable name. The spellings drop the [files] section rather than prefixing
+// it, following wt.copyIgnored, which is [files] copy_ignored.
+func fileListForGitConfigKey(key string) *[]layeredPattern {
+	switch strings.ToLower(key) {
+	case "wt.copy":
+		return &filesCopy
+	case "wt.link":
+		return &filesLink
+	case "wt.exclude":
+		return &filesExclude
+	}
+	return nil
 }
 
 // accumulateGitConfigFilePatterns folds the [files] list keys from one git
@@ -405,16 +413,18 @@ var gitConfigFileListKeys = map[string]func() *[]layeredPattern{
 // collapsing to one value per key would silently keep only the last. git
 // reports repeats in file order, and defaultGitConfig preserves them.
 //
-// Values are taken verbatim. A pattern's leading "!" and trailing whitespace
-// both carry meaning to the ignore parser, and accumulateFilePatterns is what
-// decides that a blank entry is worth dropping.
+// Values are taken verbatim: a pattern's leading "!" and trailing whitespace
+// both carry meaning to the ignore parser. An empty value is kept too, and
+// validateFilePatterns rejects it naming this scope — `git config --add wt.copy
+// ""` is a mistake, and silently doing nothing about it is how you spend an
+// afternoon wondering why the copy list is not growing. A *valueless* key is a
+// different thing and defaultGitConfig has already dropped it.
 func accumulateGitConfigFilePatterns(entries []gitConfigEntry, sourceLabel string) {
 	for _, entry := range entries {
-		target, ok := gitConfigFileListKeys[strings.ToLower(entry.Key)]
-		if !ok {
+		list := fileListForGitConfigKey(entry.Key)
+		if list == nil {
 			continue
 		}
-		list := target()
 		*list = accumulateFilePatterns(*list, []string{entry.Value}, sourceLabel)
 	}
 }

@@ -135,8 +135,13 @@ func configShowPatternValue() string {
 // .git/config being read at all" is the question that sends people to
 // `wt config show`. `wt info` prints the patterns individually.
 //
-// Sources are listed in the order the layers apply, deduplicated, so a repeated
-// layer name does not pad the column.
+// The sources are those of the *effective* patterns, in the order the layers
+// apply, with a repeated layer name listed once rather than padding the column.
+// A layer whose every pattern was already contributed by a lower one therefore
+// does not appear: the patterns are deduplicated and each is credited to the
+// first layer that supplied it, the same rule `wt info` displays. Such a layer
+// has not changed the effective list, so there is nothing for it to be the
+// source of.
 func listSummary(patterns []layeredPattern) map[string]string {
 	if len(patterns) == 0 {
 		return map[string]string{"value": "(none)", "source": "default"}
