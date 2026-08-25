@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -39,7 +40,7 @@ var configShowCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		pattern := configShowPatternValue()
 		hooksPolicyValue, hooksPolicySource := resolveHooksPolicy()
-		copyList, linkList, excludeList := resolvedFileLists()
+		copyList, linkList, excludeList, filesErr := resolvedFileLists()
 
 		configStatus := "not found"
 		if configFileFound {
@@ -74,6 +75,9 @@ var configShowCmd = &cobra.Command{
 					"path":   configRepoPath,
 					"status": "found",
 				}
+			}
+			if filesErr != nil {
+				data["files_error"] = filesErr.Error()
 			}
 			return emitJSONSuccess(cmd, data)
 		}
@@ -114,6 +118,12 @@ var configShowCmd = &cobra.Command{
 		for _, r := range rows {
 			fmt.Printf("  %-16s = %-*s (%s)\n", r.key, width, r.value, r.source)
 		}
+		if filesErr != nil {
+			// stderr, so the table stays clean when it is piped. Printed after
+			// the rows because it qualifies the three [files] counts above it,
+			// which may be short by a whole layer.
+			fmt.Fprintf(os.Stderr, "⚠ [files]: %v\n", filesErr)
+		}
 		return nil
 	},
 }
@@ -133,16 +143,21 @@ func configShowPatternValue() string {
 //
 // `wt info` resolves the same way, and the two commands disagreeing about how
 // many patterns are in effect would send the reader looking for a bug that is
-// not there. A validation error is not reported here — the lists are populated
-// before validation runs, so the counts stand, and `wt info` is where the
-// offending pattern is named.
-func resolvedFileLists() (copyList, linkList, excludeList []layeredPattern) {
+// not there.
+//
+// The error is returned rather than swallowed because it decides whether the
+// counts mean anything. A validation error leaves them intact — the lists are
+// populated before validateFilePatterns runs. An unreadable, malformed or
+// symlinked .worktreeinclude does not: resolveFileConfig gives up before
+// folding that layer in, so the counts are short by exactly the layer this
+// helper exists to include.
+func resolvedFileLists() (copyList, linkList, excludeList []layeredPattern, err error) {
 	main := ""
-	if info, err := getRepoInfo(); err == nil {
+	if info, repoErr := getRepoInfo(); repoErr == nil {
 		main = info.Main
 	}
-	cfg, _ := resolveFileConfig(main)
-	return cfg.Copy, cfg.Link, cfg.Exclude
+	cfg, err := resolveFileConfig(main)
+	return cfg.Copy, cfg.Link, cfg.Exclude, err
 }
 
 // listSummary renders one [files] list as a count and the layers that fed it,

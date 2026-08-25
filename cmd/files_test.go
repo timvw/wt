@@ -717,7 +717,10 @@ func TestConfigShowCountsTheWorktreeIncludeLayer(t *testing.T) {
 	// tells resolvedFileLists where the main worktree is.
 	t.Chdir(repoDir)
 
-	copyList, _, _ := resolvedFileLists()
+	copyList, _, _, err := resolvedFileLists()
+	if err != nil {
+		t.Fatalf("resolvedFileLists: %v", err)
+	}
 	got := listSummary(copyList)
 	if got["value"] != "2 patterns" {
 		t.Errorf("value = %q, want 2 patterns (git config + %s)", got["value"], worktreeIncludeFile)
@@ -728,6 +731,39 @@ func TestConfigShowCountsTheWorktreeIncludeLayer(t *testing.T) {
 	// The loader globals alone are what this test exists to catch.
 	if summary := listSummary(filesCopy); summary["value"] == got["value"] {
 		t.Fatalf("filesCopy already holds %s; this test no longer distinguishes the layers", worktreeIncludeFile)
+	}
+}
+
+// When .worktreeinclude cannot be read, resolveFileConfig gives up before
+// folding that layer in — so the counts are short by exactly the layer
+// resolvedFileLists exists to include. Reporting the error is what stops that
+// being silent.
+func TestConfigShowReportsAnUnreadableWorktreeInclude(t *testing.T) {
+	isolateFileConfig(t)
+
+	repoDir := newFilesRepo(t, "")
+	// A symlink is the refusal resolveFileConfig is most explicit about (F7),
+	// and it needs no unusual permissions to set up.
+	if err := os.Symlink(filepath.Join(repoDir, "elsewhere.txt"), filepath.Join(repoDir, worktreeIncludeFile)); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+
+	gitRepoRootFn = func() (string, error) { return repoDir, nil }
+	gitConfigFn = gitScopedEntries(nil, gitList("wt.copy", ".env"))
+	loadWorktreeConfig()
+	t.Chdir(repoDir)
+
+	copyList, _, _, err := resolvedFileLists()
+	if err == nil {
+		t.Fatal("expected a refused .worktreeinclude to be reported")
+	}
+	if !strings.Contains(err.Error(), worktreeIncludeFile) {
+		t.Errorf("error = %q, want it to name %s", err, worktreeIncludeFile)
+	}
+	// The counts are still shown, and are still short: that is what the error
+	// is there to qualify.
+	if got := listSummary(copyList); got["value"] != "1 pattern" {
+		t.Errorf("value = %q, want the layers that did resolve", got["value"])
 	}
 }
 
