@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/timvw/wt/internal/fileops"
+	"github.com/timvw/wt/internal/ignore"
 )
 
 // isolateFileConfig points loadWorktreeConfig at a scratch environment so the
@@ -280,33 +281,68 @@ func TestExcludeAlsoAppliesToLink(t *testing.T) {
 	}
 }
 
-// A blank entry is dropped on the way in — .worktreeinclude is gitignore
-// syntax, where a blank line means nothing. A lone "!" is not blank: it reads
-// as a deny, survives accumulation, and would then be compiled away into a
-// pattern that protects nothing while the user believes otherwise.
-func TestABarePatternNegationIsRefused(t *testing.T) {
+// An entry that matches nothing is refused rather than dropped. A blank *line*
+// in .worktreeinclude is gitignore syntax for nothing at all and ignore.ParseFile
+// discards it, so anything blank still standing was written out as a list entry
+// — in TOML or with `git config --add` — and is a mistake. A lone "!" is the
+// same mistake wearing a deny: it would compile away into a pattern that
+// protects nothing while the user believes otherwise.
+func TestAPatternThatMatchesNothingIsRefused(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries string
+		want    string
+	}{
+		{name: "bare negation", entries: `".env", "!"`, want: `"!"`},
+		{name: "empty string", entries: `".env", ""`, want: `""`},
+		{name: "whitespace only", entries: `".env", "   "`, want: `"   "`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateFileConfig(t)
+
+			globalCfg := filepath.Join(t.TempDir(), "config.toml")
+			writeFile(t, globalCfg, "[files]\ncopy = ["+tt.entries+"]\n")
+
+			repoDir := newFilesRepo(t, "")
+			t.Setenv("WT_CONFIG", globalCfg)
+			gitRepoRootFn = func() (string, error) { return repoDir, nil }
+			loadWorktreeConfig()
+
+			_, err := resolveFileConfig(repoDir)
+			if err == nil {
+				t.Fatalf("expected %s to be refused", tt.name)
+			}
+			if !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), "empty") {
+				t.Errorf("error = %q, want it to name %s as empty", err, tt.want)
+			}
+		})
+	}
+}
+
+// An empty value from git config is refused the same way, and the error names
+// the scope so the reader knows which `git config --add` to go and fix rather
+// than hunting through TOML files that have nothing to do with it.
+func TestAnEmptyGitConfigPatternIsRefused(t *testing.T) {
 	isolateFileConfig(t)
 
-	globalCfg := filepath.Join(t.TempDir(), "config.toml")
-	writeFile(t, globalCfg, "[files]\ncopy = [\".env\", \"!\"]\n")
-
 	repoDir := newFilesRepo(t, "")
-	t.Setenv("WT_CONFIG", globalCfg)
 	gitRepoRootFn = func() (string, error) { return repoDir, nil }
+	gitConfigFn = gitScopedEntries(nil, gitList("wt.copy", ".env", ""))
 	loadWorktreeConfig()
 
 	_, err := resolveFileConfig(repoDir)
 	if err == nil {
-		t.Fatal("expected a bare negation to be refused")
+		t.Fatal("expected an empty git config pattern to be refused")
 	}
-	if !strings.Contains(err.Error(), `"!"`) || !strings.Contains(err.Error(), "empty") {
-		t.Errorf("error = %q, want it to name \"!\" as empty", err)
+	if !strings.Contains(err.Error(), `""`) || !strings.Contains(err.Error(), "git config (local)") {
+		t.Errorf("error = %q, want it to name \"\" and the git config scope", err)
 	}
 }
 
-// exclude accumulates with the repo's .wt.toml applied after the user's own
-// config, so a committed "!*.pem" would undo exactly what a global exclude was
-// protecting. Negation is refused in exclude and link for that reason.
+// The layers are a union, so a "!*.pem" in any of them would re-include exactly
+// what an exclude in any other was protecting — the layer either came from
+// makes no difference. Negation is refused in exclude and link for that reason.
 func TestNegationIsRefusedInExcludeAndLink(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -504,18 +540,263 @@ func TestCopyIgnoredPrecedence(t *testing.T) {
 	}
 }
 
-// The list keys are deliberately not readable from git config: they would need
-// --get-all handling and have no accumulation story across git scopes.
-func TestListKeysAreNotReadFromGitConfig(t *testing.T) {
+// gitScopedEntries serves ordered entries per scope. gitEntriesFrom cannot: it
+// takes a map, and a multi-valued key is several entries sharing one name whose
+// order is the order git reports them in.
+func gitScopedEntries(global, local []gitConfigEntry) func(gitConfigScope) []gitConfigEntry {
+	return func(scope gitConfigScope) []gitConfigEntry {
+		switch scope {
+		case gitScopeGlobal:
+			return global
+		case gitScopeLocal:
+			return local
+		}
+		return nil
+	}
+}
+
+// gitList spells one multi-valued key, as `git config --add <key>` repeated.
+func gitList(key string, values ...string) []gitConfigEntry {
+	out := make([]gitConfigEntry, 0, len(values))
+	for _, v := range values {
+		out = append(out, gitConfigEntry{Key: key, Value: v})
+	}
+	return out
+}
+
+// The three list keys are readable from both git scopes as wt.copy, wt.link and
+// wt.exclude. --local is the scope issue #125 asked for: per-repo file
+// materialisation with nothing committed to carry it.
+//
+// The two values under one key are the point. Reading these through
+// gitConfigValues would collapse them to the last one, which is why they are
+// accumulated from the raw entries instead.
+func TestFileListKeysFromGitConfig(t *testing.T) {
 	isolateFileConfig(t)
 
-	gitConfigFn = func(gitConfigScope) []gitConfigEntry {
-		return gitEntriesFrom(map[string]string{"wt.copy": ".env", "wt.files_copy": ".env"})
-	}
+	global := append(gitList("wt.copy", ".env", ".envrc"), gitList("wt.exclude", "*.pem")...)
+	local := append(gitList("wt.copy", "config/local.yml"), gitList("wt.link", "node_modules")...)
+	gitConfigFn = gitScopedEntries(global, local)
 	loadWorktreeConfig()
 
-	if len(filesCopy) != 0 {
-		t.Errorf("filesCopy = %v, want empty", filesCopy)
+	wantCopy := []string{
+		".env@git config (global)",
+		".envrc@git config (global)",
+		"config/local.yml@git config (local)",
+	}
+	if got := patternsFrom(filesCopy); !equalStrings(got, wantCopy) {
+		t.Errorf("copy = %v, want %v", got, wantCopy)
+	}
+	if got := patternsFrom(filesExclude); !equalStrings(got, []string{"*.pem@git config (global)"}) {
+		t.Errorf("exclude = %v, want [*.pem@git config (global)]", got)
+	}
+	if got := patternsFrom(filesLink); !equalStrings(got, []string{"node_modules@git config (local)"}) {
+		t.Errorf("link = %v, want [node_modules@git config (local)]", got)
+	}
+}
+
+// The git scopes accumulate at the loader steps they already occupy, so the
+// effective list reads in layer order. A pattern more than one layer supplies is
+// listed once, credited to the lowest — here .env, set globally and repeated by
+// the repo's committed .wt.toml.
+func TestFileListKeysAccumulateWithTOMLLayers(t *testing.T) {
+	isolateFileConfig(t)
+
+	tmp := t.TempDir()
+	globalCfg := filepath.Join(tmp, "config.toml")
+	writeFile(t, globalCfg, `[files]
+copy = ["shared.conf"]
+`)
+
+	repoDir := newFilesRepo(t, "")
+	writeFile(t, filepath.Join(repoDir, ".wt.toml"), `[files]
+copy = ["config/local.yml", ".env"]
+`)
+	writeFile(t, filepath.Join(repoDir, worktreeIncludeFile), "committed.txt\n")
+
+	t.Setenv("WT_CONFIG", globalCfg)
+	gitRepoRootFn = func() (string, error) { return repoDir, nil }
+	gitConfigFn = gitScopedEntries(gitList("wt.copy", ".env"), gitList("wt.copy", "local-only.txt"))
+	loadWorktreeConfig()
+
+	cfg, err := resolveFileConfig(repoDir)
+	if err != nil {
+		t.Fatalf("resolveFileConfig: %v", err)
+	}
+
+	want := []string{
+		".env@git config (global)",
+		"shared.conf@config file",
+		"config/local.yml@repo config",
+		"local-only.txt@git config (local)",
+		"committed.txt@" + worktreeIncludeFile,
+	}
+	if got := patternsFrom(cfg.Copy); !equalStrings(got, want) {
+		t.Errorf("copy = %v, want %v", got, want)
+	}
+}
+
+// What `wt config show` says about a list, and the one thing it deliberately
+// does not say. The summary is a count plus the layers behind the *effective*
+// patterns; a layer that only repeated what a lower one already contributed has
+// not changed the effective list, so it does not appear.
+func TestListSummaryReportsEffectivePatternSources(t *testing.T) {
+	tests := []struct {
+		name         string
+		global       []gitConfigEntry
+		local        []gitConfigEntry
+		wantValue    string
+		wantSource   string
+		unwantSource string
+	}{
+		{
+			name:       "nothing set",
+			wantValue:  "(none)",
+			wantSource: "default",
+		},
+		{
+			name:       "one scope",
+			local:      gitList("wt.copy", ".env"),
+			wantValue:  "1 pattern",
+			wantSource: "git config (local)",
+		},
+		{
+			name:       "both scopes contributing",
+			global:     gitList("wt.copy", ".env"),
+			local:      gitList("wt.copy", "local.yml"),
+			wantValue:  "2 patterns",
+			wantSource: "git config (global), git config (local)",
+		},
+		{
+			// The local --add is redundant: .env is already in effect from
+			// --global, and the effective list is the same with or without it.
+			name:         "local repeats what global already set",
+			global:       gitList("wt.copy", ".env"),
+			local:        gitList("wt.copy", ".env"),
+			wantValue:    "1 pattern",
+			wantSource:   "git config (global)",
+			unwantSource: "git config (local)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateFileConfig(t)
+			gitRepoRootFn = func() (string, error) { return newFilesRepo(t, ""), nil }
+			gitConfigFn = gitScopedEntries(tt.global, tt.local)
+			loadWorktreeConfig()
+
+			got := listSummary(filesCopy)
+			if got["value"] != tt.wantValue {
+				t.Errorf("value = %q, want %q", got["value"], tt.wantValue)
+			}
+			if got["source"] != tt.wantSource {
+				t.Errorf("source = %q, want %q", got["source"], tt.wantSource)
+			}
+			if tt.unwantSource != "" && strings.Contains(got["source"], tt.unwantSource) {
+				t.Errorf("source = %q, want %q absent", got["source"], tt.unwantSource)
+			}
+		})
+	}
+}
+
+// `wt config show` counts every layer, including the one the loader globals do
+// not hold: .worktreeinclude is read later, by resolveFileConfig. `wt info`
+// resolves the same way, and the two commands disagreeing about how many
+// patterns are in effect would send the reader hunting a bug that is not there.
+func TestConfigShowCountsTheWorktreeIncludeLayer(t *testing.T) {
+	isolateFileConfig(t)
+
+	repoDir := newFilesRepo(t, "")
+	writeFile(t, filepath.Join(repoDir, worktreeIncludeFile), "committed.txt\n")
+
+	gitRepoRootFn = func() (string, error) { return repoDir, nil }
+	gitConfigFn = gitScopedEntries(nil, gitList("wt.copy", ".env"))
+	loadWorktreeConfig()
+
+	// getRepoInfo shells out to git in the working directory, so this is what
+	// tells resolvedFileLists where the main worktree is.
+	t.Chdir(repoDir)
+
+	copyList, _, _, err := resolvedFileLists()
+	if err != nil {
+		t.Fatalf("resolvedFileLists: %v", err)
+	}
+	got := listSummary(copyList)
+	if got["value"] != "2 patterns" {
+		t.Errorf("value = %q, want 2 patterns (git config + %s)", got["value"], worktreeIncludeFile)
+	}
+	if !strings.Contains(got["source"], worktreeIncludeFile) {
+		t.Errorf("source = %q, want it to name %s", got["source"], worktreeIncludeFile)
+	}
+	// The loader globals alone are what this test exists to catch.
+	if summary := listSummary(filesCopy); summary["value"] == got["value"] {
+		t.Fatalf("filesCopy already holds %s; this test no longer distinguishes the layers", worktreeIncludeFile)
+	}
+}
+
+// When .worktreeinclude cannot be read, resolveFileConfig gives up before
+// folding that layer in — so the counts are short by exactly the layer
+// resolvedFileLists exists to include. Reporting the error is what stops that
+// being silent.
+func TestConfigShowReportsAnUnreadableWorktreeInclude(t *testing.T) {
+	isolateFileConfig(t)
+
+	repoDir := newFilesRepo(t, "")
+	// A symlink is the refusal resolveFileConfig is most explicit about (F7),
+	// and it needs no unusual permissions to set up.
+	if err := os.Symlink(filepath.Join(repoDir, "elsewhere.txt"), filepath.Join(repoDir, worktreeIncludeFile)); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+
+	gitRepoRootFn = func() (string, error) { return repoDir, nil }
+	gitConfigFn = gitScopedEntries(nil, gitList("wt.copy", ".env"))
+	loadWorktreeConfig()
+	t.Chdir(repoDir)
+
+	copyList, _, _, err := resolvedFileLists()
+	if err == nil {
+		t.Fatal("expected a refused .worktreeinclude to be reported")
+	}
+	if !strings.Contains(err.Error(), worktreeIncludeFile) {
+		t.Errorf("error = %q, want it to name %s", err, worktreeIncludeFile)
+	}
+	// The counts are still shown, and are still short: that is what the error
+	// is there to qualify.
+	if got := listSummary(copyList); got["value"] != "1 pattern" {
+		t.Errorf("value = %q, want the layers that did resolve", got["value"])
+	}
+}
+
+// Layer order is display and attribution only: it cannot decide which files are
+// materialised. A "!" deny in the LOWEST layer beats a positive pattern in the
+// highest, because negations are hoisted out of the copy matcher and applied
+// unconditionally. That is the escape hatch for an inherited pattern — the only
+// way to un-add one — and it has to work from git config for #125's user, who
+// has no committed file to put it in.
+func TestGitConfigDenyBeatsHigherLayerCopy(t *testing.T) {
+	isolateFileConfig(t)
+
+	src := newFilesRepo(t, "*.env\n")
+	writeFile(t, filepath.Join(src, "app.env"), "TOKEN=1")
+	writeFile(t, filepath.Join(src, "keep.env"), "OK=1")
+	// The repo's committed .wt.toml asks for everything the global deny refuses.
+	writeFile(t, filepath.Join(src, ".wt.toml"), `[files]
+copy = ["*.env"]
+`)
+
+	gitRepoRootFn = func() (string, error) { return src, nil }
+	gitConfigFn = gitScopedEntries(gitList("wt.copy", "!app.env"), nil)
+	loadWorktreeConfig()
+
+	cfg, err := resolveFileConfig(src)
+	if err != nil {
+		t.Fatalf("resolveFileConfig: %v", err)
+	}
+	if cfg.copyDenyMatcher.Decide("app.env", false) == ignore.Unmatched {
+		t.Error("app.env: deny from git config (global) did not reach the deny matcher")
+	}
+	if cfg.copyDenyMatcher.Decide("keep.env", false) != ignore.Unmatched {
+		t.Error("keep.env: denied by a pattern that does not name it")
 	}
 }
 

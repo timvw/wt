@@ -43,7 +43,9 @@ Section B: Contributing to wt (project authors/maintainers)
 Configuration and hooks
 - Config file: ~/.config/wt/config.toml (or WT_CONFIG / --config)
 - Per-repo override: .wt.toml in the repo root (project policy; ignores root, repo_root, repo_pattern, clone hooks)
-- Git config: wt.root, wt.repoRoot, wt.strategy, wt.pattern, wt.separator, wt.repoPattern, wt.copyIgnored via git config --local/--global (scalars only, no hooks, no [files] lists)
+- Git config: wt.root, wt.repoRoot, wt.strategy, wt.pattern, wt.separator, wt.repoPattern, wt.copyIgnored, wt.copy, wt.link, wt.exclude via git config --local/--global
+- wt.copy/wt.link/wt.exclude are multi-valued: 'git config --add' for each pattern, --unset-all to clear; the other keys are scalars
+- Never read from git config at any scope: [hooks] and hooks_policy — git config is settings, never commands nor the policy gating them
 - Git config key spelling: the TOML key with sections flattened and multi-word names camelCased; git rejects "_" in a key name, and one such line makes the whole config file unparseable
 - Key settings: root, strategy, pattern, separator, repo_root, repo_pattern
 - Env overrides: WORKTREE_ROOT, WORKTREE_STRATEGY, WORKTREE_PATTERN, WORKTREE_SEPARATOR, WT_REPO_ROOT, WT_REPO_PATTERN, WT_COPY_IGNORED
@@ -65,9 +67,11 @@ Untracked file materialisation ([files])
 - [files] schema: copy = [...], link = [...], exclude = [...] (gitignore syntax), copy_ignored = false
 - Runs automatically on create/checkout/pr/mr, after 'git worktree add' and before post_* hooks; failure is non-fatal
 - .worktreeinclude at the MAIN worktree root (gitignore syntax, one pattern per line) is unioned into copy; meant to be committed
-- The three list keys ACCUMULATE across layers: config file -> repo .wt.toml -> .worktreeinclude; duplicates dropped, first-seen order kept
-- exclude is applied last and cannot be overridden by a later copy entry or by copy_ignored
-- copy_ignored is a scalar and follows the normal precedence chain; it is the only [files] key readable from git config, spelled wt.copyIgnored there
+- The three list keys are a UNION across layers, not a precedence contest: git config (global) -> config file -> repo .wt.toml -> git config (local) -> .worktreeinclude
+- That order is display order only (duplicates dropped, credited to the leftmost layer); no layer overrides another, so which layer a pattern came from never changes the outcome
+- exclude is applied last and cannot be overridden by any layer's copy or by copy_ignored; exclude and link reject negated (!) patterns
+- To drop an inherited copy pattern, deny it from any layer: a "!" entry in copy beats every copy pattern and copy_ignored regardless of layer. link has no "!" form — only exclude stops an inherited link
+- copy_ignored is a scalar and follows the normal precedence chain, spelled wt.copyIgnored in git config
 - Candidates come from 'git ls-files --others --ignored --exclude-standard': tracked files are NEVER copied
 - Never copied regardless of patterns: .git/ .bzr/ .hg/ .jj/ .pijul/ .sl/ .svn/ and any registered worktree of the same repo
 - Copy method: reflink on APFS/Btrfs/XFS, buffered copy elsewhere (incl. Windows); symlinks recreated as symlinks, never dereferenced

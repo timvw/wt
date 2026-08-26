@@ -78,18 +78,42 @@ git config --global wt.root ~/projects/worktrees
 | `wt.separator` | `separator` |
 | `wt.repoPattern` | `repo_pattern` |
 | `wt.copyIgnored` | `[files] copy_ignored` (see [Files](#files)) |
+| `wt.copy` / `wt.link` / `wt.exclude` | `[files] copy` / `link` / `exclude` (**multi-valued**) |
 | `wt.context.<name>.whenpath` / `.env` | `[[context]]` (**`--global` only**) |
 
-The spelling rule for the scalar settings: **a git config key is the TOML key
-with any section flattened and multi-word names camelCased.** git config
+The spelling rule: **a git config key is the TOML key with any section dropped
+and multi-word names camelCased.** The `[files]` section is not part of the key
+— `copy_ignored` is `wt.copyIgnored`, not `wt.files.copyIgnored`. git config
 variable names allow only alphanumerics and `-`, so `wt.repo_root` is not a
-legal key — see [Key spelling](#key-spelling) for what happens if you write one
-anyway. `wt.context.*` is not flattened: it keeps `<name>` as a git
-*subsection*, which is how one key can be repeated per context.
+legal key; see [Key spelling](#key-spelling) for what happens if you write one
+anyway. `wt.context.*` is the one key that keeps a section: `<name>` is a git
+*subsection*, which is how the key can be repeated once per context.
 
 Notes:
 
-- **Hooks are not read from git config.** Use a config file for those.
+- **Hooks are not read from git config**, at any scope, and neither is
+  `hooks_policy`. That is a security boundary rather than an omission — see
+  [Why hooks are not readable from git config](#why-hooks-are-not-readable-from-git-config).
+- **`wt.copy`, `wt.link` and `wt.exclude` are multi-valued.** Use `--add` once
+  per pattern:
+
+  ```bash
+  git config --local --add wt.copy .env
+  git config --local --add wt.copy .envrc
+  ```
+
+  Without `--add`, `git config` refuses to touch a key that already has several
+  values: use `--replace-all wt.copy X` to collapse the list to one entry,
+  `--unset-all wt.copy` to clear it, or `--unset wt.copy <regex>` to drop one.
+  Quote any pattern starting with `!`, which interactive `bash` and `zsh` expand
+  as history.
+- The three list keys are read from **both** scopes, unlike `wt.context.*`.
+  `--global` is for "always bring my `.env`"; `--local` is the per-repo case
+  with nothing committed. They carry no power to redirect where a worktree
+  lands, so the boundary that keeps `wt.context.*` global-only does not apply.
+- An invalid pattern is a hard error for the whole materialisation step, so a
+  bad `wt.copy` in `~/.gitconfig` disables file copying in **every** repo on the
+  machine. `wt info` names the offending pattern and its layer.
 - Unlike `.wt.toml`, local git config **may** set `wt.root`: it is your own
   local state rather than project policy arriving through a pull request.
 - Linked worktrees share the main repository's `.git/config`, so `--local`
@@ -508,11 +532,11 @@ cannot point it at something outside the worktree.
 
 ### Accumulation
 
-The three list keys **accumulate** across layers rather than replacing each
-other:
+The three list keys are a **union, not a contest**. Every layer's patterns are
+in effect at once, and no layer overrides another:
 
 ```
-config file  →  repo .wt.toml  →  .worktreeinclude
+git config (global) → config file → repo .wt.toml → git config (local) → .worktreeinclude
 ```
 
 A user whose own config says "always copy `.env`" and who then works in a repo
@@ -521,18 +545,38 @@ repo would silently drop the `.env`. Excludes accumulate for the mirror-image
 reason: a global "never copy `*.pem`" has to hold against any repository's
 config.
 
-Duplicates are dropped, keeping first-seen order, so `wt info` lists the
-effective set in layer order with the source of each pattern.
+That arrow is **display order, not precedence**. It is the order `wt info` lists
+patterns in, and a pattern set in more than one layer is listed once and credited
+to the leftmost. Whether a file is copied never depends on which layer its
+pattern came from — the unqualified list keys cannot conflict, so there is
+nothing for a precedence rule to resolve.
 
-`exclude` is always applied **last** and cannot be overridden — not by a later
+`exclude` is always applied **last** and cannot be overridden — not by any
 layer's `copy`, not by `copy_ignored`, and not by `link`. An excluded path is
 reported as skipped rather than materialised.
 
-Because the layers accumulate with the repo's `.wt.toml` applied *after* your own
-config, a `!` in `exclude` would let a committed file undo the protection you set
-globally. So `exclude` and `link` reject negated patterns outright, naming the
-pattern and the layer it came from. `!` remains available in `copy`, where it
-only ever removes.
+`exclude` and `link` reject negated patterns outright, naming the pattern and the
+layer it came from: a deny-list you can argue your way out of is not a deny-list,
+whichever layer does the arguing. `!` remains available in `copy`, where it only
+ever removes.
+
+#### Removing an inherited pattern
+
+You cannot un-add a pattern a lower layer contributed. Deny it instead, from
+**any** layer:
+
+```bash
+git config --local --add wt.copy '!.env'   # quote it: shells expand a bare !
+```
+
+A deny beats every `copy` pattern and `copy_ignored` too, no matter which layer
+either came from — this is the one place the layers interact, and it runs the
+opposite way to precedence. So the "`.env` everywhere, except in this one repo"
+case is answered from that repo's `.git/config`, with nothing committed.
+
+`link` has no `!` form. The only way to stop an inherited link is to `exclude`
+the path, which also stops it being copied and cannot be re-included from any
+layer.
 
 A directory pattern covers everything below it, in both lists: `exclude =
 ["secrets/"]` keeps `secrets/key.pem` out, and `copy = ["cache/"]` brings the
@@ -554,9 +598,9 @@ somebody's `.env`.
 `copy_ignored` is a scalar, so it follows the normal
 [precedence chain](#precedence) instead: env var `WT_COPY_IGNORED`, local git
 config `wt.copyIgnored`, `.wt.toml`, config file, global git config, then the
-default `false`. It is the only `[files]` key readable from git config — the list
-keys would need `--get-all` handling for multi-valued keys and have no
-accumulation story across git scopes, so they stay TOML-only.
+default `false`. The list keys are readable from git config too, as multi-valued
+`wt.copy` / `wt.link` / `wt.exclude`, but they join the [union](#accumulation)
+instead of a precedence chain.
 
 Note the spelling: in git config it is `wt.copyIgnored`, not `wt.copy_ignored`
 — see [Key spelling](#key-spelling). As with any git boolean the value may be
@@ -781,7 +825,34 @@ For automation you control, `WT_HOOKS_APPROVE_ALL=1` approves every batch
 without asking. It bypasses the untrusted-repo check too, so do not export it
 in your shell rc.
 
-**Which shell runs a hook:**
+### Why hooks are not readable from git config
+
+Most settings can come from `git config` at either scope. `[hooks]` cannot, at
+any scope, and neither can `hooks_policy`. The dividing line is not scalar
+versus list, or file format: **git config carries settings, never commands, nor
+the policy that gates commands.**
+
+For `[hooks]` the reason is mechanical. Approval is decided by where a hook came
+from — `wt` prompts when the source is a repo's `.wt.toml` and runs everything
+else unprompted, because everything else is by construction something you wrote.
+A hook arriving from a new source would land on the permissive side of that
+test and run without a prompt. And `.git/config` is not reliably something you
+wrote: it comes along with a directory somebody hands you, an archive you
+unpack, or a restored backup. It is not covered by the trust store either, whose
+approvals are pinned to the sha256 of `.wt.toml`.
+
+For `hooks_policy` the reason is the same one that keeps it out of a repo-level
+`.wt.toml`: a repository choosing how closely `wt` scrutinises that
+repository's hooks defeats the mechanism. `--global` git config would be safe
+enough on its own, but a setting that means one thing in `~/.gitconfig` and is
+silently ignored in `.git/config` is worse than one that is simply never read.
+
+`[files]` is on the readable side of the line because it is declarative data,
+bounded by [invariants F1–F7](#why-files-needs-no-trust-prompt) rather than by a
+prompt. Its copy candidates are a subset of what `wt.copyIgnored` already
+selects — and that key has been readable from `--local`, ungated, all along.
+
+### Which shell runs a hook
 
 | Where `wt` runs | Interpreter | Write hooks in |
 | --- | --- | --- |

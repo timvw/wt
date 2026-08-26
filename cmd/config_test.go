@@ -1286,6 +1286,105 @@ func TestGitConfigRejectsUnderscoreKeys(t *testing.T) {
 	}
 }
 
+// TestFileListKeysAreMultiValuedInRealGit is the companion to
+// TestAdvertisedGitConfigKeysAreSettable for the three list keys, and it pins
+// the property the whole design rests on: `git config --add` repeated under one
+// name round-trips as several entries, in file order.
+//
+// Reading these through gitConfigValues would compile and pass every stubbed
+// test while silently keeping only the last pattern, so the guard has to be
+// real git.
+func TestFileListKeysAreMultiValuedInRealGit(t *testing.T) {
+	repoDir, gitIn := scratchGitRepo(t)
+
+	adds := []struct{ key, value string }{
+		{"wt.copy", ".env"},
+		{"wt.copy", ".envrc"},
+		{"wt.copy", "!secrets.env"},
+		{"wt.link", "node_modules"},
+		{"wt.exclude", "*.pem"},
+	}
+	for _, a := range adds {
+		if out, err := gitIn("config", "--local", "--add", a.key, a.value); err != nil {
+			t.Fatalf("git config --add %s %s: %v: %s", a.key, a.value, err, out)
+		}
+	}
+
+	origCopy, origLink, origExclude := filesCopy, filesLink, filesExclude
+	t.Cleanup(func() { filesCopy, filesLink, filesExclude = origCopy, origLink, origExclude })
+	filesCopy, filesLink, filesExclude = nil, nil, nil
+
+	t.Chdir(repoDir)
+	accumulateGitConfigFilePatterns(defaultGitConfig(gitScopeLocal), "git config (local)")
+
+	// Order is the order git reports, and the "!" survives verbatim: it is the
+	// documented way to un-add an inherited pattern.
+	wantCopy := []string{".env", ".envrc", "!secrets.env"}
+	if got := patternStrings(filesCopy); !equalStrings(got, wantCopy) {
+		t.Errorf("copy = %v, want %v", got, wantCopy)
+	}
+	if got := patternStrings(filesLink); !equalStrings(got, []string{"node_modules"}) {
+		t.Errorf("link = %v, want [node_modules]", got)
+	}
+	if got := patternStrings(filesExclude); !equalStrings(got, []string{"*.pem"}) {
+		t.Errorf("exclude = %v, want [*.pem]", got)
+	}
+}
+
+// TestFileListKeyEdgeCasesInRealGit pins what a real git does to a list key's
+// spelling and to a value on the way through `--null --get-regexp`, since the
+// [files] lists are the one place where a byte git might reasonably normalise
+// away — a trailing space — changes which files are materialised.
+func TestFileListKeyEdgeCasesInRealGit(t *testing.T) {
+	repoDir, gitIn := scratchGitRepo(t)
+
+	adds := []struct{ key, value string }{
+		// git lowercases a variable name when it reports it, so the key a user
+		// typed in camelCase still lands on wt.copy.
+		{"wt.Copy", "typed-in-mixed-case"},
+		// Trailing whitespace is meaningful to the ignore parser and must not
+		// be normalised away: "logs " names a directory called "logs ".
+		{"wt.copy", "logs "},
+		// A value may contain a newline. The record separator is NUL and only
+		// the FIRST newline separates key from value, so this must not be
+		// truncated or swallow the entry after it.
+		{"wt.copy", "two\nlines"},
+		{"wt.copy", "after-the-multiline"},
+	}
+	for _, a := range adds {
+		if out, err := gitIn("config", "--local", "--add", a.key, a.value); err != nil {
+			t.Fatalf("git config --add %s %q: %v: %s", a.key, a.value, err, out)
+		}
+	}
+
+	// A valueless key can only be written by editing the file directly. For a
+	// list key it means nothing at all, so it is dropped rather than becoming
+	// an empty pattern that validation would then reject.
+	cfgPath := filepath.Join(repoDir, ".git", "config")
+	existing, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, append(existing, []byte("\tlink\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	origCopy, origLink := filesCopy, filesLink
+	t.Cleanup(func() { filesCopy, filesLink = origCopy, origLink })
+	filesCopy, filesLink = nil, nil
+
+	t.Chdir(repoDir)
+	accumulateGitConfigFilePatterns(defaultGitConfig(gitScopeLocal), "git config (local)")
+
+	wantCopy := []string{"typed-in-mixed-case", "logs ", "two\nlines", "after-the-multiline"}
+	if got := patternStrings(filesCopy); !equalStrings(got, wantCopy) {
+		t.Errorf("copy = %q, want %q", got, wantCopy)
+	}
+	if len(filesLink) != 0 {
+		t.Errorf("link = %q, want empty for a valueless key", patternStrings(filesLink))
+	}
+}
+
 func TestDefaultGitConfigMultilineAndValuelessKeys(t *testing.T) {
 	// git config values may contain newlines, and a key may be present with no
 	// value at all. Both must survive parsing without corrupting neighbours.

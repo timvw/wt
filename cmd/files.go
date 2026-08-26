@@ -242,9 +242,10 @@ func validateFilePatterns(cfg fileConfig) error {
 	} {
 		for _, p := range group.patterns {
 			if group.noNegation && strings.HasPrefix(p.Pattern, "!") {
-				// Excludes accumulate with the repo's .wt.toml applied after the
-				// user's own config, so a committed "!*.pem" would re-include
-				// exactly what the user's global exclude was protecting.
+				// The layers are a union, so a "!*.pem" anywhere would re-include
+				// exactly what an exclude elsewhere was protecting — and it would
+				// not matter which layer either came from. A deny-list you can
+				// argue your way out of is not a deny-list.
 				return fmt.Errorf("[files] %s pattern %q (from %s) is a negation; %s is applied last and cannot be re-included",
 					group.key, p.Pattern, p.Source, group.key)
 			}
