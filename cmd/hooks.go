@@ -209,22 +209,27 @@ type hookEntry struct {
 	Cmd   string
 }
 
-// hookSetEntries lists every command one source contributed, in event order.
+// hookSetEntries lists every command one source asked for, in event order.
 //
-// Read back from the effective configuration rather than from the layer as it
-// was parsed: hook merging replaces a whole event at a time, so for every event
-// hookSources attributes to this source, the effective commands *are* this
-// source's commands.
+// What that source *declared*, not what survived merging: an approval is pinned
+// to this list, and a set whose identity shrank because some repository shadowed
+// one of its events would re-ask for the whole file in that repository. See
+// declaredHooks.
+//
+// The cost is that a shadowed command is still shown when its source is put to
+// the user. That is the safe direction — the prompt over-lists rather than
+// hiding something that could run.
 func hookSetEntries(source string) []hookEntry {
 	if source == "" {
 		return nil
 	}
+	declared, ok := declaredHooks[source]
+	if !ok {
+		return nil
+	}
 	var entries []hookEntry
 	for _, event := range hookEvents {
-		if hookSources[event] != source {
-			continue
-		}
-		for _, cmd := range hooksOf(worktreeHooks, event) {
+		for _, cmd := range hooksOf(declared, event) {
 			entries = append(entries, hookEntry{Event: event, Cmd: cmd})
 		}
 	}
@@ -316,6 +321,16 @@ func approveHooks(hookName string, hookCommands []string) bool {
 
 	source := hookSources[hookName]
 	trust, err := hookSetTrust(source)
+	// An approval covers the commands it was hashed over, and callers hand the
+	// batch in separately from the configuration it was read from. Check that the
+	// two still agree rather than assuming it: today every caller passes
+	// getHooks(hookName), but a batch that is not this source's own commands is
+	// not covered by an approval of them, and cannot be remembered as them
+	// either — so treat it as coming from nowhere and ask about the batch itself.
+	ownCommands := slices.Equal(hookCommands, hooksOf(declaredHooks[source], hookName))
+	if !ownCommands {
+		trust = hookTrust{}
+	}
 	switch {
 	case err != nil && policy == hookPolicyPromptAll:
 		// Under prompt-all the store does not decide anything: every batch is
@@ -337,9 +352,14 @@ func approveHooks(hookName string, hookCommands []string) bool {
 	//
 	// Never fall through to an empty list — a prompt showing no commands while
 	// commands are queued to run is worse than showing only the batch at hand.
-	// That happens when the source is one hookSetEntries does not recognise,
-	// which is also the case where nothing can be remembered.
-	entries := hookSetEntries(source)
+	// That happens when the source is one hookSetEntries does not recognise, and
+	// when the batch is not that source's own: both are cases where nothing can
+	// be remembered, and where the batch at hand is the only thing wt can
+	// honestly say is about to run.
+	var entries []hookEntry
+	if ownCommands {
+		entries = hookSetEntries(source)
+	}
 	if len(entries) == 0 {
 		entries = hookEntriesFor(hookName, hookCommands)
 	}

@@ -120,10 +120,18 @@ var worktreeHooks Hooks
 
 // hookSources records which config layer supplied each hook event's commands.
 // The merge below replaces a whole event at a time, so one source per event is
-// exact — which is what lets hookSetEntries read a whole layer's contribution
-// back out of the merged result, and what decides how widely one approval of it
-// reaches.
+// exact — which is what decides how widely one approval of it reaches.
 var hookSources = map[string]string{}
+
+// declaredHooks holds what each source asked for, before merging.
+//
+// This, rather than the merged result, is what an approval is pinned to. The two
+// differ only for the config file, and only where a repo's .wt.toml overrode one
+// of its events — but reading the merged result there would make the identity of
+// *your* hooks depend on which repository you happened to be standing in, so a
+// single .wt.toml overriding post_checkout would re-ask for your whole config
+// file and record a second approval under the same scope.
+var declaredHooks = map[string]Hooks{}
 
 // trustPrefixes and trustExact are the [trust] whitelist, loaded from the user's
 // config file only. See Trust and trustWhitelistAllows.
@@ -615,6 +623,7 @@ func loadWorktreeConfig() {
 	// Reset hooks
 	worktreeHooks = Hooks{}
 	hookSources = map[string]string{}
+	declaredHooks = map[string]Hooks{}
 	hooksPolicy = ""
 	trustPrefixes = nil
 	trustExact = nil
@@ -670,6 +679,7 @@ func loadWorktreeConfig() {
 				configSources.RepoPattern = "config file"
 			}
 			worktreeHooks = cfg.Hooks
+			declaredHooks[hookSourceConfigFile] = cfg.Hooks
 			for _, event := range hookEvents {
 				if len(hooksOf(cfg.Hooks, event)) > 0 {
 					hookSources[event] = hookSourceConfigFile
@@ -757,6 +767,7 @@ func loadWorktreeConfig() {
 				// config: clone targets a different repository than this one.
 				repoHooks.PreClone = nil
 				repoHooks.PostClone = nil
+				declaredHooks[hookSourceRepoConfig] = repoHooks
 				for _, event := range hookEvents {
 					cmds := hooksOf(repoHooks, event)
 					if len(cmds) == 0 {

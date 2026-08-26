@@ -847,6 +847,11 @@ is on whole path segments, so `~/src/mine` does not cover
 `~/src/mine-from-the-internet`. `wt untrust` cannot revoke a rule; edit the config
 file (`wt untrust` says so when a rule still covers the repository).
 
+Entries expand `~` and environment variables, so `prefix = ["$SRC/repos"]` works —
+but a rule that ends up naming the filesystem root is ignored and reported, since
+`$SRC` being unset would otherwise turn one tree into every repository on the
+machine. `wt trust --list` shows each rule next to what it resolves to.
+
 ### Requiring approval for every hook
 
 ```toml
