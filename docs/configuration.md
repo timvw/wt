@@ -91,8 +91,9 @@ anyway. `wt.context.*` is the one key that keeps a section: `<name>` is a git
 
 Notes:
 
-- **Hooks are not read from git config**, at any scope, and neither is
-  `hooks_policy`. That is a security boundary rather than an omission — see
+- **Hooks are not read from git config**, at any scope, and neither are
+  `hooks_policy` and `[trust]`. That is a security boundary rather than an
+  omission — see
   [Why hooks are not readable from git config](#why-hooks-are-not-readable-from-git-config).
 - **`wt.copy`, `wt.link` and `wt.exclude` are multi-valued.** Use `--add` once
   per pattern:
@@ -178,6 +179,11 @@ An empty list reads as "not set" rather than "cleared", so `post_checkout = []`
 in `.wt.toml` does not suppress an inherited `post_checkout`; use
 `WT_HOOKS_DISABLED=1` or `hooks_policy = "off"` to stop hooks running. See
 [Hooks](#hooks).
+
+`hooks_policy` and `[trust]` have no layers at all: both are read from your own
+config file and nowhere else, since a repository deciding how closely `wt`
+scrutinises that repository's hooks would defeat the point. See
+[Hook trust](#hook-trust).
 
 Run `wt config show` to see the effective value and source of each setting:
 
@@ -695,7 +701,7 @@ worktree survives. You do not lose a worktree over a missing `.env`.
 
 ### Why `[files]` needs no trust prompt
 
-`[hooks]` from a committed `.wt.toml` needs [approval](#hook-trust) because it is
+`[hooks]` needs [approval](#hook-trust) wherever it came from, because it is
 arbitrary command execution. `[files]` is declarative data with a much smaller
 blast radius, and it is held there by invariants that are individually tested:
 
@@ -749,30 +755,35 @@ Checkout hooks (`pre_checkout` / `post_checkout`) run both when a new worktree i
 - **Pre-hooks** abort the operation if any command exits non-zero
 - **Post-hooks** print a warning on failure but do not fail the `wt` command
 - Each hook is a list of shell commands. `wt` spawns the shell itself, so the shell you are sitting in does not decide what runs them — see [Which shell runs a hook](#which-shell-runs-a-hook)
-- Hooks that came from a repository's committed `.wt.toml` need your approval before they run — see [Hook trust](#hook-trust)
+- Every hook needs your approval before it runs — your own config file's as well as a repository's committed `.wt.toml` — see [Hook trust](#hook-trust)
 - Set `WT_HOOKS_DISABLED=1` to skip all hooks (useful for scripting or CI)
 
 ## Hook trust
 
-`.wt.toml` lives in the working tree, so it is normally committed and travels
-with the repository. That makes its `[hooks]` table something the *repository*
-supplies rather than something you wrote: without a gate, cloning an untrusted
-repo and running `wt create` in it would execute whatever commands that repo
-asked for.
+**`wt` runs no hook you have not approved.** Not the ones a repository ships in
+its committed `.wt.toml`, and not the ones in your own config file either.
 
-So `wt` does not run them until you approve them:
+`.wt.toml` lives in the working tree, so it is normally committed and travels
+with the repository — its `[hooks]` table is something the *repository* supplies
+rather than something you wrote. Your own config file is something you wrote, but
+"you wrote it" is a claim about a file on disk, and a file on disk is not
+self-evidently yours: `~/.config/wt/config.toml` is as writable as anything else
+in `$HOME`. Approving it once costs one prompt and removes the guess.
 
 ```console
 $ wt create feat/x
 
 ⚠ These commands come from /home/you/src/acme/.wt.toml (not trusted):
 
-    [post_create] cd "$WT_PATH" && npm install
+  → [post_create] cd "$WT_PATH" && npm install
+    [pre_remove] docker compose down
+
+  → runs now; approving covers the rest too.
 
 ? Run these hooks?
   ▸ Skip these commands
     Run once
-    Run, and trust this .wt.toml until it changes
+    Run, and remember this until the commands change
 ```
 
 With no terminal to ask on — scripts, CI, `--format json` — the answer is
@@ -782,23 +793,61 @@ than failing the command.
 Approve ahead of time, or review what is approved:
 
 ```bash
-wt trust          # approve this repository's .wt.toml
-wt trust --list   # every approval on this machine
-wt untrust        # revoke this repository's approval
+wt trust             # approve everything that applies here
+wt trust --list      # every approval on this machine
+wt untrust           # revoke this repository's approval
+wt untrust --global  # revoke your config file's approval
 ```
 
-An approval is pinned to the file's contents and to the repository. Editing
-`.wt.toml` — including a `git pull` that adds a hook, or checking out a branch
-whose `.wt.toml` differs — invalidates it and `wt` asks again. An identical
-`.wt.toml` in a *different* repository is not covered either: `make setup` is
-only as safe as the Makefile next to it.
+`wt trust` approves both sources that apply where you are standing — your config
+file's hooks and, if the repository has a `.wt.toml`, that repository's — and
+prints the commands first, because approving without reading is the failure this
+whole mechanism exists to prevent. The two are recorded separately: approving
+here does not widen the repository's reach, and does not pin your own hooks to
+this checkout.
+
+### What an approval covers
+
+An approval is pinned to **the commands, and to the source that supplied them**:
+
+- Your config file's hooks are approved once and run in every repository. That is
+  what a *user* config is for.
+- A repository's `.wt.toml` is approved for that repository only. An identical
+  `.wt.toml` in a different repository is not covered: `make setup` is only as
+  safe as the Makefile next to it.
+
+Changing a hook command invalidates the approval and `wt` asks again — including
+a `git pull` that adds a hook, or checking out a branch whose `.wt.toml` differs.
+Changing anything *else* in the file does not: editing `pattern` or a `[files]`
+entry is not a change to what would execute, so it does not cost you a prompt.
 
 Approvals are stored in `~/.config/wt/trust.toml` (`$XDG_CONFIG_HOME/wt/` or
 `%APPDATA%\wt\` if set). Deleting that file revokes everything.
 
-Hooks from your **own** config file are not gated — you wrote them.
+### Trusting paths ahead of time
 
-**Requiring approval for every hook:**
+If everything under a directory is yours, say so once instead of approving each
+repository as you clone it:
+
+```toml
+[trust]
+prefix = ["~/src/mine"]      # this directory and everything below it
+exact  = ["~/src/acme/api"]  # this repository only
+```
+
+Hooks in a repository covered by a `[trust]` rule run without asking, and without
+being recorded — there is nothing to invalidate, so a rule keeps applying as the
+repository's hooks change. That is the trade: `prefix` is an assertion about a
+directory you control, not about the commands under it. Point it at a tree you
+clone other people's code into and you have turned the gate off for that tree.
+
+`[trust]` is read from your config file only, never from a `.wt.toml` — a
+repository that could whitelist itself would not be gated at all. Prefix matching
+is on whole path segments, so `~/src/mine` does not cover
+`~/src/mine-from-the-internet`. `wt untrust` cannot revoke a rule; edit the config
+file (`wt untrust` says so when a rule still covers the repository).
+
+### Requiring approval for every hook
 
 ```toml
 hooks_policy = "prompt-untrusted"   # default
@@ -806,15 +855,19 @@ hooks_policy = "prompt-untrusted"   # default
 
 | Value | Behaviour |
 | --- | --- |
-| `prompt-untrusted` | Your own hooks run; hooks from a repo's `.wt.toml` need approval |
-| `prompt-all` | Every hook batch is shown and confirmed, whatever supplied it |
-| `trusted-only` | Never prompts: already-trusted and own hooks run, anything else is skipped |
+| `prompt-untrusted` | Anything not yet approved is shown and confirmed; approved hooks run |
+| `prompt-all` | Every hook batch is shown and confirmed, however it was approved |
+| `trusted-only` | Never prompts: approved hooks run, anything else is skipped |
 | `off` | No hooks run at all (same as `WT_HOOKS_DISABLED=1`) |
 
-`prompt-all` covers what trust alone does not: your own
+`prompt-all` covers what a one-time approval does not: your own
 `post_checkout = ["cd $WT_PATH && npm install"]` runs whatever lifecycle
 scripts are in the `package.json` of whichever repository you happen to be
-standing in.
+standing in, and that changes without your config file changing. It overrides
+`[trust]` rules too — "ask me every time" has to mean every time.
+
+`trusted-only` is the one to reach for in CI: it never blocks on a prompt, and it
+never runs anything you did not approve on that machine.
 
 Override per invocation with `WT_HOOKS_POLICY`. `hooks_policy` is read from
 your config file only — never from a repo-level `.wt.toml`, since a repository
@@ -822,8 +875,20 @@ choosing how closely `wt` scrutinises that same repository's hooks would defeat
 the point.
 
 For automation you control, `WT_HOOKS_APPROVE_ALL=1` approves every batch
-without asking. It bypasses the untrusted-repo check too, so do not export it
-in your shell rc.
+without asking. It bypasses every check above, so do not export it in your shell
+rc.
+
+### Upgrading from wt 0.3 and earlier
+
+Before 0.4, hooks from your own config file ran unprompted and only a repo's
+`.wt.toml` was gated. Approvals from those versions pinned the *bytes of a file*
+rather than a set of commands, so they cannot be translated into the new records
+and are not carried over — `wt` drops them, says so on stderr, and asks once more
+for each set of hooks you use. Answer "Run, and remember this until the commands
+change", or run `wt trust` where you use them.
+
+If you would rather not be asked at all for trees you own, `[trust]` above is the
+escape hatch.
 
 ### Why hooks are not readable from git config
 
@@ -832,14 +897,15 @@ any scope, and neither can `hooks_policy`. The dividing line is not scalar
 versus list, or file format: **git config carries settings, never commands, nor
 the policy that gates commands.**
 
-For `[hooks]` the reason is mechanical. Approval is decided by where a hook came
-from — `wt` prompts when the source is a repo's `.wt.toml` and runs everything
-else unprompted, because everything else is by construction something you wrote.
-A hook arriving from a new source would land on the permissive side of that
-test and run without a prompt. And `.git/config` is not reliably something you
-wrote: it comes along with a directory somebody hands you, an archive you
-unpack, or a restored backup. It is not covered by the trust store either, whose
-approvals are pinned to the sha256 of `.wt.toml`.
+For `[hooks]` the reason is mechanical. Nothing runs unprompted, so a new source
+cannot land on a permissive side — but approvals are recorded per source, and a
+source `wt` does not recognise has no scope to record one under. Hooks from
+`.git/config` would therefore prompt on every single command, forever, which is
+not a usable feature; and they are not the kind of thing worth making usable.
+`.git/config` is not reliably something you wrote: it comes along with a
+directory somebody hands you, an archive you unpack, or a restored backup. A
+repository that arrives as a directory rather than as a clone brings its own
+`.git/config` with it.
 
 For `hooks_policy` the reason is the same one that keeps it out of a repo-level
 `.wt.toml`: a repository choosing how closely `wt` scrutinises that

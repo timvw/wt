@@ -2,7 +2,7 @@
 
 > **Note:** every hook on this page is written in POSIX shell syntax. That is what `wt` runs them with on macOS, Linux, and on Windows under Git Bash, MSYS2 or Cygwin. From a PowerShell or `cmd` session on Windows, hooks run through `cmd /c` instead and need cmd syntax (`%WT_PATH%`, not `$WT_PATH`) — see [Which shell runs a hook](configuration.md#which-shell-runs-a-hook).
 
-> **Note:** these examples go in your own config file (`~/.config/wt/config.toml`), where they run as written. Put the same `[hooks]` block in a repository's committed `.wt.toml` and `wt` will ask before running it, since those commands are then supplied by the repository rather than by you — see [Hook trust](configuration.md#hook-trust).
+> **Note:** these examples go in your own config file (`~/.config/wt/config.toml`). `wt` asks before running any hook the first time, wherever it came from — approve once with `wt trust`, or answer the prompt, and it will not ask again until the commands change. A repository's committed `.wt.toml` is approved per repository, since those commands are supplied by the repository rather than by you — see [Hook trust](configuration.md#hook-trust).
 
 ## AI assistants and editors
 

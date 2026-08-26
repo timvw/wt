@@ -22,6 +22,7 @@ type Config struct {
 	HooksPolicy string `toml:"hooks_policy"`
 	RepoPattern string `toml:"repo_pattern"`
 	Files       Files  `toml:"files"`
+	Trust       Trust  `toml:"trust"`
 
 	// Context holds path-matched rules supplying environment variables to
 	// pattern rendering. Decoded from the user's config file only — see
@@ -43,6 +44,22 @@ type Files struct {
 	Link        []string `toml:"link"`
 	Exclude     []string `toml:"exclude"`
 	CopyIgnored bool     `toml:"copy_ignored"`
+}
+
+// Trust names trees whose repository hooks may run without being approved
+// first — the escape hatch for people who would otherwise reach for
+// WT_HOOKS_APPROVE_ALL=1 and disable the gate everywhere, including for the
+// repository they cloned this morning.
+//
+// Readable from the user's config file ONLY. Not from a repo's .wt.toml and not
+// from git config: it decides whether commands run, so a repository able to add
+// itself to it would put the lock on the inside of the door. Same reasoning as
+// hooks_policy — see resolveHooksPolicy.
+type Trust struct {
+	// Prefix matches a tree and everything under it, component-wise.
+	Prefix []string `toml:"prefix"`
+	// Exact matches one repository.
+	Exact []string `toml:"exact"`
 }
 
 // Hooks holds pre/post command hook commands.
@@ -95,25 +112,25 @@ var configRepoFound bool
 // is reliably available.
 var configRepoKey string
 
-// configRepoSHA is the sha256 of the repo-level .wt.toml bytes that were
-// actually decoded, and is what hook approvals are pinned to.
-var configRepoSHA string
-
 // configSources tracks the origin of each resolved value.
 var configSources configSource
 
 // worktreeHooks holds the effective (merged) hook configuration.
 var worktreeHooks Hooks
 
-// repoConfigHooks holds the hooks the repo-level .wt.toml supplied, kept
-// separate so they can be shown for approval before anything runs.
-var repoConfigHooks Hooks
-
 // hookSources records which config layer supplied each hook event's commands.
 // The merge below replaces a whole event at a time, so one source per event is
-// exact — and it is what tells runHooks whether it is looking at commands the
-// user wrote or commands a repository shipped.
+// exact — which is what lets hookSetEntries read a whole layer's contribution
+// back out of the merged result, and what decides how widely one approval of it
+// reaches.
 var hookSources = map[string]string{}
+
+// trustPrefixes and trustExact are the [trust] whitelist, loaded from the user's
+// config file only. See Trust and trustWhitelistAllows.
+var (
+	trustPrefixes []string
+	trustExact    []string
+)
 
 // hooksPolicy is the configured hook approval policy (see hookPolicy* in
 // hooks.go). Deliberately loaded from the user's config file only.
@@ -260,19 +277,19 @@ func gitConfigValues(entries []gitConfigEntry) map[string]string {
 // The dividing line is not scalar versus list — it is that git config carries
 // settings, never commands, nor the policy that gates commands:
 //
-//   - [hooks] is never read from git config, at any scope. Not because a
+//   - [hooks] is not read from git config today, at any scope. Not because a
 //     multi-valued key could not carry the commands, and not because the merge
 //     is undecided (loadWorktreeConfig resolves each event on its own, the
-//     highest layer naming an event supplying that event's whole list). It is
-//     because approveHooks fails OPEN: it gates on the source label, prompting
-//     only when hookSources says hookSourceRepoConfig, and returns true for
-//     everything else. A hook arriving under any new label would therefore run
-//     unprompted — and .git/config is not reliably the reader's own file, since
-//     a repo handed over as a directory rather than a clone brings its
-//     .git/config along (see the trust store rationale in trust.go). Adding a
-//     source here means teaching approveHooks about it first.
-//   - hooks_policy is never read from git config either, for the reason in
-//     resolveHooksPolicy: it is the gate on that execution, and a repository
+//     highest layer naming an event supplying that event's whole list). What is
+//     missing is the other half: a source needs a scope in hookSetTrust before
+//     an approval for it can mean anything, and .git/config is not reliably the
+//     reader's own file — a repo handed over as a directory rather than a clone
+//     brings its .git/config along (see the trust store rationale in trust.go),
+//     so --local and --global would not deserve the same scope. Adding the
+//     source without that is safe but useless: approveHooks reaches its default
+//     branch, and every run asks again with nothing able to remember the answer.
+//   - hooks_policy and [trust] are never read from git config, for the reason in
+//     resolveHooksPolicy: they are the gate on that execution, and a repository
 //     choosing how closely wt scrutinises its own hooks defeats the mechanism.
 //   - [files] copy/link/exclude may come in, because they are declarative data
 //     bounded by invariants F1-F7 rather than commands. The copy universe is
@@ -597,9 +614,10 @@ func loadWorktreeConfig() {
 
 	// Reset hooks
 	worktreeHooks = Hooks{}
-	repoConfigHooks = Hooks{}
 	hookSources = map[string]string{}
 	hooksPolicy = ""
+	trustPrefixes = nil
+	trustExact = nil
 	contextRules = nil
 
 	// Reset [files]
@@ -661,6 +679,10 @@ func loadWorktreeConfig() {
 				hooksPolicy = strings.ToLower(strings.TrimSpace(cfg.HooksPolicy))
 				configSources.HooksPolicy = "config file"
 			}
+			// Only from here. Loading [trust] anywhere else would let the thing
+			// being gated name itself as exempt.
+			trustPrefixes = cfg.Trust.Prefix
+			trustExact = cfg.Trust.Exact
 			// Appended after the git config rules rather than replacing them,
 			// so the two sources compose the way rules within one source
 			// already do: every matching rule applies, later definitions win
@@ -690,20 +712,17 @@ func loadWorktreeConfig() {
 	//    .wt.toml redirect the destination or run clone hooks would be wrong.
 	configRepoPath = ""
 	configRepoFound = false
-	configRepoSHA = ""
 	configRepoKey = ""
 
 	if repoRoot, err := gitRepoRootFn(); err == nil {
 		repoConfigPath := filepath.Join(repoRoot, ".wt.toml")
 		configRepoPath = repoConfigPath
-		// Read once and hash those exact bytes, rather than hashing the path
-		// again when the hooks are about to run. Approval has to be pinned to
-		// the commands actually decoded here: re-reading later would leave a
-		// window in which the file is swapped, and wt would check one file's
-		// hash while running another file's commands.
+		// Read once, and let the approval be pinned to what this read decoded
+		// rather than to a fresh read when the hooks are about to run: re-reading
+		// later would leave a window in which the file is swapped, and wt would
+		// check one file's contents while running another file's commands.
 		if data, err := os.ReadFile(repoConfigPath); err == nil {
 			configRepoFound = true
-			configRepoSHA = hashBytes(data)
 			if key, err := repoTrustKeyFn(); err == nil {
 				configRepoKey = key
 			}
@@ -728,16 +747,18 @@ func loadWorktreeConfig() {
 				// repository's hooks would defeat the point.
 
 				// Merge hooks: repo hooks override per-hook type, unset hooks keep
-				// global values. Which layer won is recorded in hookSources, because
-				// commands that arrived here from a committed file need the user's
-				// approval before they run (see approveHooks).
-				repoConfigHooks = repoCfg.Hooks
+				// global values. Which layer won is recorded in hookSources, which
+				// is how an approval for these commands stays pinned to this
+				// repository rather than following the user everywhere (see
+				// hookSetTrust). [trust] is deliberately not read here for the
+				// same reason.
+				repoHooks := repoCfg.Hooks
 				// pre_clone/post_clone are deliberately not merged from repo
 				// config: clone targets a different repository than this one.
-				repoConfigHooks.PreClone = nil
-				repoConfigHooks.PostClone = nil
+				repoHooks.PreClone = nil
+				repoHooks.PostClone = nil
 				for _, event := range hookEvents {
-					cmds := hooksOf(repoConfigHooks, event)
+					cmds := hooksOf(repoHooks, event)
 					if len(cmds) == 0 {
 						continue
 					}

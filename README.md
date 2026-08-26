@@ -191,19 +191,21 @@ git config --global wt.root ~/projects/worktrees
 
 ### Hook trust
 
-A repo's `.wt.toml` is committed, so its `[hooks]` are supplied by the repository, not by you.
-`wt` asks before running them and remembers your answer per file:
+`wt` runs no hook you have not approved — a repo's committed `.wt.toml` and your own config
+file alike. It asks once, and remembers the answer until the commands change:
 
 ```bash
-wt trust                          # approve this repository's .wt.toml hooks
+wt trust                          # approve every hook that applies here
 wt trust --list                   # show every approval on this machine
 wt untrust                        # revoke this repository's approval
+wt untrust --global               # revoke your config file's approval
 ```
 
-The approval is pinned to the file's contents, so an edit — or a `git pull` that adds a hook —
-asks again. Non-interactive runs (scripts, CI, `--format json`) decline, unless you opt out with
-`WT_HOOKS_APPROVE_ALL=1`. Set `hooks_policy = "prompt-all"` to confirm *every* hook, including
-your own. See [Hook trust](docs/configuration.md#hook-trust).
+Editing a hook command — or a `git pull` that adds one — asks again; editing anything else in the
+file does not. Non-interactive runs (scripts, CI, `--format json`) decline, unless you opt out with
+`WT_HOOKS_APPROVE_ALL=1`. Whitelist a whole tree with `[trust] prefix = ["~/src/mine"]`, or set
+`hooks_policy = "prompt-all"` to confirm every hook every time.
+See [Hook trust](docs/configuration.md#hook-trust).
 
 On case-insensitive filesystems such as the default macOS APFS setup, mixed-case branch
 prefixes can produce confusing worktree paths. For example, `Feature/foo` and

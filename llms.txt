@@ -45,7 +45,7 @@ Configuration and hooks
 - Per-repo override: .wt.toml in the repo root (project policy; ignores root, repo_root, repo_pattern, clone hooks)
 - Git config: wt.root, wt.repoRoot, wt.strategy, wt.pattern, wt.separator, wt.repoPattern, wt.copyIgnored, wt.copy, wt.link, wt.exclude via git config --local/--global
 - wt.copy/wt.link/wt.exclude are multi-valued: 'git config --add' for each pattern, --unset-all to clear; the other keys are scalars
-- Never read from git config at any scope: [hooks] and hooks_policy — git config is settings, never commands nor the policy gating them
+- Never read from git config at any scope: [hooks], hooks_policy and [trust] — git config is settings, never commands nor the policy gating them
 - Git config key spelling: the TOML key with sections flattened and multi-word names camelCased; git rejects "_" in a key name, and one such line makes the whole config file unparseable
 - Key settings: root, strategy, pattern, separator, repo_root, repo_pattern
 - Env overrides: WORKTREE_ROOT, WORKTREE_STRATEGY, WORKTREE_PATTERN, WORKTREE_SEPARATOR, WT_REPO_ROOT, WT_REPO_PATTERN, WT_COPY_IGNORED
@@ -57,11 +57,16 @@ Configuration and hooks
 - Supported hooks: pre/post create, checkout, remove, pr, mr, clone
 - Hook env vars: WT_PATH, WT_BRANCH, WT_MAIN, WT_REPO_NAME, WT_REPO_HOST, WT_REPO_OWNER
 - Disable hooks: WT_HOOKS_DISABLED=1
-- Hooks from a repo's committed .wt.toml are NOT run until approved: 'wt trust' (approve), 'wt trust --list', 'wt untrust'
-- An approval is pinned to (repository, sha256 of .wt.toml); editing the file or an identical file elsewhere re-prompts
-- Approvals live in ~/.config/wt/trust.toml; non-interactive runs decline unless WT_HOOKS_APPROVE_ALL=1
+- NO hook runs until approved, wherever it came from — a repo's committed .wt.toml AND your own config file (since wt 0.4.0)
+- Approve: 'wt trust' (approves every source that applies here), 'wt trust --list', 'wt untrust' (this repo), 'wt untrust --global' (your config file)
+- An approval is pinned to (scope, sha256 of that source's hook commands); scope is the repository for a .wt.toml, "user config" for your config file
+- Editing a hook command re-prompts; editing anything else in the file does not. An identical .wt.toml in another repository is not covered
+- Approvals live in ~/.config/wt/trust.toml (version 2); pre-0.4 records pinned file bytes, are not translated, and are dropped with a warning
+- [trust] whitelist (config file only): prefix = ["~/src/mine"], exact = ["~/src/acme/api"] — matching repos run hooks unasked and unrecorded; prefix matches whole path segments
 - hooks_policy (config file or WT_HOOKS_POLICY): prompt-untrusted (default), prompt-all, trusted-only, off
+- prompt-all re-confirms even approved and whitelisted hooks; trusted-only never prompts and is the CI choice
 - hooks_policy is never read from a repo-level .wt.toml; WT_HOOKS_APPROVE_ALL=1 approves everything (automation only)
+- Non-interactive runs (scripts, CI, --format json) decline and report on stderr rather than failing the command
 
 Untracked file materialisation ([files])
 - [files] schema: copy = [...], link = [...], exclude = [...] (gitignore syntax), copy_ignored = false

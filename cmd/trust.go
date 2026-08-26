@@ -10,37 +10,54 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
 )
 
-// Trust records which repo-supplied hook configurations the user has approved.
+// Trust records which hook configurations the user has approved.
 //
-// `.wt.toml` lives in the working tree, so it is committed and travels with the
-// repository: cloning an untrusted repo and running `wt create` would otherwise
-// execute whatever that repo put in its [hooks] table (issue #129). git's own
-// hooks are deliberately not transferred on clone for the same reason, and
-// direnv requires `direnv allow` before it will source a committed .envrc.
+// Nothing runs unapproved, whatever supplied it. The alternative — naming the
+// sources that need asking about and letting everything else through — makes
+// the permissive answer the one you get by omission: a source nobody has
+// taught the gate about, or the zero value, walks straight in and no review
+// flags an absence. direnv makes the same choice for the same reason, and will
+// not source even a .envrc you wrote yourself until you have said so once.
 //
-// A record is (repo, sha256) and BOTH must match before the repo's hooks run:
+// A record is (scope, sha256) and BOTH must match before the commands run:
 //
-//   - Hashing the file means any edit — a `git pull` that adds a post_create,
-//     a branch whose .wt.toml differs — invalidates the approval and asks
-//     again. Trusting a path once and forever would let a later commit walk
-//     straight in.
-//   - Pinning the repo as well means an attacker cannot get a free pass by
-//     shipping a .wt.toml byte-identical to one you already approved elsewhere:
-//     `make setup` is only as safe as the Makefile sitting next to it.
+//   - The hash covers the whole set of commands one source contributes, so any
+//     edit — a `git pull` that adds a post_create, a branch whose .wt.toml
+//     differs — invalidates the approval and asks again. Approving a source
+//     once and forever would let a later commit walk straight in.
+//   - The scope says how widely one approval reaches. The user's own config
+//     file is approved once for the machine; a repository's committed .wt.toml
+//     is approved per repository, so an attacker cannot get a free pass by
+//     shipping a .wt.toml byte-identical to one you already approved
+//     elsewhere: `make setup` is only as safe as the Makefile next to it.
 //
 // The store lives in wt's own config directory, never in the repository and
 // never in .git/config: a repo handed to you as a directory rather than a clone
 // owns its .git/config too.
 
-// trustRecord is a single approved repo-level hook configuration.
+// trustScopeUser is the scope recorded for hook sets that came from the user's
+// own config file. Repository scopes are always absolute paths, so a label with
+// a space in it cannot collide with one.
+const trustScopeUser = "user config"
+
+// trustStoreVersion is the format of the records this build understands.
+//
+// Bumped to 2 when approvals moved from "this .wt.toml file's bytes" to "this
+// source's commands". The two are not comparable and are deliberately not
+// translated: see loadTrustStore.
+const trustStoreVersion = 2
+
+// trustRecord is a single approved hook set.
 type trustRecord struct {
-	Repo       string `toml:"repo"`
+	Scope      string `toml:"scope"`
+	Source     string `toml:"source"`
 	File       string `toml:"file"`
 	SHA256     string `toml:"sha256"`
 	ApprovedAt string `toml:"approved_at"`
@@ -48,6 +65,7 @@ type trustRecord struct {
 
 // trustStore is the on-disk set of approvals.
 type trustStore struct {
+	Version int           `toml:"version"`
 	Trusted []trustRecord `toml:"trusted"`
 }
 
@@ -76,7 +94,31 @@ func loadTrustStore() (trustStore, error) {
 	if _, err := toml.DecodeFile(path, &store); err != nil {
 		return trustStore{}, fmt.Errorf("failed to read trust store %s: %w", path, err)
 	}
+	// Records from another format are dropped rather than interpreted. Version 1
+	// pinned the sha256 of a .wt.toml's bytes; these pin the sha256 of a source's
+	// commands. Reading one as the other would compare unrelated hashes, so the
+	// only safe reading is "nothing here is approved" — said out loud, because
+	// re-approving with no explanation is the failure this file warns about
+	// below.
+	if store.Version != trustStoreVersion {
+		warnStaleTrustStore(store.Version)
+		return trustStore{Version: trustStoreVersion}, nil
+	}
 	return store, nil
+}
+
+// staleTrustStoreWarning keeps the format notice to once per process: several
+// hook events can fire in one command, and each one reads the store.
+var staleTrustStoreWarning sync.Once
+
+func warnStaleTrustStore(found int) {
+	staleTrustStoreWarning.Do(func() {
+		fmt.Fprintf(os.Stderr,
+			"⚠ %s is in an older format (%d, this wt reads %d).\n"+
+				"  Those approvals pinned files rather than commands and are not translated.\n"+
+				"  wt will ask once more for each set of hooks you use.\n\n",
+			trustFilePath(), found, trustStoreVersion)
+	})
 }
 
 // saveTrustStore writes the trust store, replacing any existing one.
@@ -84,6 +126,7 @@ func loadTrustStore() (trustStore, error) {
 // Written via a temp file and rename so an interrupted write cannot leave a
 // truncated store behind — which would silently revoke every approval.
 func saveTrustStore(store trustStore) error {
+	store.Version = trustStoreVersion
 	path := trustFilePath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
@@ -119,33 +162,35 @@ func saveTrustStore(store trustStore) error {
 
 const trustStoreHeader = `# wt hook trust store — managed by 'wt trust' and 'wt untrust'.
 #
-# Each entry records a repo-level .wt.toml whose [hooks] you approved, pinned to
-# the file's contents. Editing that .wt.toml invalidates the entry and wt will
-# ask again. Deleting this file revokes every approval.
+# Each entry records a set of hook commands you approved, pinned to the commands
+# themselves. Editing them invalidates the entry and wt will ask again. Entries
+# scoped to "user config" came from your own config file and apply everywhere;
+# the rest are pinned to one repository. Deleting this file revokes everything.
 
 `
 
-// isTrusted reports whether this exact file content has been approved for this
-// exact repo.
-func (s trustStore) isTrusted(repo, sha string) bool {
-	if repo == "" || sha == "" {
+// isTrusted reports whether this exact set of commands has been approved for
+// this exact scope.
+func (s trustStore) isTrusted(scope, sha string) bool {
+	if scope == "" || sha == "" {
 		return false
 	}
 	for _, rec := range s.Trusted {
-		if rec.Repo == repo && rec.SHA256 == sha {
+		if rec.Scope == scope && rec.SHA256 == sha {
 			return true
 		}
 	}
 	return false
 }
 
-// add records an approval, replacing any previous entry with the same repo and
-// hash. Entries for the same repo with a *different* hash are kept: worktrees of
-// one repo can legitimately sit on branches whose .wt.toml differ, and dropping
-// them would make switching between two approved branches re-prompt each time.
+// add records an approval, replacing any previous entry with the same scope and
+// hash. Entries for the same scope with a *different* hash are kept: worktrees
+// of one repo can legitimately sit on branches whose .wt.toml differ, and
+// dropping them would make switching between two approved branches re-prompt
+// each time.
 func (s *trustStore) add(rec trustRecord) {
 	for i, existing := range s.Trusted {
-		if existing.Repo == rec.Repo && existing.SHA256 == rec.SHA256 {
+		if existing.Scope == rec.Scope && existing.SHA256 == rec.SHA256 {
 			s.Trusted[i] = rec
 			return
 		}
@@ -153,11 +198,11 @@ func (s *trustStore) add(rec trustRecord) {
 	s.Trusted = append(s.Trusted, rec)
 }
 
-// remove drops every approval for a repo and reports how many went.
-func (s *trustStore) remove(repo string) int {
+// remove drops every approval for a scope and reports how many went.
+func (s *trustStore) remove(scope string) int {
 	kept := make([]trustRecord, 0, len(s.Trusted))
 	for _, rec := range s.Trusted {
-		if rec.Repo != repo {
+		if rec.Scope != scope {
 			kept = append(kept, rec)
 		}
 	}
@@ -172,17 +217,32 @@ func hashBytes(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// hashFile returns the hex sha256 of a file's contents.
+// hookSetHash is the identity an approval is pinned to: every command a source
+// contributes, in event order, folded together with the source's own name.
 //
-// Only for reporting on files wt is not about to act on (wt trust --list).
-// Anything gating execution is pinned to the bytes that were actually decoded —
-// see configRepoSHA.
-func hashFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
+// The whole set rather than the batch about to run, because approving buys
+// silence for everything that source will ask for later — a benign post_create
+// must not be able to consent on behalf of a pre_remove the user never saw.
+//
+// Each field is length-prefixed. Commands are supplied by whoever wrote the
+// config and may contain newlines; with a plain separator, one command could
+// spell out further events and hash as a set nobody approved.
+//
+// Hashing the commands rather than the file they arrived in means editing
+// anything else in that file — a pattern, a [files] entry — does not re-prompt.
+// Only the part that is gated is pinned.
+func hookSetHash(source string, entries []hookEntry) string {
+	if len(entries) == 0 {
+		return ""
 	}
-	return hashBytes(data), nil
+	var b strings.Builder
+	field := func(s string) { fmt.Fprintf(&b, "%d:%s\n", len(s), s) }
+	field(source)
+	for _, e := range entries {
+		field(e.Event)
+		field(e.Cmd)
+	}
+	return hashBytes([]byte(b.String()))
 }
 
 // repoTrustKeyFn resolves the identity a trust record is pinned to.
@@ -293,57 +353,95 @@ func canonicalPath(p string) string {
 	return filepath.Clean(p)
 }
 
-// repoHookTrust describes the trust state of the current repo's .wt.toml.
-type repoHookTrust struct {
-	repo    string // git common dir, the identity trust is pinned to
-	file    string // path to the .wt.toml
-	sha     string // sha256 of its contents
-	trusted bool
+// hookTrust describes the approval state of the hook set one source supplied.
+type hookTrust struct {
+	scope       string // trustScopeUser, or the repository identity
+	source      string // the hookSource* label the commands arrived under
+	file        string // the file that supplied them, for display
+	sha         string // sha256 of the command set
+	trusted     bool
+	whitelisted bool // approved by a [trust] rule rather than a stored record
 }
 
-// currentRepoHookTrust resolves the trust state of the repo-level config that
-// supplied the hooks about to run.
-func currentRepoHookTrust() (repoHookTrust, error) {
-	if configRepoPath == "" || !configRepoFound {
-		return repoHookTrust{}, fmt.Errorf("no repo-level .wt.toml loaded")
+// describeHookSource names a hook source for a message.
+func describeHookSource(source string) string {
+	if source == "" {
+		return "an unrecognised source"
 	}
-	// The identity resolved at config load. Falling back to resolving it now
-	// covers callers that set the path globals directly, but the cached value is
-	// the one to prefer: see configRepoKey.
-	repo := configRepoKey
-	if repo == "" {
-		var err error
-		repo, err = repoTrustKeyFn()
-		if err != nil {
-			return repoHookTrust{}, err
+	return source
+}
+
+// hookSetTrust resolves the approval state of the hook set supplied by source.
+func hookSetTrust(source string) (hookTrust, error) {
+	t := hookTrust{source: source}
+
+	switch source {
+	case hookSourceConfigFile:
+		// One scope for the machine: the user's config file is not tied to any
+		// repository, so an approval given once should not be asked for again in
+		// the next checkout.
+		t.scope = trustScopeUser
+		t.file = configFilePath
+	case hookSourceRepoConfig:
+		if configRepoPath == "" || !configRepoFound {
+			return hookTrust{}, fmt.Errorf("no repo-level .wt.toml loaded")
 		}
+		t.file = configRepoPath
+		// The identity resolved at config load. Falling back to resolving it now
+		// covers callers that set the path globals directly, but the cached value
+		// is the one to prefer: see configRepoKey.
+		t.scope = configRepoKey
+		if t.scope == "" {
+			var err error
+			if t.scope, err = repoTrustKeyFn(); err != nil {
+				return hookTrust{}, err
+			}
+		}
+	default:
+		// A source this switch has not been taught about gets no scope, so
+		// nothing about it can be remembered and every run asks again. That is
+		// the point: adding a source and forgetting to place it here is
+		// annoying, never silently permissive.
+		return t, nil
 	}
-	// The hash of the bytes loadWorktreeConfig decoded, not a fresh read of the
-	// path: approval must cover the commands wt is actually holding.
-	sha := configRepoSHA
-	if sha == "" {
-		return repoHookTrust{}, fmt.Errorf("no hash recorded for %s", configRepoPath)
+
+	entries := hookSetEntries(source)
+	t.sha = hookSetHash(source, entries)
+	if t.sha == "" {
+		return hookTrust{}, fmt.Errorf("no hook commands recorded for %s", describeHookSource(source))
 	}
+
+	// Consulted before the store is opened, so a whitelisted tree keeps working
+	// when the store is unreadable: an escape hatch that depends on the
+	// machinery it bypasses is not one.
+	if t.scope != trustScopeUser && trustWhitelistAllows(t.scope) {
+		t.trusted, t.whitelisted = true, true
+		return t, nil
+	}
+
 	store, err := loadTrustStore()
 	if err != nil {
-		return repoHookTrust{}, err
+		// Scope, file and hash are still known and still true; only the verdict
+		// is missing. Returning them lets a caller that does not need the verdict
+		// — prompt-all — still name the file it is asking about.
+		return t, err
 	}
-	return repoHookTrust{
-		repo:    repo,
-		file:    configRepoPath,
-		sha:     sha,
-		trusted: store.isTrusted(repo, sha),
-	}, nil
+	t.trusted = store.isTrusted(t.scope, t.sha)
+	return t, nil
 }
 
-// trustCurrentRepo records an approval for the current repo's .wt.toml.
-func trustCurrentRepo(t repoHookTrust) error {
+// trustHookSet records an approval for a resolved hook set.
+func trustHookSet(t hookTrust) error {
+	if t.scope == "" || t.sha == "" {
+		return fmt.Errorf("hooks from %s cannot be remembered", describeHookSource(t.source))
+	}
 	store, err := loadTrustStore()
 	if err != nil {
 		return err
 	}
 	store.add(trustRecord{
-		Repo:       t.repo,
+		Scope:      t.scope,
+		Source:     t.source,
 		File:       t.file,
 		SHA256:     t.sha,
 		ApprovedAt: time.Now().UTC().Format(time.RFC3339),
@@ -351,21 +449,104 @@ func trustCurrentRepo(t repoHookTrust) error {
 	return saveTrustStore(store)
 }
 
-var trustList bool
+// trustWhitelistAllows reports whether a repository is covered by the [trust]
+// table in the user's config file.
+//
+// The escape hatch exists because strict-by-default without a proportionate
+// opt-out does not produce compliance, it produces WT_HOOKS_APPROVE_ALL=1 in a
+// shell profile — which disables the gate everywhere, including for the repo
+// you cloned this morning. Narrowing that to named trees is strictly better.
+//
+// Readable from the user's config file only. It is policy that decides whether
+// commands run, so a repository being able to add itself would put the lock on
+// the inside of the door — the same reason hooks_policy is not read from
+// .wt.toml or from git config.
+func trustWhitelistAllows(repoKey string) bool {
+	if repoKey == "" || repoKey == trustScopeUser {
+		return false
+	}
+	target := trustWhitelistTarget(repoKey)
+	for _, entry := range trustExact {
+		if p := normaliseTrustPath(entry); p != "" && p == target {
+			return true
+		}
+	}
+	for _, entry := range trustPrefixes {
+		if p := normaliseTrustPath(entry); p != "" && hasPathPrefix(target, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// trustWhitelistTarget turns a repository identity into the path a user would
+// recognise as "the repo".
+//
+// The identity is the common git directory for an ordinary clone, so matching
+// ~/src/mine against ~/src/mine/repo/.git only works once the .git is stripped.
+// Every worktree of a repository shares that identity, which is what makes one
+// whitelist entry cover the worktrees wt creates elsewhere on disk.
+//
+// Canonicalised on the way out, the same as the rules it will be compared with.
+// The identity usually arrives canonical already — see gitCommonDir — but a
+// whitelist that silently stops matching because one side spelled /tmp and the
+// other /private/tmp fails in the direction of running commands the user
+// thought they had vetted, so it is not left to the caller.
+func trustWhitelistTarget(repoKey string) string {
+	if filepath.Base(repoKey) == ".git" {
+		repoKey = filepath.Dir(repoKey)
+	}
+	return canonicalPath(repoKey)
+}
+
+// normaliseTrustPath resolves a whitelist entry to something comparable with a
+// repository path. An entry that is blank resolves to nothing rather than to the
+// working directory: `prefix = [""]` must not whitelist the filesystem.
+func normaliseTrustPath(entry string) string {
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return ""
+	}
+	return canonicalPath(expandHome(entry))
+}
+
+// hasPathPrefix reports whether path is prefix or sits underneath it.
+//
+// Compared component-wise rather than as a string: a plain strings.HasPrefix
+// would read ~/src/mine as covering ~/src/mine-from-the-internet, which is a
+// directory the user never named.
+func hasPathPrefix(path, prefix string) bool {
+	if path == prefix {
+		return true
+	}
+	if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+		prefix += string(filepath.Separator)
+	}
+	return strings.HasPrefix(path, prefix)
+}
+
+var (
+	trustList     bool
+	untrustGlobal bool
+)
 
 var trustCmd = &cobra.Command{
 	Use:   "trust",
-	Short: "Approve the current repository's .wt.toml hooks",
-	Long: `Approve the hooks in this repository's .wt.toml.
+	Short: "Approve the hooks that apply here",
+	Long: `Approve the hook commands configured for this directory.
 
-.wt.toml is committed, so its [hooks] table is supplied by whoever wrote the
-repository rather than by you. wt will not run those commands until you approve
-them, and the approval is pinned to the file's current contents: if .wt.toml
-changes, wt asks again.
+wt runs no hook until you have approved it, whether it came from your own
+config file or from a repository's committed .wt.toml. The approval is pinned
+to the commands themselves: change them and wt asks again.
 
-  wt trust           approve this repository's .wt.toml
-  wt trust --list    show every approval on this machine
-  wt untrust         revoke approval for this repository`,
+Hooks from your config file are approved once for this machine. Hooks from a
+repository's .wt.toml are approved for that repository alone, so an identical
+file in a repo you cloned this morning does not inherit the answer.
+
+  wt trust             approve the hooks that apply here
+  wt trust --list      show every approval on this machine
+  wt untrust           revoke this repository's approvals
+  wt untrust --global  revoke the approvals for your own config file`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if trustList {
@@ -377,7 +558,7 @@ changes, wt asks again.
 
 var untrustCmd = &cobra.Command{
 	Use:   "untrust",
-	Short: "Revoke approval for the current repository's .wt.toml hooks",
+	Short: "Revoke hook approvals for this repository",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runUntrust(cmd)
@@ -385,60 +566,96 @@ var untrustCmd = &cobra.Command{
 }
 
 func init() {
-	trustCmd.Flags().BoolVar(&trustList, "list", false, "List all approved .wt.toml files")
+	trustCmd.Flags().BoolVar(&trustList, "list", false, "List all approved hooks")
+	untrustCmd.Flags().BoolVar(&untrustGlobal, "global", false, "Revoke the approvals for your own config file instead")
 }
 
+// runTrust approves every hook set that applies where the user is standing —
+// their own config file's and, if there is one, this repository's.
+//
+// Both, rather than only the repository's, because "wt trust" is what the skip
+// message tells the user to run and it should leave nothing still asking. They
+// are still recorded separately, so approving here does not widen the
+// repository's reach or pin the user's own hooks to this checkout.
 func runTrust(cmd *cobra.Command) error {
-	if configRepoPath == "" {
-		return fmt.Errorf("not in a git repository")
-	}
-	if !configRepoFound {
-		return fmt.Errorf("no .wt.toml found at %s", configRepoPath)
-	}
-
-	t, err := currentRepoHookTrust()
-	if err != nil {
-		return err
-	}
-
-	if t.trusted {
+	sources := loadedHookSources()
+	if len(sources) == 0 {
 		if isJSONOutput() {
-			return emitJSONSuccess(cmd, map[string]any{"file": t.file, "sha256": t.sha, "trusted": true, "changed": false})
+			return emitJSONSuccess(cmd, map[string]any{"approved": []any{}})
 		}
-		fmt.Printf("Already trusted: %s\n", t.file)
+		fmt.Println("No hooks are configured here, so there is nothing to approve.")
 		return nil
 	}
 
-	// Show what is being approved. Trusting without reading is the failure mode
-	// this whole mechanism exists to prevent, so put the commands on screen even
-	// when the user asked for it explicitly.
-	if !isJSONOutput() {
-		// No event is firing: wt trust approves the file, not a run.
-		printHookApprovalRequest(os.Stdout, repoHookCommands(), "", t)
-	}
+	approved := make([]map[string]any, 0, len(sources))
+	for _, source := range sources {
+		t, err := hookSetTrust(source)
+		if err != nil {
+			return err
+		}
 
-	if err := trustCurrentRepo(t); err != nil {
-		return err
+		changed := false
+		switch {
+		case t.whitelisted, t.trusted:
+		default:
+			// Show what is being approved. Approving without reading is the
+			// failure mode this whole mechanism exists to prevent, so put the
+			// commands on screen even when the user asked for it explicitly.
+			if !isJSONOutput() {
+				// No event is firing: wt trust approves the set, not a run.
+				printHookApprovalRequest(os.Stdout, hookSetEntries(source), "", t)
+			}
+			if err := trustHookSet(t); err != nil {
+				return err
+			}
+			changed = true
+		}
+
+		approved = append(approved, map[string]any{
+			"source":      source,
+			"scope":       t.scope,
+			"file":        t.file,
+			"sha256":      t.sha,
+			"trusted":     true,
+			"whitelisted": t.whitelisted,
+			"changed":     changed,
+		})
+
+		if isJSONOutput() {
+			continue
+		}
+		switch {
+		case t.whitelisted:
+			fmt.Printf("Already covered by [trust] in %s: %s\n", configFilePath, t.file)
+		case !changed:
+			fmt.Printf("Already trusted: %s (%s)\n", t.file, source)
+		default:
+			fmt.Printf("Trusted: %s (%s)\n", t.file, source)
+			fmt.Printf("  wt will ask again if these commands change.\n")
+		}
 	}
 
 	if isJSONOutput() {
-		return emitJSONSuccess(cmd, map[string]any{"file": t.file, "sha256": t.sha, "trusted": true, "changed": true})
+		return emitJSONSuccess(cmd, map[string]any{"approved": approved})
 	}
-	fmt.Printf("Trusted: %s\n", t.file)
-	fmt.Printf("  wt will ask again if this file changes.\n")
 	return nil
 }
 
 func runUntrust(cmd *cobra.Command) error {
-	repo, err := repoTrustKeyFn()
-	if err != nil {
-		return err
+	scope := trustScopeUser
+	if !untrustGlobal {
+		repo, err := repoTrustKeyFn()
+		if err != nil {
+			return err
+		}
+		scope = repo
 	}
+
 	store, err := loadTrustStore()
 	if err != nil {
 		return err
 	}
-	removed := store.remove(repo)
+	removed := store.remove(scope)
 	if removed > 0 {
 		if err := saveTrustStore(store); err != nil {
 			return err
@@ -446,13 +663,23 @@ func runUntrust(cmd *cobra.Command) error {
 	}
 
 	if isJSONOutput() {
-		return emitJSONSuccess(cmd, map[string]any{"repo": repo, "removed": removed})
+		return emitJSONSuccess(cmd, map[string]any{"scope": scope, "removed": removed})
 	}
-	if removed == 0 {
-		fmt.Println("Nothing to revoke: this repository has no approved .wt.toml")
-		return nil
+	switch {
+	case removed == 0 && untrustGlobal:
+		fmt.Println("Nothing to revoke: your config file's hooks are not approved.")
+	case removed == 0:
+		fmt.Println("Nothing to revoke: this repository has no approved hooks.")
+	default:
+		fmt.Printf("Revoked %d approval(s) for %s\n", removed, scope)
 	}
-	fmt.Printf("Revoked %d approval(s) for %s\n", removed, repo)
+	// A whitelist rule is not a record, so revoking cannot reach it. Saying so
+	// beats letting the user believe the hooks are now gated when they are not —
+	// which is just as wrong after "nothing to revoke", where a whitelisted repo
+	// never had a record to begin with, so that branch reports it too.
+	if !untrustGlobal && trustWhitelistAllows(scope) {
+		fmt.Printf("  Note: %s still matches a [trust] rule in %s, so its hooks keep running.\n", trustWhitelistTarget(scope), configFilePath)
+	}
 	return nil
 }
 
@@ -466,40 +693,45 @@ func runTrustList(cmd *cobra.Command) error {
 		records := make([]map[string]any, 0, len(store.Trusted))
 		for _, rec := range store.Trusted {
 			records = append(records, map[string]any{
-				"repo":        rec.Repo,
+				"scope":       rec.Scope,
+				"source":      rec.Source,
 				"file":        rec.File,
 				"sha256":      rec.SHA256,
 				"approved_at": rec.ApprovedAt,
-				"current":     trustRecordCurrent(rec),
 			})
 		}
-		return emitJSONSuccess(cmd, map[string]any{"trust_file": trustFilePath(), "trusted": records})
+		return emitJSONSuccess(cmd, map[string]any{
+			"trust_file": trustFilePath(),
+			"trusted":    records,
+			"whitelist":  map[string]any{"prefix": trustPrefixes, "exact": trustExact},
+		})
 	}
 
 	if len(store.Trusted) == 0 {
-		fmt.Println("No approved .wt.toml files.")
-		return nil
+		fmt.Println("No approved hooks.")
+	} else {
+		fmt.Printf("Trust store: %s\n\n", trustFilePath())
+		for _, rec := range store.Trusted {
+			fmt.Printf("  %s\n", rec.File)
+			fmt.Printf("    scope:    %s\n", rec.Scope)
+			fmt.Printf("    source:   %s\n", rec.Source)
+			fmt.Printf("    sha256:   %s\n", rec.SHA256)
+			fmt.Printf("    approved: %s\n\n", rec.ApprovedAt)
+		}
 	}
 
-	fmt.Printf("Trust store: %s\n\n", trustFilePath())
-	for _, rec := range store.Trusted {
-		marker := ""
-		if !trustRecordCurrent(rec) {
-			// Kept rather than pruned: the branch that approved it may simply not
-			// be checked out right now.
-			marker = "  (file changed or gone since approval)"
+	// Listed alongside the records because a whitelist rule approves hooks
+	// nothing in the store will ever mention. A trust list that only shows what
+	// was clicked through would understate what is allowed to run.
+	if len(trustPrefixes) > 0 || len(trustExact) > 0 {
+		fmt.Printf("Whitelisted by [trust] in %s — hooks under these paths run unasked:\n", configFilePath)
+		for _, p := range trustPrefixes {
+			fmt.Printf("  prefix: %s\n", p)
 		}
-		fmt.Printf("  %s%s\n", rec.File, marker)
-		fmt.Printf("    repo:     %s\n", rec.Repo)
-		fmt.Printf("    sha256:   %s\n", rec.SHA256)
-		fmt.Printf("    approved: %s\n\n", rec.ApprovedAt)
+		for _, p := range trustExact {
+			fmt.Printf("  exact:  %s\n", p)
+		}
+		fmt.Println()
 	}
 	return nil
-}
-
-// trustRecordCurrent reports whether the file a record points at still hashes to
-// the approved value.
-func trustRecordCurrent(rec trustRecord) bool {
-	sha, err := hashFile(rec.File)
-	return err == nil && sha == rec.SHA256
 }
