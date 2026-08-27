@@ -69,10 +69,25 @@ type trustStore struct {
 	Trusted []trustRecord `toml:"trusted"`
 }
 
-// trustFilePath is the location of the trust store.
+// trustFilePath is the location of the trust store, or "" when configDir cannot
+// name an absolute directory. Never a relative path: see errNoTrustStoreDir.
 func trustFilePath() string {
-	return filepath.Join(configDir(), "trust.toml")
+	dir := configDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "trust.toml")
 }
+
+// errNoTrustStoreDir is returned when there is nowhere to keep approvals.
+//
+// A relative path here would be a hole rather than an inconvenience: wt runs
+// from inside a repository, so "trust.toml" would resolve into the working tree
+// and a cloned repo could ship approvals for its own hooks. With no home
+// directory to anchor to, the honest answer is that nothing is approved.
+var errNoTrustStoreDir = errors.New(
+	"cannot locate a config directory to keep hook approvals in (no HOME set); " +
+		"set HOME or XDG_CONFIG_HOME to an absolute path")
 
 // loadTrustStore reads the trust store. A missing store is not an error: it
 // simply means nothing has been approved yet. A malformed one *is* an error —
@@ -82,6 +97,9 @@ func trustFilePath() string {
 func loadTrustStore() (trustStore, error) {
 	var store trustStore
 	path := trustFilePath()
+	if path == "" {
+		return trustStore{}, errNoTrustStoreDir
+	}
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return store, nil
@@ -128,6 +146,9 @@ func warnStaleTrustStore(found int) {
 func saveTrustStore(store trustStore) error {
 	store.Version = trustStoreVersion
 	path := trustFilePath()
+	if path == "" {
+		return errNoTrustStoreDir
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
@@ -653,6 +674,11 @@ func runTrust(cmd *cobra.Command) error {
 			"trusted":     true,
 			"whitelisted": t.whitelisted,
 			"changed":     changed,
+			// The text path prints the commands before approving them. JSON
+			// cannot interleave that, so it carries them instead: a caller that
+			// approves without ever being told what it approved is the same
+			// failure, whether a person or a script is reading.
+			"commands": hookEntriesJSON(hookSetEntries(source)),
 		})
 
 		if isJSONOutput() {
@@ -697,7 +723,13 @@ func runUntrust(cmd *cobra.Command) error {
 	}
 
 	if isJSONOutput() {
-		return emitJSONSuccess(cmd, map[string]any{"scope": scope, "removed": removed})
+		// still_whitelisted, because "removed" alone reads as "gated now" and a
+		// whitelisted repository keeps running its hooks regardless.
+		return emitJSONSuccess(cmd, map[string]any{
+			"scope":             scope,
+			"removed":           removed,
+			"still_whitelisted": !untrustGlobal && trustWhitelistAllows(scope),
+		})
 	}
 	switch {
 	case removed == 0 && untrustGlobal:
@@ -715,6 +747,33 @@ func runUntrust(cmd *cobra.Command) error {
 		fmt.Printf("  Note: %s still matches a [trust] rule in %s, so its hooks keep running.\n", trustWhitelistTarget(scope), configFilePath)
 	}
 	return nil
+}
+
+// hookEntriesJSON renders a hook set for JSON callers, in the order it would be
+// printed for a human.
+func hookEntriesJSON(entries []hookEntry) []map[string]any {
+	out := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, map[string]any{"event": entry.Event, "command": entry.Cmd})
+	}
+	return out
+}
+
+// trustRulesJSON renders [trust] rules with what each one resolves to, mirroring
+// the text listing: a rule containing a variable may cover a different tree than
+// it appears to, or — when normaliseTrustPath rejects it — none at all, and a
+// caller reading only the rule as written could not tell.
+func trustRulesJSON(entries []string) []map[string]any {
+	out := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		resolved := normaliseTrustPath(entry)
+		out = append(out, map[string]any{
+			"rule":    entry,
+			"path":    resolved,
+			"ignored": resolved == "",
+		})
+	}
+	return out
 }
 
 func runTrustList(cmd *cobra.Command) error {
@@ -737,7 +796,10 @@ func runTrustList(cmd *cobra.Command) error {
 		return emitJSONSuccess(cmd, map[string]any{
 			"trust_file": trustFilePath(),
 			"trusted":    records,
-			"whitelist":  map[string]any{"prefix": trustPrefixes, "exact": trustExact},
+			"whitelist": map[string]any{
+				"prefix": trustRulesJSON(trustPrefixes),
+				"exact":  trustRulesJSON(trustExact),
+			},
 		})
 	}
 

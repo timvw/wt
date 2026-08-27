@@ -62,6 +62,7 @@ Configuration and hooks
 - An approval is pinned to (scope, sha256 of that source's hook commands); scope is the repository for a .wt.toml, "user config" for your config file
 - Editing a hook command re-prompts; editing anything else in the file does not. An identical .wt.toml in another repository is not covered
 - Approvals live in ~/.config/wt/trust.toml (version 2); pre-0.4 records pinned file bytes, are not translated, and are dropped with a warning
+- The store path is always absolute: a relative XDG_CONFIG_HOME is ignored (XDG spec) and an unset HOME means nothing is approved, so trust.toml can never land inside the repo being gated
 - [trust] whitelist (config file only): prefix = ["~/src/mine"], exact = ["~/src/acme/api"] — matching repos run hooks unasked and unrecorded; prefix matches whole path segments
 - hooks_policy (config file or WT_HOOKS_POLICY): prompt-untrusted (default), prompt-all, trusted-only, off
 - prompt-all re-confirms even approved and whitelisted hooks; trusted-only never prompts and is the CI choice

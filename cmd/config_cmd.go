@@ -205,10 +205,16 @@ var configPathCmd = &cobra.Command{
 	Use:   "path",
 	Short: "Print the config file path",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if isJSONOutput() {
-			return emitJSONSuccess(cmd, map[string]string{"path": resolveConfigPath(configFlag)})
+		path := resolveConfigPath(configFlag)
+		if path == "" {
+			// Printing an empty line here would read as "no config file", which
+			// is not the problem: there is nowhere to look for one.
+			return fmt.Errorf("cannot locate a config directory (no HOME set); set HOME or XDG_CONFIG_HOME to an absolute path, or pass --config")
 		}
-		fmt.Println(resolveConfigPath(configFlag))
+		if isJSONOutput() {
+			return emitJSONSuccess(cmd, map[string]string{"path": path})
+		}
+		fmt.Println(path)
 		return nil
 	},
 }

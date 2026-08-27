@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -104,11 +105,22 @@ func writeRepoConfig(t *testing.T, repoDir, body string) {
 	if _, err := toml.Decode(body, &cfg); err != nil {
 		t.Fatal(err)
 	}
+	repoHooks := cfg.Hooks
+	// ...including the clone events it drops, so a .wt.toml naming post_clone
+	// cannot produce a declared set — and a hash — that production never would.
+	repoHooks.PreClone = nil
+	repoHooks.PostClone = nil
 	worktreeHooks = Hooks{}
 	hookSources = map[string]string{}
-	declaredHooks = map[string]Hooks{hookSourceRepoConfig: cfg.Hooks}
+	// Assigned into the map rather than over it: production keeps every layer's
+	// declarations side by side, and replacing the map would drop a config-file
+	// declaration an earlier helper made.
+	if declaredHooks == nil {
+		declaredHooks = map[string]Hooks{}
+	}
+	declaredHooks[hookSourceRepoConfig] = repoHooks
 	for _, event := range hookEvents {
-		cmds := hooksOf(cfg.Hooks, event)
+		cmds := hooksOf(repoHooks, event)
 		if len(cmds) == 0 {
 			continue
 		}
@@ -820,10 +832,12 @@ func TestTrustSurvivesADeletedWorkingDirectory(t *testing.T) {
 
 	savedPath, savedFound, savedKey := configRepoPath, configRepoFound, configRepoKey
 	savedHooks, savedSources := worktreeHooks, hookSources
+	savedDeclared := declaredHooks
 	withoutTrustWhitelist(t)
 	t.Cleanup(func() {
 		configRepoPath, configRepoFound, configRepoKey = savedPath, savedFound, savedKey
 		worktreeHooks, hookSources = savedHooks, savedSources
+		declaredHooks = savedDeclared
 	})
 	writeRepoConfig(t, repoDir, "[hooks]\npost_remove = [\"true\"]\n")
 
@@ -1122,8 +1136,54 @@ func TestOldTrustStoreRecordsAreIgnored(t *testing.T) {
 	}
 }
 
-// TestUntrustGlobalRevokesTheConfigFileApproval: the config file's approval is
-// not pinned to a repository, so "wt untrust" standing in one cannot reach it.
+// TestTrustStoreNeverLandsInsideTheRepository: wt runs from inside a working
+// tree, so a relative config directory resolves against it and the trust store
+// becomes a committable file — a cloned repo could ship approvals for its own
+// hooks. Per the XDG spec a relative XDG_CONFIG_HOME is invalid and ignored; an
+// unset HOME leaves nowhere to record anything, and the honest answer there is
+// that nothing is approved rather than a path in the repository.
+func TestTrustStoreNeverLandsInsideTheRepository(t *testing.T) {
+	repo := t.TempDir()
+	t.Chdir(repo)
+
+	t.Run("relative XDG_CONFIG_HOME is ignored", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("XDG_CONFIG_HOME", ".config")
+		relativeConfigHomeWarnings.Delete("XDG_CONFIG_HOME")
+
+		got := trustFilePath()
+		if !filepath.IsAbs(got) {
+			t.Fatalf("trust store path %q is relative", got)
+		}
+		if strings.HasPrefix(got, repo+string(filepath.Separator)) {
+			t.Errorf("trust store landed inside the repository: %s", got)
+		}
+	})
+
+	t.Run("no home means no store", func(t *testing.T) {
+		// UserHomeDir reads HOME on unix and USERPROFILE on Windows.
+		t.Setenv("HOME", "")
+		t.Setenv("USERPROFILE", "")
+		t.Setenv("XDG_CONFIG_HOME", "")
+		t.Setenv("APPDATA", "")
+
+		if got := trustFilePath(); got != "" {
+			t.Fatalf("trustFilePath() = %q, want \"\" when there is no home", got)
+		}
+		if _, err := loadTrustStore(); !errors.Is(err, errNoTrustStoreDir) {
+			t.Errorf("loadTrustStore() error = %v, want errNoTrustStoreDir", err)
+		}
+		// Saving has to refuse too: MkdirAll(filepath.Dir("")) is MkdirAll("."),
+		// which would happily write ./trust.toml into the working tree.
+		if err := saveTrustStore(trustStore{}); !errors.Is(err, errNoTrustStoreDir) {
+			t.Errorf("saveTrustStore() error = %v, want errNoTrustStoreDir", err)
+		}
+		if _, err := os.Stat(filepath.Join(repo, "trust.toml")); !errors.Is(err, os.ErrNotExist) {
+			t.Error("saveTrustStore wrote a trust store into the working tree")
+		}
+	})
+}
+
 // TestUntrustSaysWhenAWhitelistRuleStillApplies: a whitelisted repository never
 // had a record to revoke, so `wt untrust` reaches the "nothing to revoke" branch
 // — the one place a user is most likely to read the outcome as "gated now".
@@ -1162,6 +1222,8 @@ func TestUntrustSaysWhenAWhitelistRuleStillApplies(t *testing.T) {
 	}
 }
 
+// TestUntrustGlobalRevokesTheConfigFileApproval: the config file's approval is
+// not pinned to a repository, so "wt untrust" standing in one cannot reach it.
 func TestUntrustGlobalRevokesTheConfigFileApproval(t *testing.T) {
 	withIsolatedTrustStore(t)
 	withPolicy(t, hookPolicyPromptUntrusted)

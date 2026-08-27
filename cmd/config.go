@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/BurntSushi/toml"
 )
@@ -562,18 +563,53 @@ const defaultConfigTemplate = `# wt configuration file
 # post_clone = ["cd \"$WT_PATH\" && git status"]
 `
 
-// configDir returns the directory where wt config files are stored.
+// configDir returns the directory where wt config files are stored, or "" when
+// no absolute location can be determined.
+//
+// The result is always absolute or empty, never relative. Per the XDG Base
+// Directory spec a relative XDG_CONFIG_HOME is invalid and must be ignored, and
+// an unset HOME leaves nothing to fall back to. Resolving either against the
+// working directory would place wt's config — and, worse, its trust store —
+// inside whatever repository the user happens to be standing in, which would let
+// a cloned repo ship approvals for its own hooks. Returning "" instead fails
+// closed: no config file is found and nothing is trusted.
 func configDir() string {
-	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
-		return filepath.Join(d, "wt")
+	if d := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); d != "" {
+		if filepath.IsAbs(d) {
+			return filepath.Join(filepath.Clean(d), "wt")
+		}
+		warnRelativeConfigHome("XDG_CONFIG_HOME", d)
 	}
 	if runtime.GOOS == "windows" {
-		if d := os.Getenv("APPDATA"); d != "" {
-			return filepath.Join(d, "wt")
+		if d := strings.TrimSpace(os.Getenv("APPDATA")); d != "" {
+			if filepath.IsAbs(d) {
+				return filepath.Join(filepath.Clean(d), "wt")
+			}
+			warnRelativeConfigHome("APPDATA", d)
 		}
 	}
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil || !filepath.IsAbs(home) {
+		return ""
+	}
 	return filepath.Join(home, ".config", "wt")
+}
+
+// relativeConfigHomeWarnings keeps the notice to once per variable per process:
+// configDir is consulted by the config loader and again by every hook event.
+var relativeConfigHomeWarnings sync.Map
+
+// warnRelativeConfigHome reports an ignored override. Saying nothing would leave
+// the user reading a config file they did not write, or re-approving hooks they
+// already approved, with no way to tell why.
+func warnRelativeConfigHome(name, value string) {
+	if _, seen := relativeConfigHomeWarnings.LoadOrStore(name, true); seen {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"⚠ %s is set to a relative path %q and is being ignored; it must be absolute.\n"+
+			"  wt is falling back to your home directory.\n\n",
+		name, value)
 }
 
 // resolveConfigPath determines which config file to use.
@@ -585,7 +621,14 @@ func resolveConfigPath(flagValue string) string {
 	if envPath := os.Getenv("WT_CONFIG"); envPath != "" {
 		return envPath
 	}
-	return filepath.Join(configDir(), "config.toml")
+	// "" rather than a bare "config.toml": with no absolute directory to join
+	// onto, a relative name would be read from the current working directory —
+	// that is, from inside whatever repository wt was run in.
+	dir := configDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "config.toml")
 }
 
 // loadWorktreeConfig loads configuration from git config, files and environment
