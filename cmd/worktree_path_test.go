@@ -758,6 +758,9 @@ func TestGitTemplateDirFromTheEnvironmentIsGuarded(t *testing.T) {
 // wt reading the same value as relative would skip it, and skipping is not
 // guarding.
 func TestExpandGitPathTakesTheTildeUserForm(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("~user needs a passwd entry to expand; git does not do it here and neither does wt")
+	}
 	me, err := user.Current()
 	if err != nil || me.Username == "" {
 		t.Skip("no current user to look up")
@@ -836,18 +839,27 @@ func TestProcessRelativeXdgConfigHomeIsNotAConfigDir(t *testing.T) {
 	configHomeWarnings = sync.Map{}
 	t.Cleanup(func() { configHomeWarnings = sync.Map{} })
 	stderr := captureStderr(t)
-	t.Setenv("XDG_CONFIG_HOME", "/proc/self/cwd/.config")
+	const procPath = "/proc/self/cwd/.config"
+	t.Setenv("XDG_CONFIG_HOME", procPath)
 
 	want := filepath.Join(home, ".config", "wt")
 	if got := configDir(); got != want {
 		t.Errorf("configDir() = %q, want %q: /proc/self/cwd is absolute and still means the working "+
 			"directory, so the trust store would come from the repository", got, want)
 	}
-	// The warning has to be true, or it is one the user learns to skip: that
-	// value IS an absolute path, and what is wrong with it is something else.
-	if got := stderr(); !strings.Contains(got, "depending on which process asks") {
-		t.Errorf("configDir() said %q; want the reason to be that the path moves, not that it is "+
-			"relative — it is not relative", got)
+	// The warning has to be true, or it is one the user learns to skip. Which
+	// reason is the true one depends on the platform: a leading slash with no
+	// drive letter is not an absolute path on Windows, so there the ordinary
+	// "not absolute" answer is the correct one and the path never reaches the
+	// process-relative test at all.
+	said := stderr()
+	reason := "depending on which process asks"
+	if !filepath.IsAbs(procPath) {
+		reason = "is not an absolute path"
+	}
+	if !strings.Contains(said, reason) {
+		t.Errorf("configDir() said %q; want it to say %q — a warning the user can see is wrong is one "+
+			"they learn to skip", said, reason)
 	}
 }
 
