@@ -477,6 +477,54 @@ func TestApproveAllEscapeHatch(t *testing.T) {
 	}
 }
 
+// TestApprovedSourceDoesNotCoverSomeOtherBatch: an approval covers the commands
+// it was hashed over, and the batch reaches approveHooks separately from the
+// file it was read from. Every caller passes getHooks today, so this is a guard
+// against a future one that does not — a batch that is not this source's own
+// must not ride in on the source's approval, and must not be silently
+// remembered as it either.
+func TestApprovedSourceDoesNotCoverSomeOtherBatch(t *testing.T) {
+	withIsolatedTrustStore(t)
+	withPolicy(t, hookPolicyPromptUntrusted)
+	repoDir, _ := repoWithHooks(t, "[hooks]\npost_create = [\"true\"]\n")
+
+	// Approve what the repository actually declares.
+	trust, err := hookSetTrust(hookSourceRepoConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := trustHookSet(trust); err != nil {
+		t.Fatal(err)
+	}
+
+	// Then hand runHooks something else. There is no terminal here, so an
+	// unapproved batch is skipped and the marker stays absent.
+	marker := filepath.Join(repoDir, "smuggled")
+	stderr := captureStderr(t)
+	if err := runHooks("post_create", []string{"touch " + filepath.ToSlash(marker)}, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("a batch the repository never declared ran on the approval of one it did")
+	}
+	// And the batch itself is what the user is asked about: showing the declared
+	// "true" while running "touch smuggled" would be the same hole with a prompt
+	// in front of it.
+	if out := stderr(); !strings.Contains(out, "touch ") {
+		t.Errorf("the batch that was about to run was not shown:\n%s", out)
+	}
+
+	// Nothing was recorded for it, so the next run asks again rather than
+	// treating the smuggled batch as approved.
+	after, err := loadTrustStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Trusted) != 1 {
+		t.Errorf("the store gained a record for a batch that was never approved: %+v", after.Trusted)
+	}
+}
+
 func TestEffectiveHooksPolicy(t *testing.T) {
 	tests := []struct {
 		name       string
