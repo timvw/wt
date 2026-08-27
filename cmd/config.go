@@ -619,6 +619,32 @@ func warnConfigHomeNotAbsolute(name, value string) {
 		name, value)
 }
 
+// configFileInRepo reports whether the config file wt is about to read lives
+// inside the repository it is about to gate.
+//
+// Compared lexically, on the path as written rather than the path resolved: a
+// config file kept in a dotfiles repository and symlinked to ~/.config/wt is the
+// ordinary setup, and it must keep working while you are standing in that
+// repository. What must not work is a path that names a file inside this
+// repository, because the repository chose its contents — and the file reached
+// via a relative WT_CONFIG always does.
+func configFileInRepo(configPath, repoRoot string) bool {
+	if configPath == "" || repoRoot == "" {
+		return false
+	}
+	abs, err := filepath.Abs(configPath)
+	if err != nil {
+		// Unresolvable means unknowable, and this decides whether a repository
+		// gets to supply the gate's own settings.
+		return true
+	}
+	root, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return true
+	}
+	return hasPathPrefix(filepath.Clean(abs), filepath.Clean(root))
+}
+
 // sameFile reports whether two paths name the same file on disk.
 //
 // Compared by identity rather than by name: a config path can be given relative
@@ -646,9 +672,9 @@ func sameFile(a, b string) bool {
 // same WT_CONFIG works in a directory that is not a repository.
 func warnRepoConfigIsNotYourConfig(path string) {
 	fmt.Fprintf(os.Stderr,
-		"⚠ %s is this repository's own .wt.toml, so it is not being read as your config file.\n"+
+		"⚠ %s is a file in this repository, so it is not being read as your config file.\n"+
 			"  A repository read as your config file could exempt itself from hook approval.\n"+
-			"  Its [hooks] and settings still apply as a repository's, and still need 'wt trust'.\n\n",
+			"  Its settings still apply as a repository's, and its hooks still need 'wt trust'.\n\n",
 		path)
 }
 
@@ -733,9 +759,9 @@ func loadWorktreeConfig() {
 	configFilePath = resolveConfigPath(configFlag)
 	configFileFound = false
 
-	// The repository's own .wt.toml, located once and used twice: to load it as
-	// the repo layer in step 4, and — first — to be sure it is not also about to
-	// be read as the user's config file.
+	// The repository, located once and used twice: to load its .wt.toml as the
+	// repo layer in step 4, and — first — to be sure the repository is not also
+	// about to be read as the user's config file.
 	repoRoot, repoRootErr := gitRepoRootFn()
 	repoConfigPath := ""
 	if repoRootErr == nil {
@@ -746,8 +772,15 @@ func loadWorktreeConfig() {
 	// Two layers, one file, and the outer one is not gated: [trust] and
 	// hooks_policy are honoured from the config file precisely because it is
 	// yours, so a repository read as your config file can whitelist its own path
-	// and run its own hooks unasked. WT_CONFIG=.wt.toml is the way in — set once,
-	// it names a different file in every repository you enter.
+	// and run its own hooks unasked. A relative WT_CONFIG is the way in — set
+	// once, it names a different file in every repository you enter, and the
+	// repository decides what is in it. The name does not have to be .wt.toml:
+	// WT_CONFIG=wt-user.toml is a file a repository can commit just as easily.
+	case repoRootErr == nil && configFileInRepo(configFilePath, repoRoot):
+		warnRepoConfigIsNotYourConfig(configFilePath)
+
+	// And the same file reached from outside the repository — a config symlinked
+	// to a checked-in .wt.toml — which no comparison of names would catch.
 	case repoConfigPath != "" && sameFile(configFilePath, repoConfigPath):
 		warnRepoConfigIsNotYourConfig(configFilePath)
 

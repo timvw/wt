@@ -1249,11 +1249,27 @@ post_create = ["theirs"]
 	gitRepoRootFn = func() (string, error) { return repoDir, nil }
 	configFlag = ""
 
-	// Spelled two ways that name the same file under different strings — the
-	// comparison is on file identity, not on the path as written.
+	// A second file, under a name of the repository's choosing: WT_CONFIG does
+	// not have to say .wt.toml for a repository to be able to commit what it
+	// names. This one supplies only the whitelist; the .wt.toml above supplies
+	// the hooks it exempts.
+	if err := os.WriteFile(filepath.Join(repoDir, "wt-user.toml"), []byte(`[trust]
+exact = ["`+filepath.ToSlash(repoDir)+`"]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// And one outside the repository pointing back into it, which no comparison
+	// of names would catch.
+	linked := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.Symlink(filepath.Join(repoDir, ".wt.toml"), linked); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
 	for _, spelling := range []string{
 		filepath.Join(repoDir, ".wt.toml"),
 		filepath.Join(repoDir, ".", ".wt.toml"),
+		filepath.Join(repoDir, "wt-user.toml"),
+		linked,
 	} {
 		t.Setenv("WT_CONFIG", spelling)
 		stderr := captureStderr(t)
@@ -1274,7 +1290,7 @@ post_create = ["theirs"]
 		if got := hookSources["post_create"]; got != hookSourceRepoConfig {
 			t.Errorf("hookSources[post_create] = %q, want %q", got, hookSourceRepoConfig)
 		}
-		if !strings.Contains(out, ".wt.toml") {
+		if !strings.Contains(out, filepath.Base(spelling)) {
 			t.Errorf("nothing said about ignoring %q; the user would see settings vanish for no reason", spelling)
 		}
 	}

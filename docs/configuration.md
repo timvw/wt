@@ -17,9 +17,13 @@ wt config path          # Print the config file path
 2. `WT_CONFIG` environment variable
 3. Default: `~/.config/wt/config.toml` (respects `$XDG_CONFIG_HOME`; `%AppData%\wt\config.toml` on Windows)
 
-Whichever of those names the repository's own `.wt.toml`, `wt` says so and does
-not read it as your config file — `WT_CONFIG=.wt.toml` is the way to arrive here,
-since one setting then names a different file in every repository you enter.
+Whichever of those names a file inside the repository you are standing in, `wt`
+says so and does not read it as your config file. A relative `WT_CONFIG` is the
+way to arrive here — set once, it names a different file in every repository you
+enter, and the repository decides what that file contains. The name is not the
+point: `WT_CONFIG=wt-user.toml` is as easy for a repository to commit as
+`.wt.toml`. A config file kept in a dotfiles repository and symlinked into
+`~/.config/wt` keeps working, including while you are inside that repository.
 [`hooks_policy`](#requiring-approval-for-every-hook) and
 [`[trust]`](#trusting-paths-ahead-of-time) are honoured from your config file
 because it is yours, so a repository read as your config file could exempt itself
