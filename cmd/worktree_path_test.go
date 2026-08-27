@@ -839,10 +839,19 @@ func TestProcessRelativeXdgConfigHomeIsNotAConfigDir(t *testing.T) {
 	configHomeWarnings = sync.Map{}
 	t.Cleanup(func() { configHomeWarnings = sync.Map{} })
 	stderr := captureStderr(t)
+	// APPDATA as well as HOME: on Windows that is the fallback configDir reaches
+	// for first, and leaving it alone would have the test compare against the
+	// runner's real one.
+	want := filepath.Join(home, ".config", "wt")
+	if runtime.GOOS == "windows" {
+		appdata := filepath.Join(home, "AppData", "Roaming")
+		t.Setenv("APPDATA", appdata)
+		want = filepath.Join(appdata, "wt")
+	}
+
 	const procPath = "/proc/self/cwd/.config"
 	t.Setenv("XDG_CONFIG_HOME", procPath)
 
-	want := filepath.Join(home, ".config", "wt")
 	if got := configDir(); got != want {
 		t.Errorf("configDir() = %q, want %q: /proc/self/cwd is absolute and still means the working "+
 			"directory, so the trust store would come from the repository", got, want)
@@ -930,7 +939,10 @@ func TestTheTrustStoreIsGuardedWhereItPointsElsewhere(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	if err := os.MkdirAll(filepath.Join(home, ".config", "wt"), 0o755); err != nil {
+	// XDG_CONFIG_HOME wins over APPDATA on every platform, so trustFilePath()
+	// lands under the temporary home — but say so, since the directory is made
+	// by hand here and the two must agree.
+	if err := os.MkdirAll(filepath.Dir(trustFilePath()), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	dotfiles := filepath.Join(home, "dotfiles")
