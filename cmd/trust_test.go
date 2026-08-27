@@ -1140,6 +1140,60 @@ func TestOldTrustStoreRecordsAreIgnored(t *testing.T) {
 	}
 }
 
+// TestTrustRuleWithAnUnsetVariableNamesNothing: rejecting only the rules that
+// collapse to a filesystem root catches the loudest case and misses the quiet
+// one. An unset variable expands to nothing and the path closes over the gap, so
+// "$SRC/Users" becomes "/Users" — a directory that exists, looks like an
+// ordinary rule, and covers every repository under it.
+func TestTrustRuleWithAnUnsetVariableNamesNothing(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repoKey := filepath.Join(repo, ".git")
+
+	savedPrefix, savedExact := trustPrefixes, trustExact
+	t.Cleanup(func() { trustPrefixes, trustExact = savedPrefix, savedExact })
+
+	const name = "WT_TEST_UNSET_TRUST_VAR"
+	// Written as a prefix on a real path, so with the variable gone what is left
+	// is exactly the directory above the repository — valid, existing, and not
+	// what the rule says.
+	prefixRule := "$" + name + root
+	exactRule := "$" + name + repo
+
+	for _, value := range []struct {
+		name string
+		set  bool
+	}{{"unset", false}, {"empty", true}} {
+		if value.set {
+			t.Setenv(name, "")
+		} else if err := os.Unsetenv(name); err != nil {
+			t.Fatal(err)
+		}
+		trustRuleWarnings.Delete(prefixRule)
+		trustRuleWarnings.Delete(exactRule)
+
+		trustPrefixes, trustExact = []string{prefixRule}, nil
+		if trustWhitelistAllows(repoKey) {
+			t.Errorf("%s variable: prefix = [%q] whitelisted %s", value.name, prefixRule, repo)
+		}
+		trustPrefixes, trustExact = nil, []string{exactRule}
+		if trustWhitelistAllows(repoKey) {
+			t.Errorf("%s variable: exact = [%q] whitelisted %s", value.name, exactRule, repo)
+		}
+	}
+
+	// Set, the same rule still works: what is rejected is a rule that names
+	// nothing, not a rule that uses a variable.
+	t.Setenv(name, root)
+	trustPrefixes, trustExact = []string{"$" + name}, nil
+	if !trustWhitelistAllows(repoKey) {
+		t.Error("a resolvable variable in a [trust] prefix stopped matching")
+	}
+}
+
 // TestTrustStoreNeverLandsInsideTheRepository: wt runs from inside a working
 // tree, so a relative config directory resolves against it and the trust store
 // becomes a committable file — a cloned repo could ship approvals for its own
