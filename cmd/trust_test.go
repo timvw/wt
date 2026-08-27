@@ -1414,7 +1414,10 @@ func TestDotfilesConfigAppliesInsideItsOwnRepo(t *testing.T) {
 	if !configFileFound {
 		t.Fatal("a config symlinked into a dotfiles repo stopped being read while standing in it")
 	}
-	if want := filepath.Join(dotfiles, "wts"); worktreeRoot != want {
+	// Cleaned on both sides: the config file has to spell the path with forward
+	// slashes to be valid TOML on Windows, and wt keeps a setting as written.
+	want := filepath.Join(dotfiles, "wts")
+	if filepath.Clean(worktreeRoot) != filepath.Clean(want) {
 		t.Errorf("worktreeRoot = %q, want %q — the worktree would be created somewhere else", worktreeRoot, want)
 	}
 }
