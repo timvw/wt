@@ -88,8 +88,13 @@ contains it, or on your config file — compared with symlinks resolved as far a
 each path exists, without regard to case, since `~/.config/WT` is that same
 directory on macOS and Windows, and by asking the filesystem which directory
 each path really is, since `/System/Volumes/Data/Users/you` is your home
-directory under a name that resolves to nothing. The files checked out there
-would *become*
+directory under a name that resolves to nothing. A symlink whose target does not
+exist yet is followed rather than read as an ordinary missing directory: a
+`~/.config/wt` pointing into a dotfiles repo you have not cloned is the usual way
+to have one, and writing the target is exactly what makes the link live. On
+Windows the comparison also drops the trailing dots and spaces Win32 drops from
+every path component, so a pattern ending `wt.` is the directory it reaches
+rather than a name of its own. The files checked out there would *become*
 `config.toml` and `trust.toml`, and those are the gate itself — the config file
 is the one layer hooks are not vetted from, and `trust.toml` is the record of
 what you approved. A branch carrying both would not slip a hook past the gate,
@@ -928,8 +933,9 @@ the machine. Rules naming a filesystem root are rejected for the same reason, as
 are relative ones — a rule has to name one directory, not a different one
 depending on where you ran `wt` from. Nothing else is adjusted either: an entry
 that is only whitespace is skipped as the blank line it is, but a trailing space
-inside a rule is part of the directory's name, since trimming `/srv/team ` to
-`/srv/team` would hand it a wider tree than it names. On Windows the rule reaches
+inside a rule is part of the directory's name: `/srv/team` with a space on the
+end is a different directory, and trimming it back would hand the rule a wider
+tree than it names. On Windows the rule reaches
 `C:\srv\team` regardless, because Windows itself strips trailing spaces from a
 path component — as with case-insensitivity there, a rule covers the one
 directory its path names on that machine. `wt trust --list` shows each rule next

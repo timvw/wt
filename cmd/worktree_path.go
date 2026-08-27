@@ -237,7 +237,51 @@ func hasPathPrefixFold(path, prefix string) bool {
 	return hasPathPrefix(foldPath(path), foldPath(prefix))
 }
 
-func foldPath(p string) string { return strings.ToLower(p) }
+// foldPath spells a path the way the filesystem will read it, so that two paths
+// naming one file compare equal.
+//
+// Case is one fold; on Windows, trailing dots and spaces are another. Only the
+// components that do not exist yet need this — Stat resolves the ones that do,
+// and identity settles those — but those are the ones that matter here, since a
+// worktree is placed before it is created.
+func foldPath(p string) string {
+	p = strings.ToLower(p)
+	if runtime.GOOS == "windows" {
+		p = trimWindowsPathComponents(p)
+	}
+	return p
+}
+
+// trimWindowsPathComponents drops the trailing dots and spaces Win32 drops from
+// every path component: a repository asking for "{.env.APPDATA}/wt." is asking
+// for %APPDATA%\wt, which is where wt keeps config.toml and trust.toml, while
+// comparing equal to nothing.
+//
+// A component of nothing but dots is left alone: "." and ".." are not names
+// with trailing dots, they are the two relative components.
+//
+// Both separators, because this runs on a rendered pattern: a .wt.toml writes
+// its paths with forward slashes and Windows accepts them.
+func trimWindowsPathComponents(p string) string {
+	var out strings.Builder
+	out.Grow(len(p))
+	start := 0
+	for i := 0; i <= len(p); i++ {
+		if i < len(p) && p[i] != '/' && p[i] != '\\' {
+			continue
+		}
+		component := p[start:i]
+		if trimmed := strings.TrimRight(component, ". "); trimmed != "" {
+			component = trimmed
+		}
+		out.WriteString(component)
+		if i < len(p) {
+			out.WriteByte(p[i])
+		}
+		start = i + 1
+	}
+	return out.String()
+}
 
 // patternSourceLabel names the layer the worktree pattern came from, so the
 // refusal above says whose setting to go and change.

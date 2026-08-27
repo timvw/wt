@@ -533,20 +533,50 @@ func isPathWithinRoot(path, root string) bool {
 // a fresh machine is not there either. Resolving nothing in that case would let
 // a ~/.config symlinked into a dotfiles repo compare unequal to the path the
 // files actually arrive at.
+//
+// A symlink whose target does not exist is followed by hand, because backing
+// off past it treats its name as an ordinary missing directory. It is not one:
+// the name stands for the target, and creating the target is exactly what makes
+// the link live. A ~/.config/wt pointing into a dotfiles repo that has not been
+// cloned yet is the ordinary way to have one, and a repository that names the
+// target as its worktree pattern would populate wt's config directory while
+// comparing equal to nothing.
+//
+// Bounded, because two dangling links can name each other.
 func canonicalExistingPath(path string) string {
 	if absolute, err := filepath.Abs(path); err == nil {
 		path = absolute
 	}
 	path = filepath.Clean(path)
 
-	rest := ""
-	for {
-		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+	for hops := 0; hops < 32; hops++ {
+		resolved, rest, dangling := splitAtResolvable(path)
+		if dangling == "" {
 			return filepath.Join(resolved, rest)
+		}
+		path = filepath.Clean(filepath.Join(dangling, rest))
+	}
+	return path
+}
+
+// splitAtResolvable walks path upwards until EvalSymlinks accepts a prefix, and
+// returns that resolved prefix with the components below it. If the walk steps
+// onto a symlink whose target is missing, it returns the target instead, for
+// canonicalExistingPath to carry on from.
+func splitAtResolvable(path string) (resolved, rest, dangling string) {
+	for {
+		if r, err := filepath.EvalSymlinks(path); err == nil {
+			return r, rest, ""
+		}
+		if target, err := os.Readlink(path); err == nil {
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(path), target)
+			}
+			return "", rest, target
 		}
 		parent := filepath.Dir(path)
 		if parent == path {
-			return filepath.Join(path, rest)
+			return path, rest, ""
 		}
 		rest = filepath.Join(filepath.Base(path), rest)
 		path = parent

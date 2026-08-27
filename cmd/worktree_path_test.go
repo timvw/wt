@@ -89,6 +89,20 @@ func TestWorktreeIsNeverPlacedOnWtsOwnState(t *testing.T) {
 		})
 	}
 
+	t.Run("a trailing dot, which Windows drops", func(t *testing.T) {
+		// Win32 strips trailing dots and spaces from every path component, so
+		// "%APPDATA%\wt." is a request for %APPDATA%\wt while comparing equal
+		// to nothing. Only reachable where the OS does the stripping — a
+		// directory called "wt." is a real and different one elsewhere.
+		if runtime.GOOS != "windows" {
+			t.Skip("trailing dots are a component of their own outside Win32")
+		}
+		worktreePattern = slash(cfgDir) + "."
+		if path, err := renderWorktreePath(info, "payload"); err == nil {
+			t.Fatalf("renderWorktreePath() = %q, want an error: Windows creates that at %q", path, cfgDir)
+		}
+	})
+
 	t.Run("the config file when it lives elsewhere", func(t *testing.T) {
 		// WT_CONFIG can point outside the config directory, and the store is
 		// only half of what is worth planting: a config file alone can set
@@ -114,6 +128,34 @@ func TestWorktreeIsNeverPlacedOnWtsOwnState(t *testing.T) {
 		}
 		if want := filepath.Join(cfgDir+"-worktrees", "feature"); path != want {
 			t.Errorf("renderWorktreePath() = %q, want %q", path, want)
+		}
+	})
+
+	t.Run("through a dangling symlink to a dotfiles repo", func(t *testing.T) {
+		// A ~/.config/wt symlinked into a dotfiles repo that has not been
+		// cloned yet: EvalSymlinks gives up on the whole path, and backing off
+		// past the link treats its name as an ordinary missing directory. It is
+		// not one — putting files at the target is what makes the link live,
+		// and wt would then be reading its config and approvals out of them.
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink creation needs a privilege we cannot assume on Windows")
+		}
+		linked := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(linked, ".config"))
+		if err := os.MkdirAll(filepath.Join(linked, ".config"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// The dotfiles checkout itself is absent, so the link dangles.
+		target := filepath.Join(linked, "dotfiles", "wt")
+		if err := os.Symlink(target, configDir()); err != nil {
+			t.Fatal(err)
+		}
+		configFilePath = filepath.Join(configDir(), "config.toml")
+		t.Cleanup(func() { configFilePath = filepath.Join(cfgDir, "config.toml") })
+
+		worktreePattern = slash(target)
+		if path, err := renderWorktreePath(info, "payload"); err == nil {
+			t.Fatalf("renderWorktreePath() = %q, want an error: creating that is what makes the config directory exist", path)
 		}
 	})
 
@@ -255,6 +297,30 @@ func TestSamePathTreeComparesIdentity(t *testing.T) {
 	}
 }
 
+// Tested directly rather than through foldPath, which only applies it on
+// Windows: the rule is Win32's, but it has to be right wherever it is read.
+func TestTrimWindowsPathComponents(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{`c:\users\a\appdata\roaming\wt.`, `c:\users\a\appdata\roaming\wt`},
+		{`c:\users\a\wt `, `c:\users\a\wt`},
+		{`c:\users\a\wt. . \x`, `c:\users\a\wt\x`},
+		{"c:/users/a/wt.", "c:/users/a/wt"},
+		{`c:\users\a\wt`, `c:\users\a\wt`},
+		// Dots that are the whole component are the relative components, not a
+		// name someone put a dot on the end of.
+		{`c:\users\..\a`, `c:\users\..\a`},
+		{`.\wt.`, `.\wt`},
+		{"", ""},
+	}
+	for _, tt := range cases {
+		if got := trimWindowsPathComponents(tt.in); got != tt.want {
+			t.Errorf("trimWindowsPathComponents(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
 func TestCanonicalExistingPath(t *testing.T) {
 	dir := t.TempDir()
 	real := filepath.Join(dir, "real")
@@ -285,6 +351,41 @@ func TestCanonicalExistingPath(t *testing.T) {
 		want := filepath.Join(canonicalExistingPath(real), "missing")
 		if got != want {
 			t.Errorf("canonicalExistingPath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("follows a symlink whose target is missing", func(t *testing.T) {
+		// EvalSymlinks fails on the whole path when the target is absent, and
+		// backing off past the link would call it an ordinary missing
+		// directory. The name stands for the target either way.
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink creation needs a privilege we cannot assume on Windows")
+		}
+		target := filepath.Join(dir, "not-cloned-yet", "wt")
+		link := filepath.Join(dir, "dangling")
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := canonicalExistingPath(link), canonicalExistingPath(target); got != want {
+			t.Errorf("canonicalExistingPath(%q) = %q, want %q — the link names its target", link, got, want)
+		}
+	})
+
+	t.Run("gives up on a cycle of dangling symlinks", func(t *testing.T) {
+		// Two links naming each other resolve to nothing; the walk has to stop
+		// rather than follow them forever.
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink creation needs a privilege we cannot assume on Windows")
+		}
+		a, b := filepath.Join(dir, "a"), filepath.Join(dir, "b")
+		if err := os.Symlink(b, a); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(a, b); err != nil {
+			t.Fatal(err)
+		}
+		if got := canonicalExistingPath(a); got != a && got != b {
+			t.Errorf("canonicalExistingPath(%q) = %q, want one of the two links back", a, got)
 		}
 	})
 
