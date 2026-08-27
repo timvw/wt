@@ -904,9 +904,11 @@ your config file only — never from a repo-level `.wt.toml`, since a repository
 choosing how closely `wt` scrutinises that same repository's hooks would defeat
 the point.
 
-For automation you control, `WT_HOOKS_APPROVE_ALL=1` approves every batch
-without asking. It bypasses every check above, so do not export it in your shell
-rc.
+For automation you control, `WT_HOOKS_APPROVE_ALL=1` approves every batch without
+asking: it skips the approval check, including the trust store, so do not export
+it in your shell rc. It does not turn hooks *on* — `hooks_policy = "off"` and
+`WT_HOOKS_DISABLED=1` still run nothing, since those say "no hooks" rather than
+"ask me about hooks".
 
 ### Upgrading from wt 0.3 and earlier
 
