@@ -17,12 +17,16 @@ wt config path          # Print the config file path
 2. `WT_CONFIG` environment variable
 3. Default: `~/.config/wt/config.toml` (respects `$XDG_CONFIG_HOME`; `%AppData%\wt\config.toml` on Windows)
 
-Whichever of those names a file inside the repository you are standing in, `wt`
-says so and does not read it as your config file. A relative `WT_CONFIG` is the
-way to arrive here — set once, it names a different file in every repository you
-enter, and the repository decides what that file contains. The name is not the
-point: `WT_CONFIG=wt-user.toml` is as easy for a repository to commit as
-`.wt.toml`. [`hooks_policy`](#requiring-approval-for-every-hook) and
+Give an absolute path. A relative `--config` or `WT_CONFIG` names a different
+file in every directory `wt` runs in, so whatever is checked out there supplies
+one; `wt` says so and reads none. Nor does it help for the path to point out of
+the repository — `../wt-user.toml` is outside the submodule you are standing in
+and inside the superproject that vendored it.
+
+An absolute path inside the repository you are standing in is refused for the
+same reason, usually as a mistake rather than a trick. The name is not the point:
+`WT_CONFIG=wt-user.toml` is as easy for a repository to commit as `.wt.toml`.
+[`hooks_policy`](#requiring-approval-for-every-hook) and
 [`[trust]`](#trusting-paths-ahead-of-time) are honoured from your config file
 because it is yours, so a repository read as your config file could exempt itself
 from hook approval. Its settings still apply as a repository's, and its hooks

@@ -327,10 +327,21 @@ scenarios:
       # Read as the user's config file, that [trust] would exempt this repository
       # from the gate. It is refused as the config file for exactly that reason,
       # and still applies as what it is: a repository's hooks, unapproved.
-      - run: WT_CONFIG=.wt.toml XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN create self-trusting-branch
+      # Spelled absolutely, so it is the containment check being exercised and
+      # not the separate refusal of relative paths.
+      - run: WT_CONFIG="$REPO_DIR_NATIVE/.wt.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN create self-trusting-branch
         expect:
           exit_code: 0
           output_contains: "not trusted"
       - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/self-trusting-branch/.repo-hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
+        expect:
+          output_contains: "HOOK_MISSING"
+      # And the relative spelling, which names whatever is checked out wherever
+      # wt is run and so is refused before anyone asks where it points.
+      - run: WT_CONFIG=.wt.toml XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN create relative-config-branch
+        expect:
+          exit_code: 0
+          output_contains: "not an absolute path"
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/relative-config-branch/.repo-hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
         expect:
           output_contains: "HOOK_MISSING"

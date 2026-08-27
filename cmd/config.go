@@ -678,6 +678,17 @@ func warnRepoConfigIsNotYourConfig(path string) {
 		path)
 }
 
+// warnConfigPathNotAbsolute reports a --config or WT_CONFIG that names a
+// different file depending on where wt was run.
+func warnConfigPathNotAbsolute(path string) {
+	fmt.Fprintf(os.Stderr,
+		"⚠ %s is not an absolute path, so it is not being read as your config file.\n"+
+			"  A relative config path names a different file in every directory wt runs in,\n"+
+			"  which lets whatever is checked out there supply one — and a config file can\n"+
+			"  exempt hooks from approval. Give the full path instead.\n\n",
+		path)
+}
+
 // resolveConfigPath determines which config file to use.
 // Priority: --config flag > WT_CONFIG env var > default location.
 func resolveConfigPath(flagValue string) string {
@@ -772,10 +783,22 @@ func loadWorktreeConfig() {
 	// Two layers, one file, and the outer one is not gated: [trust] and
 	// hooks_policy are honoured from the config file precisely because it is
 	// yours, so a repository read as your config file can whitelist its own path
-	// and run its own hooks unasked. A relative WT_CONFIG is the way in — set
-	// once, it names a different file in every repository you enter, and the
-	// repository decides what is in it. The name does not have to be .wt.toml:
-	// WT_CONFIG=wt-user.toml is a file a repository can commit just as easily.
+	// and run its own hooks unasked.
+	//
+	// A relative path is the way in, and it does not have to name a file in the
+	// repository to get there. "../wt-user.toml" is outside the current
+	// repository by every containment test — and inside the superproject that
+	// vendored it, which is where a submodule's hooks would be exempted from.
+	// One setting, a different file in every directory wt is run from, chosen by
+	// whatever is checked out there. There is no legitimate version of this: a
+	// config file lives at one path. Say so before asking where that path is.
+	case configFilePath != "" && !filepath.IsAbs(configFilePath):
+		warnConfigPathNotAbsolute(configFilePath)
+
+	// The same thing spelled absolutely, which is usually a mistake rather than
+	// an attack — WT_CONFIG=$PWD/.wt.toml — but reads the repository's file as
+	// yours just the same. The name is not the point: WT_CONFIG=wt-user.toml is
+	// a file a repository can commit as easily as .wt.toml.
 	case repoRootErr == nil && configFileInRepo(configFilePath, repoRoot):
 		warnRepoConfigIsNotYourConfig(configFilePath)
 

@@ -1370,6 +1370,61 @@ exact = ["`+filepath.ToSlash(repoDir)+`"]
 	}
 }
 
+// TestRelativeConfigPathIsRefused: a relative --config or WT_CONFIG names a
+// different file in every directory wt runs in, so whatever is checked out
+// there supplies it — and a config file can whitelist the repository it sits in.
+//
+// Containment against the current repository does not cover this on its own.
+// "../wt-user.toml" is outside the repository by every such test, and inside
+// the superproject that vendored it as a submodule, which ships both halves.
+func TestRelativeConfigPathIsRefused(t *testing.T) {
+	savedFlag, savedFn := configFlag, gitRepoRootFn
+	savedPrefix, savedExact := trustPrefixes, trustExact
+	t.Cleanup(func() {
+		configFlag, gitRepoRootFn = savedFlag, savedFn
+		trustPrefixes, trustExact = savedPrefix, savedExact
+		loadWorktreeConfig()
+	})
+
+	// A superproject holding the config, and the submodule wt is run from. The
+	// submodule is its own toplevel, so ".." reaches content it does not own.
+	super := t.TempDir()
+	submodule := filepath.Join(super, "vendor", "lib")
+	if err := os.MkdirAll(submodule, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(super, "vendor", "wt-user.toml"), []byte(`[trust]
+prefix = ["`+filepath.ToSlash(super)+`"]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(submodule)
+	gitRepoRootFn = func() (string, error) { return submodule, nil }
+	configFlag = ""
+
+	for _, spelling := range []string{
+		filepath.Join("..", "wt-user.toml"),
+		"wt-user.toml",
+		filepath.Join(".", "wt-user.toml"),
+	} {
+		t.Setenv("WT_CONFIG", spelling)
+		trustPrefixes, trustExact = nil, nil
+		stderr := captureStderr(t)
+		loadWorktreeConfig()
+		out := stderr()
+
+		if configFileFound {
+			t.Errorf("WT_CONFIG=%q was read as the config file", spelling)
+		}
+		if len(trustPrefixes) > 0 || len(trustExact) > 0 {
+			t.Errorf("WT_CONFIG=%q whitelisted %v / %v", spelling, trustPrefixes, trustExact)
+		}
+		if !strings.Contains(out, "absolute") {
+			t.Errorf("WT_CONFIG=%q was ignored without saying why:\n%s", spelling, out)
+		}
+	}
+}
+
 // TestDotfilesConfigAppliesInsideItsOwnRepo pins the other side of that line.
 //
 // Keeping your config in a dotfiles repository and symlinking it into
