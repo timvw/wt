@@ -1075,6 +1075,16 @@ func TestTrustRulesAreLiteralPaths(t *testing.T) {
 		}
 	}
 
+	// A trailing space is legal in a directory name, so a rule carrying one names
+	// a directory that does not exist here. Trimming it would widen the rule to
+	// one that does, and that holds every repository below it. Not reported,
+	// unlike the entries above: this is a well-formed rule that matches nothing,
+	// which is also what a rule for a tree you have not cloned yet looks like.
+	trustPrefixes, trustExact = []string{root + " "}, nil
+	if trustWhitelistAllows(repoKey) {
+		t.Errorf("prefix = [%q] was trimmed and matched %s", root+" ", repo)
+	}
+
 	// Written out, the rule works — this rejects rules that name nothing, not
 	// rules in general.
 	trustPrefixes, trustExact = []string{root}, nil

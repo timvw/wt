@@ -544,8 +544,12 @@ func trustWhitelistTarget(repoKey string) string {
 //     who did can say so per-tree instead; disabling the gate machine-wide is
 //     not worth being able to express in one character.
 func normaliseTrustPath(entry string) string {
-	trimmed := strings.TrimSpace(entry)
-	if trimmed == "" {
+	// Whitespace-only entries are the blank line someone left in the list, not a
+	// directory. Everything else is used exactly as written: a trailing space is
+	// legal in a directory name on every filesystem wt runs on, and trimming
+	// "/srv/team " to "/srv/team" would hand the rule a different, wider tree
+	// than the one it names.
+	if strings.TrimSpace(entry) == "" {
 		return ""
 	}
 	// A [trust] rule names its directory literally. This is deliberately the one
@@ -561,13 +565,13 @@ func normaliseTrustPath(entry string) string {
 	// whose value names another, unset one collapses on the second pass. Each
 	// wants its own special case, and the next syntax would want another.
 	// Refusing to expand removes the class: a rule covers exactly what it says.
-	if i := strings.IndexAny(trimmed, "$%"); i >= 0 {
+	if i := strings.IndexAny(entry, "$%"); i >= 0 {
 		warnTrustRuleIgnored(entry, fmt.Sprintf(
 			"it contains %q, and [trust] rules are literal paths — write the directory out, or start it with ~",
-			trimmed[i]))
+			entry[i]))
 		return ""
 	}
-	expanded := strings.TrimSpace(expandTilde(trimmed))
+	expanded := expandTilde(entry)
 	if expanded == "" {
 		warnTrustRuleIgnored(entry, "it starts with ~ and there is no home directory to resolve that against")
 		return ""
