@@ -343,8 +343,19 @@ type repoIdentity struct {
 // have already approved. Two spaces and one space would collide the same way.
 // Windows strips trailing spaces itself, so trimming only the line ending costs
 // nothing there.
+//
+// A trailing carriage return is not taken either, for the same reason and with
+// a sharper edge: git prints one when the path HAS one. Verified — `git init`
+// on a directory whose name ends in CR, and `rev-parse --show-toplevel` says
+// "...repo\r\n". Stripping it would give a repository named "repo\r" the scope
+// of its neighbour "repo", so approving one would silently approve the other.
+//
+// Which leaves the case where a platform terminates the line with CRLF rather
+// than LF: every path would then carry a trailing CR, no scope would match, and
+// every hook would be asked about again. That is the direction that refuses, and
+// CI runs a Windows leg that would say so out loud.
 func gitOutputPath(out []byte) string {
-	return strings.TrimRight(strings.TrimSuffix(string(out), "\n"), "\r")
+	return strings.TrimSuffix(string(out), "\n")
 }
 
 // gitToplevel returns the absolute path of the current working tree's root.

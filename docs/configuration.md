@@ -152,11 +152,17 @@ arbitrary code, and it never touches the approval gate at all.
 *Any* repository's, not just the one you are in: the mechanism does not care
 whose `.git` it is, and `~/src/victim/.git/hooks` is as reachable from a pattern
 as your own. A path with a `.git` component is refused, whether the pattern spells
-it out or reaches it through a symlink. What that does not find is a bare
-repository, which keeps its hooks at `<repo>/hooks` with no `.git` in the path —
-`wt` cannot enumerate every repository on the machine. Spelling is not a way
-out either: the check folds case, because on a case-insensitive volume
-`.GIT/hooks` *is* `.git/hooks`.
+it out or reaches it through a symlink. Spelling is not a way out either: the
+check folds case, because on a case-insensitive volume `.GIT/hooks` *is*
+`.git/hooks`.
+
+A bare repository has no `.git` in its path at all — `git init --bare
+/srv/git/project` keeps its hooks at `/srv/git/project/hooks` — so the name is
+not asked. git is: every existing directory above the destination is put to
+`git rev-parse --resolve-git-dir`, and a placement inside one that answers is
+refused. That matters because an empty `hooks/` is the ordinary state of a
+server-side repository, and empty is the only thing `git worktree add` requires;
+the committed `post-receive` left there runs on the next push.
 
 The other three settings are the same shape as `core.hooksPath` — a path git
 consults, which git does not mind being absent, so a value naming a directory

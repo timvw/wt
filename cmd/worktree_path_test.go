@@ -821,8 +821,14 @@ func TestGitOutputPathKeepsATrailingSpace(t *testing.T) {
 		t.Errorf("gitOutputPath(%q) = %q, want the trailing space kept: it is part of the name, and "+
 			"dropping it makes two repositories answer to one approval", "/home/you/src/tool \n", got)
 	}
-	if got := gitOutputPath([]byte("/home/you/src/tool\r\n")); got != "/home/you/src/tool" {
-		t.Errorf("gitOutputPath(%q) = %q, want the line ending gone", "/home/you/src/tool\r\n", got)
+	// And the carriage return, which is the same collision with a sharper edge:
+	// git prints one when the path has one — verified with `git init` on a
+	// directory whose name ends in CR — so taking it would give "tool\r" the
+	// scope of its neighbour "tool", and approving one would approve the other.
+	if got := gitOutputPath([]byte("/home/you/src/tool\r\n")); got != "/home/you/src/tool\r" {
+		t.Errorf("gitOutputPath(%q) = %q, want the carriage return kept: git printed it because the "+
+			"directory name has it, and two repositories must not answer to one approval",
+			"/home/you/src/tool\r\n", got)
 	}
 }
 
@@ -869,6 +875,66 @@ func TestProcessRelativeXdgConfigHomeIsNotAConfigDir(t *testing.T) {
 	if !strings.Contains(said, reason) {
 		t.Errorf("configDir() said %q; want it to say %q — a warning the user can see is wrong is one "+
 			"they learn to skip", said, reason)
+	}
+}
+
+// TestABareRepositoryIsAGitDirectoryToo: the .git component test sees every
+// repository cloned the ordinary way and no bare one. `git init --bare
+// /srv/git/project` keeps its hooks at /srv/git/project/hooks, with nothing in
+// the name to read — and an empty hooks/ is all `git worktree add` needs, which
+// is the normal state of one on a server. Verified by hand before this was
+// written: the checkout succeeds and leaves an executable hook behind.
+func TestABareRepositoryIsAGitDirectoryToo(t *testing.T) {
+	dir := t.TempDir()
+	// No ".git" anywhere in the name, which is the point.
+	bare := filepath.Join(dir, "srv", "project")
+	if err := os.MkdirAll(bare, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// --template= so hooks/ comes out empty, as it does on a server whose
+	// .sample files were never installed or have been removed.
+	runGit(t, dir, "init", "-q", "--bare", "--template=", bare)
+
+	hooks := filepath.Join(bare, "hooks")
+	if got := wtStateAtPath(hooks); got == "" {
+		t.Errorf("wtStateAtPath(%q) = \"\", want a refusal: git checks a worktree out into an empty "+
+			"hooks/ and the committed post-receive is what the next push runs", hooks)
+	}
+	// The repository itself, not only its hooks directory: everything in it is
+	// git's, and a pattern may name any of it.
+	if got := wtStateAtPath(filepath.Join(bare, "anything")); got == "" {
+		t.Errorf("wtStateAtPath(%q) = \"\", want a refusal", filepath.Join(bare, "anything"))
+	}
+	// And an ordinary directory beside it still goes through, or the guard has
+	// stopped being a guard and started being a wall.
+	beside := filepath.Join(dir, "srv", "notarepo")
+	if got := wtStateAtPath(beside); got != "" {
+		t.Errorf("wtStateAtPath(%q) = %q, want \"\": it is a plain directory", beside, got)
+	}
+}
+
+// TestAProcessRelativeGitConfigGlobalIsWarnedAboutForTheRightReason: a warning
+// the user can see is wrong is a warning they learn to skip.
+// GIT_CONFIG_GLOBAL=/proc/self/cwd/.gitconfig is refused, and it is not refused
+// for being relative — it is as absolute as any other path.
+func TestAProcessRelativeGitConfigGlobalIsWarnedAboutForTheRightReason(t *testing.T) {
+	relativeGitEnvWarnings = sync.Map{}
+	t.Cleanup(func() { relativeGitEnvWarnings = sync.Map{} })
+	stderr := captureStderr(t)
+	const procPath = "/proc/self/cwd/.gitconfig"
+	t.Setenv("GIT_CONFIG_GLOBAL", procPath)
+
+	gitGlobalConfigPaths()
+
+	said := stderr()
+	// Same platform split as the XDG test: without a drive letter this is not an
+	// absolute path on Windows, so there the ordinary answer is the true one.
+	reason := "depending on which process asks"
+	if !filepath.IsAbs(procPath) {
+		reason = "is a relative path"
+	}
+	if !strings.Contains(said, reason) {
+		t.Errorf("gitGlobalConfigPaths() said %q; want it to say %q", said, reason)
 	}
 }
 

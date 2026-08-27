@@ -138,8 +138,8 @@ func gitGlobalConfigPaths() []string {
 	var paths []string
 	// GIT_CONFIG_GLOBAL replaces both of the below when set. Only an absolute
 	// value names a file to protect; the defaults are listed anyway, in case it
-	// is ignored. A relative one is a hole wt cannot plug and did not open — see
-	// warnRelativeGitConfigGlobal.
+	// is ignored. A value that does not name one directory is a hole wt cannot
+	// plug and did not open — see warnRelativeGitEnv.
 	if p := os.Getenv("GIT_CONFIG_GLOBAL"); namesOneDirectory(p) {
 		paths = append(paths, p)
 	} else if strings.TrimSpace(p) != "" {
@@ -280,18 +280,65 @@ func warnRelativeGitEnv(name, value string) {
 	if _, seen := relativeGitEnvWarnings.LoadOrStore(name, true); seen {
 		return
 	}
+	// The true reason, not the common one: /proc/self/cwd/.gitconfig is an
+	// absolute path, and telling someone who set that it is "relative" is a
+	// warning they can see is wrong, which is a warning they learn to skip.
+	why := "is a relative path"
+	if filepath.IsAbs(value) {
+		why = "names a different file depending on which process asks"
+	}
 	fmt.Fprintf(os.Stderr,
-		"⚠ %s is set to %q, which is a relative path.\n"+
+		"⚠ %s is set to %q, which %s.\n"+
 			"  git resolves it per directory, so a repository that commits a file by that name\n"+
 			"  supplies your global git config — including core.hooksPath, which wt cannot gate.\n"+
-			"  Set it to an absolute path.\n\n",
-		name, value)
+			"  Set it to a path that names one directory wherever wt runs.\n\n",
+		name, value, why)
 }
 
 // gitHookDirIsWhatRuns explains a placement onto a git directory. Phrased to
 // read after "which is", like the rest of the owned table.
 const gitHookDirIsWhatRuns = "inside a git directory, where git keeps the hooks it runs for that " +
 	"repository — a worktree there is one repository writing another's .git"
+
+// bareGitDirIsWhatRuns explains a placement inside a repository whose name does
+// not say it is one. Phrased to read after "which is", like the rest.
+const bareGitDirIsWhatRuns = "inside a git directory, where git keeps the hooks it runs for that " +
+	"repository — a bare repository is a git directory with no .git in its name, and its hooks " +
+	"sit directly in it"
+
+// gitDirAbove names the git directory an ancestor of path is, asking git rather
+// than reading the name.
+//
+// pathInsideAGitDir looks for a ".git" component, which is every repository
+// cloned the ordinary way and no bare one: `git init --bare /srv/git/project`
+// keeps its hooks at /srv/git/project/hooks, and there is nothing in the name to
+// see. Nor is ending in ".git" reliable — that is a convention, and the check is
+// for a whole path component anyway.
+//
+// A hooks/ directory holding nothing is all `git worktree add` asks for, and one
+// holding nothing is the normal case: a repository cloned with --template=, or
+// one whose .sample files were removed, which is most of them on a server.
+// Verified — worktree add checks out there and leaves an executable post-receive
+// behind, which the next push to that repository runs.
+//
+// git is asked because git is the one that decides. For a directory that does
+// not exist it says no, so the walk continues past a missing parent to the ones
+// above it rather than stopping. Bounded, because a path deep enough to matter
+// is a path something else has already gone wrong with.
+func gitDirAbove(path string) (string, bool) {
+	dir, prev := path, ""
+	for range 64 {
+		if dir == prev || dir == "" {
+			break
+		}
+		out, err := exec.Command("git", "rev-parse", "--resolve-git-dir", dir).Output()
+		if err == nil && gitOutputPath(out) != "" {
+			return dir, true
+		}
+		dir, prev = filepath.Dir(dir), dir
+	}
+	return "", false
+}
 
 // pathInsideAGitDir reports whether a worktree at path would land inside some
 // repository's .git.
@@ -448,6 +495,10 @@ func wtStateAtPath(path string) string {
 	}
 	if pathInsideAGitDir(path) {
 		return gitHookDirIsWhatRuns
+	}
+	// And then git's own answer, for the repositories the name test cannot see.
+	if dir, ok := gitDirAbove(path); ok {
+		return fmt.Sprintf("%s (%s)", bareGitDirIsWhatRuns, dir)
 	}
 	for _, o := range owned {
 		if o.path == "" || !filepath.IsAbs(o.path) {
