@@ -79,6 +79,17 @@ Two differences from the global config file:
 - Hooks are merged **per hook**: a hook the repo config does not set keeps the
   value from the global config file.
 
+`pattern` **is** read from `.wt.toml`, and one that renders to an absolute path
+is not anchored in your `root` at all. That is deliberate — a project may have a
+layout in mind — but it means the repository chooses the directory
+`git worktree add` writes into. There is one directory it may not choose: `wt`
+refuses a pattern landing on its own config directory, on a directory that
+contains it, or on your config file. The files checked out there would *become*
+`config.toml` and `trust.toml`, and those are the gate itself — the config file
+is the one layer hooks are not vetted from, and `trust.toml` is the record of
+what you approved. A branch carrying both would not slip a hook past the gate,
+it would supply the gate.
+
 ## Git config
 
 `wt` also reads its settings from `git config`, which is useful for **personal,

@@ -72,7 +72,94 @@ func renderWorktreePath(info repoInfo, branch string) (string, error) {
 	}
 
 	rendered = filepath.Clean(rendered)
+	if owned := wtStateAtPath(rendered); owned != "" {
+		return "", fmt.Errorf(
+			"this worktree would be created at %s, which is %s.\n"+
+				"A repository may choose the pattern, so wt does not let the pattern choose that path:\n"+
+				"the files checked out there would become wt's own config file and approval store,\n"+
+				"which is what decides whether that repository's hooks run.\n"+
+				"Change the pattern — it currently comes from %s",
+			rendered, owned, patternSourceLabel())
+	}
 	return rendered, nil
+}
+
+// wtStateAtPath describes the wt-owned file or directory a worktree at path
+// would land on top of, or "" when it lands somewhere harmless.
+//
+// A repository's .wt.toml may set the worktree pattern — that is project policy,
+// and the whole point of the setting. It may not set `root`, so the tree the
+// pattern is anchored in stays the user's; but a pattern that renders to an
+// absolute path is not anchored anywhere, and "{.env.HOME}/.config/wt" names the
+// directory holding config.toml and trust.toml.
+//
+// `git worktree add` then writes the repository's files there. That is not a
+// hook running — the gate is not bypassed, it is *replaced*: the branch supplies
+// a config.toml whose hooks carry user-config scope, and a trust.toml whose
+// (scope, sha256) pair the attacker precomputed for them. Nothing was approved
+// and nothing was prompted for, and it fires in every repository afterwards, not
+// just this one. Refuse the placement instead, which is the only moment wt still
+// gets a say.
+//
+// Both directions of containment, because the leaf is not the only way in: a
+// worktree AT ~/.config plants ~/.config/wt/config.toml from a committed
+// wt/config.toml just as well. git will not write into a non-empty directory, so
+// in practice this needs the target not to exist yet — a fresh machine, which is
+// exactly when nothing has been approved and the store is easiest to author.
+func wtStateAtPath(path string) string {
+	owned := []struct{ path, what string }{
+		{configDir(), "where wt keeps its config file and its record of approved hooks"},
+		{configFilePath, "your config file"},
+	}
+	path = canonicalExisting(path)
+	for _, o := range owned {
+		if o.path == "" || !filepath.IsAbs(o.path) {
+			continue
+		}
+		against := canonicalExisting(o.path)
+		switch {
+		case against == path:
+			return o.what
+		case hasPathPrefix(path, against) || hasPathPrefix(against, path):
+			// Named, because the containing or contained case is the one where
+			// the rendered path alone does not show what the collision is with.
+			return fmt.Sprintf("%s (%s)", o.what, o.path)
+		}
+	}
+	return ""
+}
+
+// canonicalExisting resolves the symlinks in the part of p that exists and keeps
+// the rest as written.
+//
+// filepath.EvalSymlinks gives up on the whole path when the leaf is missing,
+// which is every path here: the worktree does not exist yet, and on the fresh
+// machine this guards, neither does the config directory. Comparing the two
+// unresolved would miss a ~/.config symlinked into a dotfiles repo, where the
+// pattern names the target and the file still arrives at ~/.config/wt.
+func canonicalExisting(p string) string {
+	p = filepath.Clean(p)
+	rest := ""
+	for {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return filepath.Join(p, rest)
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+		p = parent
+	}
+}
+
+// patternSourceLabel names the layer the worktree pattern came from, so the
+// refusal above says whose setting to go and change.
+func patternSourceLabel() string {
+	if configSources.Pattern != "" {
+		return configSources.Pattern
+	}
+	return "the worktree strategy"
 }
 
 func cleanupWorktreePath(worktreePath string) error {
