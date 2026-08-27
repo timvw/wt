@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -535,82 +534,56 @@ func trustWhitelistTarget(repoKey string) string {
 //     who did can say so per-tree instead; disabling the gate machine-wide is
 //     not worth being able to express in one character.
 func normaliseTrustPath(entry string) string {
-	if strings.TrimSpace(entry) == "" {
+	trimmed := strings.TrimSpace(entry)
+	if trimmed == "" {
 		return ""
 	}
-	// Before expanding, not after: an unset variable expands to nothing and the
-	// path silently closes over the gap, so what is left is a different
-	// directory that looks perfectly ordinary. Only a rule that collapses all
-	// the way to a root is visible afterwards.
-	if name, ok := trustRuleMissingVar(entry); ok {
-		warnTrustRuleIgnored(entry, fmt.Sprintf("%s is not set, so the rule does not name the directory you meant", name))
+	// A [trust] rule names its directory literally. This is deliberately the one
+	// place wt does not expand environment variables.
+	//
+	// os.ExpandEnv turns anything it cannot resolve into an empty string and the
+	// path closes over the gap, which shortens a rule rather than failing it:
+	// "$SRC/Users" becomes "/Users", a directory that exists, holds every
+	// repository on the machine, and reads as an ordinary rule afterwards. An
+	// unset variable is only the obvious way in. "$$" is not an escape — Go
+	// passes "$" to the mapper, which is no variable at all; "${}" is malformed
+	// and silently eaten; and on Windows %VAR% expansion loops, so a variable
+	// whose value names another, unset one collapses on the second pass. Each
+	// wants its own special case, and the next syntax would want another.
+	// Refusing to expand removes the class: a rule covers exactly what it says.
+	if i := strings.IndexAny(trimmed, "$%"); i >= 0 {
+		warnTrustRuleIgnored(entry, fmt.Sprintf(
+			"it contains %q, and [trust] rules are literal paths — write the directory out, or start it with ~",
+			trimmed[i]))
 		return ""
 	}
-	expanded := strings.TrimSpace(expandHome(entry))
+	expanded := strings.TrimSpace(expandTilde(trimmed))
 	if expanded == "" {
 		return ""
 	}
 	path := canonicalPath(expanded)
 	// filepath.Dir is its own fixed point exactly at a root — "/" on POSIX,
-	// `C:\` or a UNC share root on Windows.
+	// `C:\` or a UNC share root on Windows. Unreachable through a variable now,
+	// but a rule can still say "/" outright.
 	if filepath.Dir(path) == path {
-		warnTrustRuleIgnored(entry, fmt.Sprintf("it resolves to %s, the whole filesystem", path))
+		warnTrustRuleIgnored(entry, fmt.Sprintf("it names %s, the whole filesystem", path))
 		return ""
 	}
 	return path
 }
 
-// trustRuleMissingVar names the first environment variable a rule refers to that
-// has no value, if there is one.
-//
-// os.ExpandEnv turns an unset variable into an empty string, which shortens the
-// path rather than failing it: "$SRC/mine" becomes "/mine", and "$SRC/Users"
-// becomes "/Users" — an existing directory holding every repository on the
-// machine. Rejecting only the rules that collapse to a root catches the loudest
-// case and misses this one. A rule whose meaning depends on a variable that is
-// not set does not name the directory the user meant, so it names none.
-//
-// A variable set to the empty string counts as missing: it collapses the same
-// way, and no rule means "the directory whose name is nothing".
-func trustRuleMissingVar(entry string) (string, bool) {
-	var missing string
-	// as written so the warning can quote the rule back; looked up bare.
-	note := func(name, asWritten string) {
-		if missing != "" {
-			return
-		}
-		if v, ok := os.LookupEnv(name); !ok || strings.TrimSpace(v) == "" {
-			missing = asWritten
-		}
+// expandTilde resolves a leading "~" and nothing else. Returns "" when there is
+// no home directory to resolve against, so the rule names nothing rather than
+// something relative.
+func expandTilde(path string) string {
+	if path != "~" && !strings.HasPrefix(path, "~/") && !strings.HasPrefix(path, `~\`) {
+		return path
 	}
-
-	os.Expand(entry, func(name string) string {
-		// os.Expand passes "$" for a literal "$$", which refers to nothing.
-		if name != "$" {
-			note(name, "$"+name)
-		}
+	home, err := os.UserHomeDir()
+	if err != nil || !filepath.IsAbs(home) {
 		return ""
-	})
-
-	// %VAR%, which expandHome also honours on Windows.
-	if runtime.GOOS == "windows" {
-		for rest := entry; ; {
-			start := strings.Index(rest, "%")
-			if start == -1 {
-				break
-			}
-			end := strings.Index(rest[start+1:], "%")
-			if end == -1 {
-				break
-			}
-			end += start + 1
-			varName := rest[start+1 : end]
-			note(varName, "%"+varName+"%")
-			rest = rest[end+1:]
-		}
 	}
-
-	return missing, missing != ""
+	return filepath.Join(home, path[1:])
 }
 
 // trustRuleWarnings keeps the notice to once per rule per process: several hook
@@ -623,7 +596,7 @@ func warnTrustRuleIgnored(entry, reason string) {
 	}
 	fmt.Fprintf(os.Stderr,
 		"⚠ ignoring [trust] rule %q in %s: %s.\n"+
-			"  Name the directory you meant, or check that any variable in it is set.\n\n",
+			"  Until then, repositories it was meant to cover are asked about as usual.\n\n",
 		entry, configFilePath, reason)
 }
 

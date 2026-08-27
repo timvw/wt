@@ -858,14 +858,14 @@ is on whole path segments, so `~/src/mine` does not cover
 `~/src/mine-from-the-internet`. `wt untrust` cannot revoke a rule; edit the config
 file (`wt untrust` says so when a rule still covers the repository).
 
-Entries expand `~` and environment variables, so `prefix = ["$SRC/repos"]` works.
-A rule that refers to a variable which is unset — or set to the empty string — is
-ignored and reported rather than expanded. An unset variable expands to nothing
-and the path closes over the gap, so `$SRC/repos` would quietly become `/repos`
-and `$SRC/Users` would become `/Users`: an existing directory holding every
-repository on the machine. Rules that collapse to the filesystem root are
-rejected for the same reason. `wt trust --list` shows each rule next to what it
-resolves to, or marks it ignored.
+A rule names its directory literally. `~` is expanded; environment variables are
+not, and a rule containing `$` or `%` is ignored and reported. This is the one
+place wt refuses to expand them, because an expansion that fails shortens a rule
+instead of failing it: an unset `SRC` turns `$SRC/repos` into `/repos`, and
+`$SRC/Users` into `/Users` — an existing directory holding every repository on
+the machine. Rules naming a filesystem root are rejected for the same reason.
+`wt trust --list` shows each rule next to what it resolves to, or marks it
+ignored.
 
 ### Requiring approval for every hook
 

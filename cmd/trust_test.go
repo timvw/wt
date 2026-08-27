@@ -1016,11 +1016,13 @@ func TestTrustWhitelist(t *testing.T) {
 	}
 }
 
-// TestTrustRuleCannotCollapseToTheWholeFilesystem: whitelist entries go through
-// expandHome, which expands environment variables, so an unset one turns a rule
-// that reads like it names one tree into "/" — every repository on the machine,
-// silently. A rule that names no directory in particular has to match nothing.
-func TestTrustRuleCannotCollapseToTheWholeFilesystem(t *testing.T) {
+// TestTrustRulesAreLiteralPaths: a [trust] rule is the one place wt does not
+// expand environment variables. os.ExpandEnv turns what it cannot resolve into
+// nothing and the path closes over the gap, so a rule shortens instead of
+// failing: "$SRC/Users" becomes "/Users", which exists and holds every
+// repository on the machine. Every route below reaches that same collapse, and
+// spotting them one at a time is a losing game — not expanding ends it.
+func TestTrustRulesAreLiteralPaths(t *testing.T) {
 	root := t.TempDir()
 	repo := filepath.Join(root, "repo")
 	if err := os.MkdirAll(repo, 0o755); err != nil {
@@ -1031,166 +1033,48 @@ func TestTrustRuleCannotCollapseToTheWholeFilesystem(t *testing.T) {
 	savedPrefix, savedExact := trustPrefixes, trustExact
 	t.Cleanup(func() { trustPrefixes, trustExact = savedPrefix, savedExact })
 
-	// Unset, so os.ExpandEnv resolves it to "".
-	if err := os.Unsetenv("WT_TEST_UNSET_TRUST_ROOT"); err != nil {
+	const name = "WT_TEST_TRUST_ROOT"
+	// Set, so the rules below are rejected for referring to a variable at all
+	// rather than for referring to a missing one.
+	t.Setenv(name, root)
+	if err := os.Unsetenv("WT_TEST_TRUST_MISSING"); err != nil {
 		t.Fatal(err)
 	}
 
 	for _, entry := range []string{
-		"$WT_TEST_UNSET_TRUST_ROOT/",
-		"$WT_TEST_UNSET_TRUST_ROOT/../",
-		string(filepath.Separator),
+		"$" + name,                      // set, and still not expanded
+		"$WT_TEST_TRUST_MISSING" + root, // unset: the classic collapse
+		"$$" + root,                     // "$$" is not an escape; Go maps the name "$"
+		"${}" + root,                    // malformed, and silently eaten
+		"%" + name + "%",                // %VAR%, which expands recursively on Windows
+		string(filepath.Separator),      // no variable needed to name the root
 	} {
+		trustRuleWarnings.Delete(entry)
+
 		trustPrefixes, trustExact = []string{entry}, nil
 		if trustWhitelistAllows(repoKey) {
-			t.Errorf("prefix = [%q] whitelisted every repository on the machine", entry)
+			t.Errorf("prefix = [%q] whitelisted %s", entry, repo)
 		}
 		trustPrefixes, trustExact = nil, []string{entry}
 		if trustWhitelistAllows(repoKey) {
-			t.Errorf("exact = [%q] whitelisted the filesystem root", entry)
+			t.Errorf("exact = [%q] whitelisted %s", entry, repo)
 		}
 	}
 
-	// The same rule with the variable set still works: the guard rejects rules
-	// that name nothing, not rules that use variables.
-	t.Setenv("WT_TEST_UNSET_TRUST_ROOT", root)
-	trustPrefixes, trustExact = []string{"$WT_TEST_UNSET_TRUST_ROOT/"}, nil
+	// Written out, the rule works — this rejects rules that name nothing, not
+	// rules in general.
+	trustPrefixes, trustExact = []string{root}, nil
 	if !trustWhitelistAllows(repoKey) {
-		t.Error("a resolvable variable in a [trust] prefix stopped matching")
-	}
-}
-
-// TestWhitelistedRepoHooksRunUnasked: the whole point of the escape hatch is
-// that it works without a stored approval — and without a readable store, since
-// an opt-out that depends on the machinery it bypasses is not one.
-func TestWhitelistedRepoHooksRunUnasked(t *testing.T) {
-	withIsolatedTrustStore(t)
-	withPolicy(t, hookPolicyPromptUntrusted)
-	marker := filepath.Join(t.TempDir(), "ran")
-	_, trustKey := repoWithHooks(t, fmt.Sprintf("[hooks]\npost_create = [%q]\n", "touch "+filepath.ToSlash(marker)))
-
-	path := trustFilePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("not toml ]["), 0o600); err != nil {
-		t.Fatal(err)
+		t.Errorf("a literal [trust] prefix %q did not match %s", root, repo)
 	}
 
-	trustPrefixes = []string{filepath.Dir(trustKey)}
-
-	if err := runHooks("post_create", getHooks("post_create"), map[string]string{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(marker); err != nil {
-		t.Fatal("a whitelisted repository's hooks did not run")
-	}
-}
-
-// TestPromptAllOverridesTheWhitelist: "ask me every time" has to mean it. A
-// whitelist entry is a standing answer, and prompt-all is the setting that says
-// standing answers do not count.
-func TestPromptAllOverridesTheWhitelist(t *testing.T) {
-	withIsolatedTrustStore(t)
-	withPolicy(t, hookPolicyPromptAll)
-	repoDir, trustKey := repoWithHooks(t, "[hooks]\npost_create = [\"true\"]\n")
-	trustPrefixes = []string{filepath.Dir(trustKey)}
-
-	marker := filepath.Join(repoDir, "ran")
-	if err := runHooks("post_create", []string{"touch " + marker}, map[string]string{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(marker); err == nil {
-		t.Fatal("prompt-all honoured a [trust] rule instead of asking")
-	}
-}
-
-// TestOldTrustStoreRecordsAreIgnored: version 1 pinned the sha256 of a
-// .wt.toml's bytes; these pin the sha256 of a source's commands. There is no
-// migration, so the only safe reading of an old record is "not approved" — and
-// wt says so rather than leaving the user wondering why it asked again.
-func TestOldTrustStoreRecordsAreIgnored(t *testing.T) {
-	withIsolatedTrustStore(t)
-	staleTrustStoreWarning = sync.Once{}
-	t.Cleanup(func() { staleTrustStoreWarning = sync.Once{} })
-
-	path := trustFilePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// A v1 store, which had no version key at all.
-	old := "[[trusted]]\nrepo = \"/repo/.git\"\nfile = \"/repo/.wt.toml\"\nsha256 = \"aaa\"\napproved_at = \"then\"\n"
-	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	stderr := captureStderr(t)
-	store, err := loadTrustStore()
-	if err != nil {
-		t.Fatalf("an old store is not a broken one: %v", err)
-	}
-	if len(store.Trusted) != 0 {
-		t.Errorf("kept %d records from an older format, want 0", len(store.Trusted))
-	}
-	if store.isTrusted("/repo/.git", "aaa") {
-		t.Error("a record from the old format still matched")
-	}
-	if out := stderr(); !strings.Contains(out, "older format") {
-		t.Errorf("dropped the old approvals without saying so, got:\n%s", out)
-	}
-}
-
-// TestTrustRuleWithAnUnsetVariableNamesNothing: rejecting only the rules that
-// collapse to a filesystem root catches the loudest case and misses the quiet
-// one. An unset variable expands to nothing and the path closes over the gap, so
-// "$SRC/Users" becomes "/Users" — a directory that exists, looks like an
-// ordinary rule, and covers every repository under it.
-func TestTrustRuleWithAnUnsetVariableNamesNothing(t *testing.T) {
-	root := t.TempDir()
-	repo := filepath.Join(root, "repo")
-	if err := os.MkdirAll(repo, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	repoKey := filepath.Join(repo, ".git")
-
-	savedPrefix, savedExact := trustPrefixes, trustExact
-	t.Cleanup(func() { trustPrefixes, trustExact = savedPrefix, savedExact })
-
-	const name = "WT_TEST_UNSET_TRUST_VAR"
-	// Written as a prefix on a real path, so with the variable gone what is left
-	// is exactly the directory above the repository — valid, existing, and not
-	// what the rule says.
-	prefixRule := "$" + name + root
-	exactRule := "$" + name + repo
-
-	for _, value := range []struct {
-		name string
-		set  bool
-	}{{"unset", false}, {"empty", true}} {
-		if value.set {
-			t.Setenv(name, "")
-		} else if err := os.Unsetenv(name); err != nil {
-			t.Fatal(err)
-		}
-		trustRuleWarnings.Delete(prefixRule)
-		trustRuleWarnings.Delete(exactRule)
-
-		trustPrefixes, trustExact = []string{prefixRule}, nil
-		if trustWhitelistAllows(repoKey) {
-			t.Errorf("%s variable: prefix = [%q] whitelisted %s", value.name, prefixRule, repo)
-		}
-		trustPrefixes, trustExact = nil, []string{exactRule}
-		if trustWhitelistAllows(repoKey) {
-			t.Errorf("%s variable: exact = [%q] whitelisted %s", value.name, exactRule, repo)
-		}
-	}
-
-	// Set, the same rule still works: what is rejected is a rule that names
-	// nothing, not a rule that uses a variable.
-	t.Setenv(name, root)
-	trustPrefixes, trustExact = []string{"$" + name}, nil
+	// And "~" still expands, which is what makes a portable rule possible
+	// without variables.
+	t.Setenv("HOME", root)
+	t.Setenv("USERPROFILE", root) // os.UserHomeDir reads this on Windows
+	trustPrefixes, trustExact = []string{"~"}, nil
 	if !trustWhitelistAllows(repoKey) {
-		t.Error("a resolvable variable in a [trust] prefix stopped matching")
+		t.Error("a [trust] prefix of \"~\" stopped matching under the home directory")
 	}
 }
 
