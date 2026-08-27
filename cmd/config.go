@@ -692,7 +692,14 @@ func pathIsProcessRelative(path string) bool {
 		return false
 	}
 	who, _, _ := strings.Cut(rest, "/")
-	return who == "self" || who == "thread-self"
+	if who == "self" || who == "thread-self" {
+		return true
+	}
+	// A numeric pid is the same trick aimed at another process. /proc/<shell
+	// pid>/cwd follows the shell around, which is inside the repository just as
+	// surely as wt's own working directory is, and nothing about "self" was what
+	// made the first spelling wrong.
+	return who != "" && strings.IndexFunc(who, func(r rune) bool { return r < '0' || r > '9' }) < 0
 }
 
 func configFileSuppliedByRepo(configPath, repoRoot string) bool {

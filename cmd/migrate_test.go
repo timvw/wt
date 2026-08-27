@@ -535,6 +535,28 @@ func TestApprovedHashesAtMatchesLooselyOnlyWhenAskedTo(t *testing.T) {
 	}
 }
 
+// TestApprovedHashesAtSeesAnApprovalScopedToTheWorkingTreeRoot: not every scope
+// is a git directory. Where git would not confirm which repository a working
+// tree belongs to, the approval is pinned to the directory's own path instead —
+// and asking only beneath .git never sees such a record, because <path> is not
+// under <path>/.git. A stale one would then sit unnoticed at a destination the
+// origin URL chose.
+func TestApprovedHashesAtSeesAnApprovalScopedToTheWorkingTreeRoot(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "acme", "tool")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store := trustStore{Trusted: []trustRecord{{Scope: root, SHA256: "unverified"}}}
+
+	found, ok := approvedHashesAt(store, root, scopedUnder)
+	if !ok || !found["unverified"] {
+		t.Errorf("approvedHashesAt(%s, scopedUnder) = %v, %v; an approval pinned to the working tree "+
+			"root answers for commands that run at a checkout there, so a migration onto it is a "+
+			"trust gain wt has to see", root, found, ok)
+	}
+}
+
 // TestApprovedHashesAtSeesThroughAWin32PathAlias is the case that is not merely
 // defensive: an origin URL ending "tool..git" renders a destination of "tool.",
 // which names no directory anything is recorded for, and which Windows then

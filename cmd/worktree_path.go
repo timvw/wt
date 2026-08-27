@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -142,7 +143,7 @@ func gitGlobalConfigPaths() []string {
 	if p := os.Getenv("GIT_CONFIG_GLOBAL"); filepath.IsAbs(p) {
 		paths = append(paths, p)
 	} else if strings.TrimSpace(p) != "" {
-		warnRelativeGitConfigGlobal(p)
+		warnRelativeGitEnv("GIT_CONFIG_GLOBAL", p)
 	}
 	home, err := os.UserHomeDir()
 	if err == nil && filepath.IsAbs(home) {
@@ -152,10 +153,27 @@ func gitGlobalConfigPaths() []string {
 	// ~/.config/git plants a committed config there just as well, which is the
 	// same reason wt guards its own config directory rather than only its file.
 	xdg := os.Getenv("XDG_CONFIG_HOME")
-	if filepath.IsAbs(xdg) {
+	switch {
+	case filepath.IsAbs(xdg):
 		paths = append(paths, filepath.Join(xdg, "git"))
-	} else if err == nil && filepath.IsAbs(home) {
-		paths = append(paths, filepath.Join(home, ".config", "git"))
+	default:
+		// A relative one is the GIT_CONFIG_GLOBAL hole under another name, and
+		// worse for being quiet: wt ignores a non-absolute XDG_CONFIG_HOME per
+		// the XDG spec and falls back to ~/.config, while git honours it against
+		// the working directory. Verified — with XDG_CONFIG_HOME=.xdg, git reads
+		// a committed .xdg/git/config, core.hooksPath and all. Same answer as
+		// there: no placement to refuse, so say it out loud.
+		//
+		// A relative HOME does the same, and is not warned about here because it
+		// leaves wt with no absolute config dir at all, which it already reports
+		// as treating every hook as unapproved. That is the louder message of
+		// the two.
+		if strings.TrimSpace(xdg) != "" {
+			warnRelativeGitEnv("XDG_CONFIG_HOME", xdg)
+		}
+		if err == nil && filepath.IsAbs(home) {
+			paths = append(paths, filepath.Join(home, ".config", "git"))
+		}
 	}
 	return append(paths, gitGlobalIncludePaths()...)
 }
@@ -202,7 +220,7 @@ func gitGlobalIncludePaths() []string {
 		if !hasValue {
 			continue
 		}
-		path := expandTilde(value)
+		path := expandGitPath(value)
 		if path == "" {
 			continue
 		}
@@ -214,27 +232,29 @@ func gitGlobalIncludePaths() []string {
 	return paths
 }
 
-// relativeGitConfigGlobalWarning keeps the notice to once per process.
-var relativeGitConfigGlobalWarning sync.Once
+// relativeGitEnvWarnings keeps the notice to once per variable per process.
+var relativeGitEnvWarnings sync.Map
 
-// warnRelativeGitConfigGlobal says out loud that this PR's promise does not hold
-// for this environment.
+// warnRelativeGitEnv says out loud that this PR's promise does not hold for this
+// environment.
 //
-// git takes GIT_CONFIG_GLOBAL relative to the working directory, so a value like
-// "gitconfig" means a different file in every repository — including one a
-// repository committed, holding core.hooksPath. wt cannot close that: the file
-// is read the moment any git command runs there, whatever wt does or refuses to
-// do, and nothing wt does created it. But "nothing runs until you approve it" is
-// silently untrue on such a machine, and the only wrong answer is to keep quiet.
-func warnRelativeGitConfigGlobal(value string) {
-	relativeGitConfigGlobalWarning.Do(func() {
-		fmt.Fprintf(os.Stderr,
-			"⚠ GIT_CONFIG_GLOBAL is set to %q, which is a relative path.\n"+
-				"  git resolves it per directory, so a repository that commits a file by that name\n"+
-				"  supplies your global git config — including core.hooksPath, which wt cannot gate.\n"+
-				"  Set it to an absolute path.\n\n",
-			value)
-	})
+// git resolves a relative GIT_CONFIG_GLOBAL or XDG_CONFIG_HOME against the
+// working directory, so such a value names a different file in every repository
+// — including one a repository committed, holding core.hooksPath. wt cannot
+// close that: the file is read the moment any git command runs there, whatever
+// wt does or refuses to do, and nothing wt does created it. There is no
+// placement to refuse. But "nothing runs until you approve it" is silently
+// untrue on such a machine, and the only wrong answer is to keep quiet.
+func warnRelativeGitEnv(name, value string) {
+	if _, seen := relativeGitEnvWarnings.LoadOrStore(name, true); seen {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"⚠ %s is set to %q, which is a relative path.\n"+
+			"  git resolves it per directory, so a repository that commits a file by that name\n"+
+			"  supplies your global git config — including core.hooksPath, which wt cannot gate.\n"+
+			"  Set it to an absolute path.\n\n",
+		name, value)
 }
 
 // gitHookDirIsWhatRuns explains a placement onto a git directory. Phrased to
@@ -259,8 +279,13 @@ const gitHookDirIsWhatRuns = "inside a git directory, where git keeps the hooks 
 // The limit worth saying out loud: this finds the ordinary layout. A bare
 // repository keeps its hooks at <repo>/hooks with no .git anywhere in the path,
 // and wt cannot enumerate every repository on the machine to find those.
+//
+// Folded, because the guard refuses: on a case-insensitive volume
+// ~/src/victim/.GIT/hooks IS ~/src/victim/.git/hooks, and a pattern is free to
+// spell it either way. foldPath drops Win32's trailing dots and spaces too, so
+// ".git." does not walk past this on Windows.
 func pathInsideAGitDir(path string) bool {
-	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+	for _, part := range strings.Split(filepath.ToSlash(foldPath(path)), "/") {
 		if part == ".git" {
 			return true
 		}
@@ -285,17 +310,75 @@ func gitRepoOwnedPaths() []string {
 	if dir, err := gitCommonDir(); err == nil && filepath.IsAbs(dir) {
 		paths = append(paths, dir)
 	}
-	out, err := exec.Command("git", "config", "--get", "core.hooksPath").Output()
-	if err != nil {
-		return paths
-	}
-	// Relative to the top of the working tree, per git — which is the
-	// repository's own directory, already covered by refusing to place a
-	// worktree inside another. Only an absolute value names somewhere else.
-	if p := expandTilde(strings.TrimSpace(string(out))); filepath.IsAbs(p) {
+	// GIT_TEMPLATE_DIR before the config keys, since it is the spelling that
+	// needs no config file at all.
+	if p := expandGitPath(os.Getenv("GIT_TEMPLATE_DIR")); filepath.IsAbs(p) {
 		paths = append(paths, p)
 	}
+	for _, key := range gitExecutablePathKeys {
+		out, err := exec.Command("git", "config", "--get", key).Output()
+		if err != nil {
+			continue
+		}
+		// A relative value is relative to the working tree or the working
+		// directory depending on the key — either way it is somewhere inside a
+		// repository, and a worktree cannot be placed inside one. Only an
+		// absolute value names somewhere else. core.fsmonitor's "true" and
+		// "false" fall out here too, being neither.
+		if p := expandGitPath(gitOutputPath(out)); filepath.IsAbs(p) {
+			paths = append(paths, p)
+		}
+	}
 	return paths
+}
+
+// gitExecutablePathKeys are the config settings that name a place git will run
+// something from, rather than a setting git merely reads.
+//
+// Each is the same shape as core.hooksPath: a path git consults, which git does
+// not mind being absent, so a value naming a directory that is not there yet is
+// an armed slot a pattern can fill.
+//
+//   - core.hooksPath — where git looks for hooks instead of $GIT_DIR/hooks.
+//   - init.templateDir — whose hooks/ is COPIED into every repository git
+//     creates afterwards, so filling it arms every future clone rather than one
+//     repository. GIT_TEMPLATE_DIR is the same thing from the environment.
+//   - core.fsmonitor — a hook program git runs on any command that reads the
+//     index, which is nearly all of them.
+//
+// Not a claim to be exhaustive about every git setting naming a program: most
+// name an installed binary (core.pager, gpg.program) rather than a directory
+// waiting to be created, and chasing them one key at a time has a floor. The
+// bounded fix is anchoring a repository-supplied absolute pattern inside the
+// user's own tree, which is issue #154.
+var gitExecutablePathKeys = []string{"core.hooksPath", "init.templateDir", "core.fsmonitor"}
+
+// expandGitPath expands a leading "~" the way git does, which includes the
+// "~user" form expandTilde deliberately leaves alone.
+//
+// git runs core.hooksPath = ~alice/armed/hooks through getpwnam and arrives at
+// an absolute path; wt reading the same value as relative would skip it, and
+// skipping is not guarding. Only ever widens what the guard refuses, so a lookup
+// that fails leaves the value naming nothing rather than naming itself.
+//
+// "/" only as the separator, because "~user" is a Unix idea — git needs a passwd
+// entry to expand it, and Windows has none.
+func expandGitPath(value string) string {
+	if p := expandTilde(value); p != value {
+		return p
+	}
+	if !strings.HasPrefix(value, "~") {
+		return value
+	}
+	name, rest, _ := strings.Cut(value[1:], "/")
+	if name == "" {
+		return value
+	}
+	u, err := user.Lookup(name)
+	if err != nil || !filepath.IsAbs(u.HomeDir) {
+		return ""
+	}
+	return filepath.Join(u.HomeDir, rest)
 }
 
 func wtStateAtPath(path string) string {

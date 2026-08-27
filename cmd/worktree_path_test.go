@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -494,8 +495,8 @@ func TestGitConfigGlobalIsGuardedWhenSet(t *testing.T) {
 	// committed. wt cannot guard a path that moves, and it did not open the
 	// hole: the file is read the moment any git command runs there. It names no
 	// path to protect, the defaults still stand, and the user is told.
-	relativeGitConfigGlobalWarning = sync.Once{}
-	t.Cleanup(func() { relativeGitConfigGlobalWarning = sync.Once{} })
+	relativeGitEnvWarnings = sync.Map{}
+	t.Cleanup(func() { relativeGitEnvWarnings = sync.Map{} })
 	stderr := captureStderr(t)
 	t.Setenv("GIT_CONFIG_GLOBAL", "gitconfig")
 	if owned := wtStateAtPath(filepath.Join(home, ".gitconfig")); owned == "" {
@@ -666,15 +667,21 @@ func TestProcSelfCwdIsNotAnAbsoluteConfigPath(t *testing.T) {
 		"/proc/thread-self/cwd/config.toml",
 		// Clean() first, so the spelling with a detour is the same path.
 		"/proc/self/../self/cwd/config.toml",
+		// A numeric pid is the same trick aimed at another process: the shell
+		// wt was launched from has its cwd inside the repository too, and
+		// nothing about "self" was what made the first spelling wrong.
+		"/proc/1234/cwd/config.toml",
+		"/proc/1/root/etc/wt.toml",
 	} {
 		if !pathIsProcessRelative(path) {
 			t.Errorf("pathIsProcessRelative(%q) = false; it names a different file per process", path)
 		}
 	}
 
-	// A real pid is a fixed directory, and /proc is not a magic prefix.
+	// /proc is not a magic prefix, and a name is not a pid for starting with a
+	// digit.
 	for _, path := range []string{
-		"/proc/1234/cwd/config.toml",
+		"/proc/1234abc/cwd/config.toml",
 		"/proc/cpuinfo",
 		"/procession/self/cwd.toml",
 		"/home/you/.config/wt/config.toml",
@@ -682,5 +689,136 @@ func TestProcSelfCwdIsNotAnAbsoluteConfigPath(t *testing.T) {
 		if pathIsProcessRelative(path) {
 			t.Errorf("pathIsProcessRelative(%q) = true; that names one file", path)
 		}
+	}
+}
+
+// TestAGitDirInAnotherCaseIsStillAGitDir: on a case-insensitive volume — macOS
+// and Windows by default — ~/src/victim/.GIT/hooks IS ~/src/victim/.git/hooks,
+// and a pattern is free to spell it either way. The guard refuses, so it folds.
+func TestAGitDirInAnotherCaseIsStillAGitDir(t *testing.T) {
+	for _, path := range []string{
+		"/home/you/src/victim/.GIT/hooks",
+		"/home/you/src/victim/.Git/hooks",
+	} {
+		if !pathInsideAGitDir(path) {
+			t.Errorf("pathInsideAGitDir(%q) = false; a case-insensitive volume reads that as .git, "+
+				"and a worktree there writes the hooks git runs", path)
+		}
+	}
+	if pathInsideAGitDir("/home/you/src/gitignore/wt") {
+		t.Error(`pathInsideAGitDir("/home/you/src/gitignore/wt") = true; ".gitignore" is not ".git"`)
+	}
+}
+
+// TestGitTemplateDirAndFsmonitorAreGuarded: core.hooksPath is not the only
+// setting naming a place git runs something from. init.templateDir's hooks/ is
+// copied into every repository git creates afterwards — verified, not assumed —
+// so filling it arms every future clone rather than one repository, and
+// core.fsmonitor is a hook program git runs on any command that reads the index.
+func TestGitTemplateDirAndFsmonitorAreGuarded(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	elsewhere := t.TempDir()
+	template := filepath.Join(elsewhere, "git-template")
+	fsmonitor := filepath.Join(elsewhere, "watchman", "query")
+	runGit(t, repo, "config", "init.templateDir", template)
+	runGit(t, repo, "config", "core.fsmonitor", fsmonitor)
+	t.Chdir(repo)
+
+	if owned := wtStateAtPath(filepath.Join(template, "hooks")); owned == "" {
+		t.Errorf("wtStateAtPath(%q) = \"\", want a refusal: git copies that directory's hooks into "+
+			"every repository it creates afterwards", filepath.Join(template, "hooks"))
+	}
+	// The parent, because the value names a file and a worktree is placed on a
+	// directory: filling ~/watchman is what puts the program there.
+	if owned := wtStateAtPath(filepath.Dir(fsmonitor)); owned == "" {
+		t.Errorf("wtStateAtPath(%q) = \"\", want a refusal: core.fsmonitor names a program inside it, "+
+			"which git runs on any command that reads the index", filepath.Dir(fsmonitor))
+	}
+}
+
+// TestGitTemplateDirFromTheEnvironmentIsGuarded: GIT_TEMPLATE_DIR is
+// init.templateDir needing no config file at all.
+func TestGitTemplateDirFromTheEnvironmentIsGuarded(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	template := filepath.Join(t.TempDir(), "git-template")
+	t.Setenv("GIT_TEMPLATE_DIR", template)
+	t.Chdir(repo)
+
+	if owned := wtStateAtPath(filepath.Join(template, "hooks")); owned == "" {
+		t.Errorf("wtStateAtPath(%q) = \"\", want a refusal: GIT_TEMPLATE_DIR names it",
+			filepath.Join(template, "hooks"))
+	}
+}
+
+// TestExpandGitPathTakesTheTildeUserForm: git runs core.hooksPath through
+// getpwnam and arrives at an absolute path — verified: `git -c
+// core.hooksPath=~you/HOOKDIR rev-parse --git-path hooks` prints the expansion.
+// wt reading the same value as relative would skip it, and skipping is not
+// guarding.
+func TestExpandGitPathTakesTheTildeUserForm(t *testing.T) {
+	me, err := user.Current()
+	if err != nil || me.Username == "" {
+		t.Skip("no current user to look up")
+	}
+	if _, err := user.Lookup(me.Username); err != nil {
+		t.Skipf("this platform cannot look %s up by name: %v", me.Username, err)
+	}
+	got := expandGitPath("~" + me.Username + "/armed/hooks")
+	if !filepath.IsAbs(got) {
+		t.Errorf("expandGitPath(~%s/armed/hooks) = %q, want an absolute path; git expands that form, "+
+			"so a value wt reads as relative is one it silently declines to guard", me.Username, got)
+	}
+	if got := expandGitPath("hooks"); got != "hooks" {
+		t.Errorf("expandGitPath(hooks) = %q, want it left alone", got)
+	}
+}
+
+// TestRelativeXdgConfigHomeIsReportedAsGitsGlobalConfig: wt ignores a
+// non-absolute XDG_CONFIG_HOME per the XDG spec and falls back to ~/.config,
+// while git honours it against the working directory — verified: with
+// XDG_CONFIG_HOME=.xdg, git reads a committed .xdg/git/config. There is no
+// placement to refuse, so the answer is to say so.
+func TestRelativeXdgConfigHomeIsReportedAsGitsGlobalConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	relativeGitEnvWarnings = sync.Map{}
+	t.Cleanup(func() { relativeGitEnvWarnings = sync.Map{} })
+	stderr := captureStderr(t)
+	t.Setenv("XDG_CONFIG_HOME", ".xdg")
+
+	// The fallback still stands: a relative value names no path to protect, and
+	// dropping the default would trade a warning for a hole.
+	if owned := wtStateAtPath(filepath.Join(home, ".config", "git")); owned == "" {
+		t.Error(`wtStateAtPath(~/.config/git) = "", want a refusal even with a relative XDG_CONFIG_HOME`)
+	}
+	// Asked for the git-specific sentence, not just the variable name: wt warns
+	// about a non-absolute XDG_CONFIG_HOME anyway, to say it is ignoring it for
+	// its own config directory. That one says nothing about git honouring the
+	// same value, which is the whole of what is dangerous here — and a test
+	// satisfied by the wrong warning would report this fix as present when it
+	// had been removed. It did.
+	got := stderr()
+	if !strings.Contains(got, "XDG_CONFIG_HOME") || !strings.Contains(got, "git resolves it per directory") {
+		t.Errorf("nothing said about git honouring a relative XDG_CONFIG_HOME; got %q.\n"+
+			"git reads a repository's committed .xdg/git/config there, and wt cannot guard a path "+
+			"that moves — but it can refuse to be quiet about it", got)
+	}
+}
+
+// TestGitOutputPathKeepsATrailingSpace: on Unix a directory whose name ends in a
+// space is a different directory from the one whose name does not. A .wt.toml
+// writing `pattern = "{{.Root}}/{{.Branch}} "` puts a worktree at one of them,
+// and TrimSpace would pin its approval to the scope of the other — the sibling
+// the user keeps their real work in, whose hooks they have already approved.
+func TestGitOutputPathKeepsATrailingSpace(t *testing.T) {
+	if got := gitOutputPath([]byte("/home/you/src/tool \n")); got != "/home/you/src/tool " {
+		t.Errorf("gitOutputPath(%q) = %q, want the trailing space kept: it is part of the name, and "+
+			"dropping it makes two repositories answer to one approval", "/home/you/src/tool \n", got)
+	}
+	if got := gitOutputPath([]byte("/home/you/src/tool\r\n")); got != "/home/you/src/tool" {
+		t.Errorf("gitOutputPath(%q) = %q, want the line ending gone", "/home/you/src/tool\r\n", got)
 	}
 }

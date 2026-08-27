@@ -129,8 +129,9 @@ evaluating an `includeIf`'s condition: whether the file is read *here* is not th
 question, it is read in whichever repository matches, and the placement is what
 puts it there.
 
-The third is any repository's git directory, and `core.hooksPath` where this
-repository's points somewhere else. `git worktree add` will check out into an
+The third is any repository's git directory, along with the settings that name
+somewhere else git will run something from: `core.hooksPath`, `init.templateDir`
+(and `GIT_TEMPLATE_DIR`), and `core.fsmonitor`. `git worktree add` will check out into an
 existing directory as long as it is empty, and `.git/hooks` is empty on any clone
 made with no init template — so a branch whose tree is one executable
 `post-checkout` file, placed there, is run by the very next `git worktree add`,
@@ -142,14 +143,35 @@ whose `.git` it is, and `~/src/victim/.git/hooks` is as reachable from a pattern
 as your own. A path with a `.git` component is refused, whether the pattern spells
 it out or reaches it through a symlink. What that does not find is a bare
 repository, which keeps its hooks at `<repo>/hooks` with no `.git` in the path —
-`wt` cannot enumerate every repository on the machine.
+`wt` cannot enumerate every repository on the machine. Spelling is not a way
+out either: the check folds case, because on a case-insensitive volume
+`.GIT/hooks` *is* `.git/hooks`.
 
-One thing `wt` cannot guard: a **relative** `GIT_CONFIG_GLOBAL`. git resolves it
-against the working directory, so it names a different file in every repository —
-including one a repository committed, holding `core.hooksPath`. That file is read
-the moment any git command runs there, whatever `wt` does; there is no placement
-to refuse, because nothing needs placing. `wt` says so on stderr and otherwise
-guards the default locations. Set it to an absolute path.
+The other three settings are the same shape as `core.hooksPath` — a path git
+consults, which git does not mind being absent, so a value naming a directory
+that is not there yet is an armed slot rather than a broken setting.
+`init.templateDir` is the widest of them: git copies that directory's `hooks/`
+into every repository it creates afterwards, so filling it arms every future
+clone rather than one repository. `core.fsmonitor` names a program git runs on
+any command that reads the index, which is nearly all of them. A `~user/...`
+value is expanded the way git expands it, since a value `wt` read as relative
+would be one it silently declined to guard.
+
+That list is not a claim to be exhaustive about every git setting naming a
+program. Most name a binary you already have (`core.pager`, `gpg.program`)
+rather than a directory waiting to be created, and chasing them one key at a
+time has a floor — the bounded fix is anchoring a repository-supplied absolute
+pattern inside your own tree, which is [issue #154](https://github.com/timvw/wt/issues/154).
+
+One thing `wt` cannot guard: a **relative** `GIT_CONFIG_GLOBAL` or
+`XDG_CONFIG_HOME`. git resolves either against the working directory, so it names
+a different file in every repository — including one a repository committed,
+holding `core.hooksPath`. That file is read the moment any git command runs
+there, whatever `wt` does; there is no placement to refuse, because nothing needs
+placing. `XDG_CONFIG_HOME` is the quieter of the two, since `wt` ignores a
+non-absolute value for its own config directory while git honours it for git's.
+`wt` says so on stderr and otherwise guards the default locations. Set them to
+absolute paths.
 
 That is where the guard stops, and it stops on purpose: it covers `wt`'s
 configuration and the configuration of the program `wt` drives. An absolute

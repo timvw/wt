@@ -332,13 +332,28 @@ type repoIdentity struct {
 	verified bool
 }
 
+// gitOutputPath reads a path git printed on stdout, dropping the line ending it
+// printed after it and nothing else.
+//
+// strings.TrimSpace would take the trailing spaces too — and on Unix a directory
+// whose name ends in a space is a different directory from the one whose name
+// does not. A `.wt.toml` writing `pattern = "{{.Root}}/{{.Branch}} "` puts a
+// worktree at one of them, and trimming would pin its approval to the scope of
+// the other: the sibling the user actually keeps their work in, whose hooks they
+// have already approved. Two spaces and one space would collide the same way.
+// Windows strips trailing spaces itself, so trimming only the line ending costs
+// nothing there.
+func gitOutputPath(out []byte) string {
+	return strings.TrimRight(strings.TrimSuffix(string(out), "\n"), "\r")
+}
+
 // gitToplevel returns the absolute path of the current working tree's root.
 func gitToplevel() (string, error) {
 	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		return "", fmt.Errorf("not in a git repository")
 	}
-	top := strings.TrimSpace(string(out))
+	top := gitOutputPath(out)
 	if top == "" {
 		return "", fmt.Errorf("not in a git repository")
 	}
@@ -349,7 +364,7 @@ func gitToplevel() (string, error) {
 func gitCommonDir() (string, error) {
 	out, err := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
 	if err == nil {
-		if dir := strings.TrimSpace(string(out)); dir != "" {
+		if dir := gitOutputPath(out); dir != "" {
 			return canonicalPath(dir), nil
 		}
 	}
@@ -359,7 +374,7 @@ func gitCommonDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir := strings.TrimSpace(string(out))
+	dir := gitOutputPath(out)
 	if dir == "" {
 		return "", fmt.Errorf("no common git dir")
 	}

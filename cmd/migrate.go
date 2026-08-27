@@ -635,6 +635,17 @@ func approvedHashesAt(store trustStore, path string, under func(scope, root stri
 	if !ok {
 		return nil, false
 	}
+	// The working tree root as well as its .git, because not every scope is a
+	// git directory: where git would not confirm which repository a working tree
+	// belongs to, defaultRepoTrustKey pins the approval to the directory's own
+	// path instead. Such a record answers for commands that run at a checkout
+	// here, and asking only beneath .git never sees it — <path> is not under
+	// <path>/.git. Resolved separately rather than assumed to nest, since a .git
+	// may be a symlink pointing somewhere else entirely.
+	root, ok := canonicalExistingPath(path)
+	if !ok {
+		return nil, false
+	}
 	found := map[string]bool{}
 	for _, rec := range store.Trusted {
 		if rec.Scope == "" || rec.Scope == trustScopeUser {
@@ -642,7 +653,7 @@ func approvedHashesAt(store trustStore, path string, under func(scope, root stri
 		}
 		// A record wt cannot resolve is not evidence about this path — and it is
 		// the attacker who needs a record to match, never to hide.
-		if got, ok := canonicalExistingPath(rec.Scope); ok && under(got, want) {
+		if got, ok := canonicalExistingPath(rec.Scope); ok && (under(got, want) || under(got, root)) {
 			found[rec.SHA256] = true
 		}
 	}

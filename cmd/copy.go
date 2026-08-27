@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -91,7 +90,7 @@ func resolveCopyDestination(args []string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("not inside a worktree; pass a branch name")
 	}
-	return strings.TrimSpace(string(out)), nil
+	return gitOutputPath(out), nil
 }
 
 // resolveCopySource picks the worktree to copy from: --from, else the main
