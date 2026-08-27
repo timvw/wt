@@ -1149,7 +1149,7 @@ func TestTrustStoreNeverLandsInsideTheRepository(t *testing.T) {
 	t.Run("relative XDG_CONFIG_HOME is ignored", func(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
 		t.Setenv("XDG_CONFIG_HOME", ".config")
-		relativeConfigHomeWarnings.Delete("XDG_CONFIG_HOME")
+		configHomeWarnings.Delete("XDG_CONFIG_HOME")
 
 		got := trustFilePath()
 		if !filepath.IsAbs(got) {

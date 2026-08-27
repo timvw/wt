@@ -22,11 +22,33 @@ func TestConfigDir(t *testing.T) {
 	})
 
 	t.Run("uses XDG_CONFIG_HOME when set", func(t *testing.T) {
-		os.Setenv("XDG_CONFIG_HOME", "/custom/config")
+		// configDir requires an absolute path, and on Windows that means a
+		// volume: "/custom/config" is rooted but drive-relative there.
+		custom := "/custom/config"
+		if runtime.GOOS == "windows" {
+			custom = `C:\custom\config`
+		}
+		os.Setenv("XDG_CONFIG_HOME", custom)
 		got := configDir()
-		want := filepath.Join("/custom/config", "wt")
+		want := filepath.Join(custom, "wt")
 		if got != want {
 			t.Errorf("configDir() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("ignores a non-absolute XDG_CONFIG_HOME", func(t *testing.T) {
+		os.Setenv("XDG_CONFIG_HOME", ".config")
+		configHomeWarnings.Delete("XDG_CONFIG_HOME")
+
+		stderr := captureStderr(t)
+		dir := configDir()
+		out := stderr()
+
+		if dir != "" && !filepath.IsAbs(dir) {
+			t.Errorf("configDir() = %q, want an absolute path or \"\"", dir)
+		}
+		if !strings.Contains(out, "XDG_CONFIG_HOME") {
+			t.Errorf("ignored XDG_CONFIG_HOME without saying so, got:\n%s", out)
 		}
 	})
 

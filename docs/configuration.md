@@ -824,7 +824,7 @@ entry is not a change to what would execute, so it does not cost you a prompt.
 Approvals are stored in `~/.config/wt/trust.toml` (`$XDG_CONFIG_HOME/wt/` or
 `%APPDATA%\wt\` if set). Deleting that file revokes everything.
 
-That location is always an absolute path. A relative `$XDG_CONFIG_HOME` is
+That location is always an absolute path. A non-absolute `$XDG_CONFIG_HOME` is
 invalid per the XDG Base Directory spec and is ignored with a warning, and if no
 home directory can be determined at all — an unset `HOME`, as happens in some CI
 and container images — wt records nothing and treats every hook as unapproved.

@@ -566,26 +566,30 @@ const defaultConfigTemplate = `# wt configuration file
 // configDir returns the directory where wt config files are stored, or "" when
 // no absolute location can be determined.
 //
-// The result is always absolute or empty, never relative. Per the XDG Base
-// Directory spec a relative XDG_CONFIG_HOME is invalid and must be ignored, and
-// an unset HOME leaves nothing to fall back to. Resolving either against the
-// working directory would place wt's config — and, worse, its trust store —
-// inside whatever repository the user happens to be standing in, which would let
-// a cloned repo ship approvals for its own hooks. Returning "" instead fails
-// closed: no config file is found and nothing is trusted.
+// The result is always absolute or empty. Per the XDG Base Directory spec a
+// relative XDG_CONFIG_HOME is invalid and must be ignored, and an unset HOME
+// leaves nothing to fall back to. Resolving either against the working directory
+// would place wt's config — and, worse, its trust store — inside whatever
+// repository the user happens to be standing in, which would let a cloned repo
+// ship approvals for its own hooks. Returning "" instead fails closed: no config
+// file is found and nothing is trusted.
+//
+// filepath.IsAbs is the test rather than "starts with a separator", because on
+// Windows a rooted path with no volume ("\config") is resolved against the
+// current drive and is not a location wt can be sure of either.
 func configDir() string {
 	if d := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); d != "" {
 		if filepath.IsAbs(d) {
 			return filepath.Join(filepath.Clean(d), "wt")
 		}
-		warnRelativeConfigHome("XDG_CONFIG_HOME", d)
+		warnConfigHomeNotAbsolute("XDG_CONFIG_HOME", d)
 	}
 	if runtime.GOOS == "windows" {
 		if d := strings.TrimSpace(os.Getenv("APPDATA")); d != "" {
 			if filepath.IsAbs(d) {
 				return filepath.Join(filepath.Clean(d), "wt")
 			}
-			warnRelativeConfigHome("APPDATA", d)
+			warnConfigHomeNotAbsolute("APPDATA", d)
 		}
 	}
 	home, err := os.UserHomeDir()
@@ -595,19 +599,19 @@ func configDir() string {
 	return filepath.Join(home, ".config", "wt")
 }
 
-// relativeConfigHomeWarnings keeps the notice to once per variable per process:
+// configHomeWarnings keeps the notice to once per variable per process:
 // configDir is consulted by the config loader and again by every hook event.
-var relativeConfigHomeWarnings sync.Map
+var configHomeWarnings sync.Map
 
-// warnRelativeConfigHome reports an ignored override. Saying nothing would leave
-// the user reading a config file they did not write, or re-approving hooks they
-// already approved, with no way to tell why.
-func warnRelativeConfigHome(name, value string) {
-	if _, seen := relativeConfigHomeWarnings.LoadOrStore(name, true); seen {
+// warnConfigHomeNotAbsolute reports an ignored override. Saying nothing would
+// leave the user reading a config file they did not write, or re-approving hooks
+// they already approved, with no way to tell why.
+func warnConfigHomeNotAbsolute(name, value string) {
+	if _, seen := configHomeWarnings.LoadOrStore(name, true); seen {
 		return
 	}
 	fmt.Fprintf(os.Stderr,
-		"⚠ %s is set to a relative path %q and is being ignored; it must be absolute.\n"+
+		"⚠ %s is set to %q, which is not an absolute path, so it is being ignored.\n"+
 			"  wt is falling back to your home directory.\n\n",
 		name, value)
 }
