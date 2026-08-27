@@ -140,9 +140,13 @@ func gitGlobalConfigPaths() []string {
 	// value names a file to protect; the defaults are listed anyway, in case it
 	// is ignored. A relative one is a hole wt cannot plug and did not open — see
 	// warnRelativeGitConfigGlobal.
-	if p := os.Getenv("GIT_CONFIG_GLOBAL"); filepath.IsAbs(p) {
+	if p := os.Getenv("GIT_CONFIG_GLOBAL"); namesOneDirectory(p) {
 		paths = append(paths, p)
 	} else if strings.TrimSpace(p) != "" {
+		// Including /proc/self/cwd/.gitconfig, which is absolute and is the
+		// repository's own file: guarding a path that already means "here" would
+		// be refusing to place a worktree on something the repository has
+		// already supplied.
 		warnRelativeGitEnv("GIT_CONFIG_GLOBAL", p)
 	}
 	home, err := os.UserHomeDir()
@@ -154,7 +158,7 @@ func gitGlobalConfigPaths() []string {
 	// same reason wt guards its own config directory rather than only its file.
 	xdg := os.Getenv("XDG_CONFIG_HOME")
 	switch {
-	case filepath.IsAbs(xdg):
+	case namesOneDirectory(xdg):
 		paths = append(paths, filepath.Join(xdg, "git"))
 	default:
 		// A relative one is the GIT_CONFIG_GLOBAL hole under another name, and
@@ -193,6 +197,13 @@ func gitGlobalConfigPaths() []string {
 // in THIS repository is not the question — it is read in whichever repository
 // matches, and the placement is what puts the file there.
 //
+// --includes because git turns include expansion OFF when a specific file is
+// named, and --global names one: without it only the top level is reported, and
+// an [include] inside an included file names a path wt would never hear about.
+// Verified — a two-deep include is invisible without the flag and reported with
+// it, its origin being the file that declared it, which is what a relative value
+// there has to resolve against.
+//
 // Read from git rather than parsed here: the values are wanted before the files
 // exist, and `git config --global` reports them either way. With --show-origin,
 // so a relative value can be resolved the way git resolves it — against the
@@ -200,7 +211,7 @@ func gitGlobalConfigPaths() []string {
 // working directory. `path = dotfiles/gitconfig` in ~/.gitconfig is ~/dotfiles,
 // and is as much an armed slot as the absolute spelling of the same thing.
 func gitGlobalIncludePaths() []string {
-	out, err := exec.Command("git", "config", "--global", "--show-origin", "--null",
+	out, err := exec.Command("git", "config", "--global", "--includes", "--show-origin", "--null",
 		"--get-regexp", `^include(if\..*)?\.path$`).Output()
 	if err != nil {
 		return nil
@@ -385,6 +396,13 @@ func wtStateAtPath(path string) string {
 	owned := []struct{ path, what string }{
 		{configDir(), "where wt keeps its config file and its record of approved hooks"},
 		{configFilePath, "your config file"},
+		// Named as well as its directory, because the two need not be in the
+		// same place: trust.toml is often a symlink out of a dotfiles
+		// repository, and guarding ~/.config/wt says nothing about where such a
+		// link points. A dangling one — dotfiles not cloned yet — is a path a
+		// pattern can render onto, and what gets checked out there IS the record
+		// of what you have approved.
+		{trustFilePath(), "where wt keeps its record of approved hooks"},
 	}
 	for _, p := range gitGlobalConfigPaths() {
 		owned = append(owned, struct{ path, what string }{p, gitConfigIsWhatRuns})

@@ -822,3 +822,112 @@ func TestGitOutputPathKeepsATrailingSpace(t *testing.T) {
 		t.Errorf("gitOutputPath(%q) = %q, want the line ending gone", "/home/you/src/tool\r\n", got)
 	}
 }
+
+// TestProcessRelativeXdgConfigHomeIsNotAConfigDir: XDG_CONFIG_HOME is where the
+// trust store comes from, so a value meaning "here" makes wt read its record of
+// what you have approved out of whatever repository you are standing in. A
+// repository committing .config/wt/trust.toml with its own scope and hash then
+// arrives pre-approved — the gate supplied rather than passed. Refusing the
+// config file and not the directory beneath it closes the smaller half.
+func TestProcessRelativeXdgConfigHomeIsNotAConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	configHomeWarnings = sync.Map{}
+	t.Cleanup(func() { configHomeWarnings = sync.Map{} })
+	stderr := captureStderr(t)
+	t.Setenv("XDG_CONFIG_HOME", "/proc/self/cwd/.config")
+
+	want := filepath.Join(home, ".config", "wt")
+	if got := configDir(); got != want {
+		t.Errorf("configDir() = %q, want %q: /proc/self/cwd is absolute and still means the working "+
+			"directory, so the trust store would come from the repository", got, want)
+	}
+	// The warning has to be true, or it is one the user learns to skip: that
+	// value IS an absolute path, and what is wrong with it is something else.
+	if got := stderr(); !strings.Contains(got, "depending on which process asks") {
+		t.Errorf("configDir() said %q; want the reason to be that the path moves, not that it is "+
+			"relative — it is not relative", got)
+	}
+}
+
+// TestProcessRelativeGitConfigGlobalIsReportedNotGuarded:
+// GIT_CONFIG_GLOBAL=/proc/self/cwd/.gitconfig is the repository's own file
+// wearing an absolute spelling. Guarding it would mean refusing to place a
+// worktree on something the repository has already supplied; the honest answer
+// is the one a relative value gets.
+func TestProcessRelativeGitConfigGlobalIsReportedNotGuarded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	relativeGitEnvWarnings = sync.Map{}
+	t.Cleanup(func() { relativeGitEnvWarnings = sync.Map{} })
+	stderr := captureStderr(t)
+	t.Setenv("GIT_CONFIG_GLOBAL", "/proc/self/cwd/.gitconfig")
+
+	if owned := wtStateAtPath(filepath.Join(home, ".gitconfig")); owned == "" {
+		t.Error(`wtStateAtPath(~/.gitconfig) = "", want a refusal: the defaults still stand`)
+	}
+	if got := stderr(); !strings.Contains(got, "GIT_CONFIG_GLOBAL") {
+		t.Errorf("nothing said about a GIT_CONFIG_GLOBAL that means \"here\"; got %q", got)
+	}
+}
+
+// TestNestedGitConfigIncludesAreGuarded: git turns include expansion OFF when a
+// specific file is named, and --global names one. Without --includes only the
+// top level is reported, so an [include] inside an included file named a path wt
+// never heard about — armed, and invisible. Verified both ways.
+func TestNestedGitConfigIncludesAreGuarded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	// Unset, not empty: git reads an empty GIT_CONFIG_GLOBAL as "there is no
+	// global config" and would report no includes at all.
+	t.Setenv("GIT_CONFIG_GLOBAL", "")
+	if err := os.Unsetenv("GIT_CONFIG_GLOBAL"); err != nil {
+		t.Fatal(err)
+	}
+
+	middle := filepath.Join(home, "middle.inc")
+	top := "[include]\n\tpath = " + filepath.ToSlash(middle) + "\n"
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(top), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Relative, so this also checks that a nested value resolves against the
+	// file that declared it rather than against ~/.gitconfig.
+	if err := os.WriteFile(middle, []byte("[include]\n\tpath = deep/gitconfig\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{filepath.Join(home, "deep", "gitconfig"), filepath.Join(home, "deep")} {
+		if owned := wtStateAtPath(path); owned == "" {
+			t.Errorf("wtStateAtPath(%q) = \"\", want a refusal: an [include] two files deep names it, "+
+				"and git ignores an include whose file is absent rather than complaining", path)
+		}
+	}
+}
+
+// TestTheTrustStoreIsGuardedWhereItPointsElsewhere: trust.toml and the directory
+// holding it need not be in the same place. Guarding ~/.config/wt says nothing
+// about where a symlink inside it points, and a dangling one — dotfiles not
+// cloned yet — is a path a pattern can render onto. What gets checked out there
+// is the record of what you have approved.
+func TestTheTrustStoreIsGuardedWhereItPointsElsewhere(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	if err := os.MkdirAll(filepath.Join(home, ".config", "wt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dotfiles := filepath.Join(home, "dotfiles")
+	if err := os.Symlink(filepath.Join(dotfiles, "wt-trust.toml"), trustFilePath()); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+
+	if owned := wtStateAtPath(dotfiles); owned == "" {
+		t.Errorf("wtStateAtPath(%q) = \"\", want a refusal: trust.toml points inside it, so a branch "+
+			"checked out there supplies wt's record of approved hooks", dotfiles)
+	}
+}

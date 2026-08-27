@@ -586,15 +586,21 @@ const defaultConfigTemplate = `# wt configuration file
 // Windows a rooted path with no volume ("\config") is resolved against the
 // current drive and is not a location wt can be sure of either.
 func configDir() string {
+	// namesOneDirectory, not IsAbs: this is where the trust store comes from, so
+	// XDG_CONFIG_HOME=/proc/self/cwd/.config would have wt read its record of
+	// what you have approved out of whatever repository you are standing in. A
+	// repository committing .config/wt/trust.toml with its own scope and hash
+	// then arrives pre-approved. Refusing the config FILE and not the directory
+	// beneath it would have closed the smaller half of that.
 	if d := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); d != "" {
-		if filepath.IsAbs(d) {
+		if namesOneDirectory(d) {
 			return filepath.Join(filepath.Clean(d), "wt")
 		}
 		warnConfigHomeNotAbsolute("XDG_CONFIG_HOME", d)
 	}
 	if runtime.GOOS == "windows" {
 		if d := strings.TrimSpace(os.Getenv("APPDATA")); d != "" {
-			if filepath.IsAbs(d) {
+			if namesOneDirectory(d) {
 				return filepath.Join(filepath.Clean(d), "wt")
 			}
 			warnConfigHomeNotAbsolute("APPDATA", d)
@@ -618,10 +624,16 @@ func warnConfigHomeNotAbsolute(name, value string) {
 	if _, seen := configHomeWarnings.LoadOrStore(name, true); seen {
 		return
 	}
+	// Two reasons, because "not absolute" would be a lie about /proc/self/cwd,
+	// and a warning the user can see is wrong is one they learn to skip.
+	why := "is not an absolute path"
+	if filepath.IsAbs(value) {
+		why = "names a different directory depending on which process asks"
+	}
 	fmt.Fprintf(os.Stderr,
-		"⚠ %s is set to %q, which is not an absolute path, so it is being ignored.\n"+
+		"⚠ %s is set to %q, which %s, so it is being ignored.\n"+
 			"  wt is falling back to your home directory.\n\n",
-		name, value)
+		name, value, why)
 }
 
 // configFileInRepo reports whether the config file wt is about to read lives
@@ -686,6 +698,18 @@ func configFileInRepo(configPath, repoRoot string) bool {
 //
 // Linux only in effect, and checked everywhere: /proc/self is not a path anyone
 // writes by accident on a machine where it means nothing.
+// namesOneDirectory reports whether a path means the same place wherever wt is
+// run from — which is what every "is it absolute?" test in wt was really asking.
+//
+// filepath.IsAbs answers a question about spelling. /proc/self/cwd is spelled
+// absolutely and means the working directory, so it passes that test and fails
+// the one that matters. Anywhere wt accepts a path BECAUSE it is absolute — the
+// config file, the config directory that holds the trust store, git's global
+// config — it wants this instead.
+func namesOneDirectory(path string) bool {
+	return filepath.IsAbs(path) && !pathIsProcessRelative(path)
+}
+
 func pathIsProcessRelative(path string) bool {
 	rest, ok := strings.CutPrefix(filepath.ToSlash(filepath.Clean(path)), "/proc/")
 	if !ok {
@@ -899,7 +923,7 @@ func loadWorktreeConfig() {
 	// standing in, which is the one symlink wt allows — see the case below.
 	// What is wrong here is not where the path leads, it is that where it leads
 	// depends on when you ask.
-	case configFilePath != "" && pathIsProcessRelative(configFilePath):
+	case configFilePath != "" && filepath.IsAbs(configFilePath) && !namesOneDirectory(configFilePath):
 		warnConfigPathNotAbsolute(configFilePath)
 
 	// The same thing spelled absolutely, which is usually a mistake rather than

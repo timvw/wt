@@ -117,13 +117,15 @@ included, runs what is in it. Nothing was approved and nothing was prompted for,
 and like `trust.toml` it applies in every repository afterwards rather than only
 in that one.
 
-The files that configuration pulls in count as part of it. git ignores an
-`[include]` or `[includeIf]` whose file is not there rather than complaining, so
+The files that configuration pulls in count as part of it, however deep. git
+ignores an `[include]` or `[includeIf]` whose file is not there rather than
+complaining, so
 a `path = ~/dotfiles/gitconfig` on a machine where you have not cloned your
 dotfiles yet is an armed slot, not a broken setting — a pattern rendering onto
 `~/dotfiles` fills it, and every git command afterwards reads what the repository
-committed. `wt` guards the files those rules name, resolving a relative one the
-way git does — against the directory of the config file that declared it, so
+committed. `wt` guards the files those rules name — including the ones an
+included file names in turn, which git only reports when asked — resolving a
+relative one the way git does — against the directory of the config file that declared it, so
 `path = dotfiles/gitconfig` in `~/.gitconfig` is `~/dotfiles` — and without
 evaluating an `includeIf`'s condition: whether the file is read *here* is not the
 question, it is read in whichever repository matches, and the placement is what
@@ -172,6 +174,16 @@ placing. `XDG_CONFIG_HOME` is the quieter of the two, since `wt` ignores a
 non-absolute value for its own config directory while git honours it for git's.
 `wt` says so on stderr and otherwise guards the default locations. Set them to
 absolute paths.
+
+Absolute is not quite the test, though. `/proc/self/cwd` is spelled absolutely
+and means the working directory, so it passes an `IsAbs` check and fails the one
+that matters — and `/proc/<pid>/cwd` is the same thing aimed at the shell `wt`
+was launched from. Anywhere `wt` accepts a path *because* it is absolute it asks
+instead whether the path means the same place wherever `wt` runs: your config
+file, the config directory the trust store lives in, and git's global
+configuration. An `XDG_CONFIG_HOME` of `/proc/self/cwd/.config` would otherwise
+have `wt` read its record of what you have approved out of whatever repository
+you happen to be standing in.
 
 That is where the guard stops, and it stops on purpose: it covers `wt`'s
 configuration and the configuration of the program `wt` drives. An absolute
