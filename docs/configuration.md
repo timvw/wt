@@ -967,6 +967,16 @@ path component — as with case-insensitivity there, a rule covers the one
 directory its path names on that machine. `wt trust --list` shows each rule next
 to what it resolves to, or marks it ignored.
 
+Symlinks are followed, including the ones above a directory that is not there
+yet: you can write a rule for a tree you have not filled in. Both sides of every
+comparison are resolved the same way, because otherwise they would never meet —
+if `~/src` is a link to another volume, a rule for `~/src/mine` resolves through
+it, and `wt migrate`'s destination `~/src/mine/tool`, which nothing has created,
+would not. That mismatch is not a rule quietly failing to apply; it is `migrate`
+deciding a path is *outside* your whitelisted tree and moving a repository into
+it. A rule `wt` cannot follow to an end names no directory in particular and is
+ignored with a warning, and a destination it cannot follow is left where it is.
+
 A rule is matched against the repository a working tree belongs to, and only
 when git confirmed which repository that is. `wt` asks git to list the
 repository's registered worktrees and looks for the one it is standing in; if it

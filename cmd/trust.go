@@ -577,23 +577,38 @@ func trustWhitelistAllows(repoKey string) bool {
 // the filesystem has not settled and whose trailing dots Win32 has not dropped.
 //
 // The loose counterpart to trustWhitelistAllows, and never a substitute for it:
-// this one only ever decides to refuse a move. See samePath.
-func trustWhitelistCovers(path string) bool {
+// this one only ever decides to refuse a move. See scopedUnder.
+//
+// Resolved with canonicalExistingPath rather than canonicalPath, because the
+// path this one is asked about is the one that does not exist yet — and
+// canonicalPath cannot resolve a symlink it cannot stat, so it would hand back
+// the destination spelled lexically while every rule it is compared against has
+// been canonicalised. One symlink anywhere above the destination is then enough
+// to make a covered path match no rule: with ~/src pointing at another volume,
+// `prefix = ["~/src/mine"]` resolves through it and ~/src/mine/tool does not.
+//
+// The second result is false when wt could not settle which directory the path
+// names — not the same answer as "no rule covers it", and the caller skips the
+// move rather than reading it as one.
+func trustWhitelistCovers(path string) (bool, bool) {
 	if path == "" || path == trustScopeUser {
-		return false
+		return false, true
 	}
-	target := trustWhitelistTarget(path)
+	target, ok := canonicalExistingPath(trustWhitelistBase(path))
+	if !ok {
+		return false, false
+	}
 	for _, entry := range trustExact {
 		if p := normaliseTrustPath(entry); p != "" && mayBeSamePath(p, target) {
-			return true
+			return true, true
 		}
 	}
 	for _, entry := range trustPrefixes {
 		if p := normaliseTrustPath(entry); p != "" && hasPathPrefixFold(target, p) {
-			return true
+			return true, true
 		}
 	}
-	return false
+	return false, true
 }
 
 // trustWhitelistTarget turns a repository identity into the path a user would
@@ -610,10 +625,16 @@ func trustWhitelistCovers(path string) bool {
 // other /private/tmp fails in the direction of running commands the user
 // thought they had vetted, so it is not left to the caller.
 func trustWhitelistTarget(repoKey string) string {
+	return canonicalPath(trustWhitelistBase(repoKey))
+}
+
+// trustWhitelistBase is that stripping on its own, for the caller that resolves
+// the result a different way.
+func trustWhitelistBase(repoKey string) string {
 	if filepath.Base(repoKey) == ".git" {
-		repoKey = filepath.Dir(repoKey)
+		return filepath.Dir(repoKey)
 	}
-	return canonicalPath(repoKey)
+	return repoKey
 }
 
 // normaliseTrustPath resolves a whitelist entry to something comparable with a
@@ -678,7 +699,17 @@ func normaliseTrustPath(entry string) string {
 		warnTrustRuleIgnored(entry, "it is not an absolute path, and a rule has to name one directory rather than a different one per working directory")
 		return ""
 	}
-	path := canonicalPath(expanded)
+	// canonicalExistingPath rather than canonicalPath, so that a rule naming a
+	// directory the user has not made yet still resolves the symlinks above it.
+	// Both sides of every comparison have to be resolved the same way or the two
+	// spellings never meet, and a rule is written before the tree is filled at
+	// least as often as after. Unsettleable means the rule names no directory in
+	// particular, the same as the two cases below.
+	path, ok := canonicalExistingPath(expanded)
+	if !ok {
+		warnTrustRuleIgnored(entry, "it is reached through symlinks wt cannot follow to an end, so wt cannot tell which directory it names")
+		return ""
+	}
 	// filepath.Dir is its own fixed point exactly at a root — "/" on POSIX,
 	// `C:\` or a UNC share root on Windows. Unreachable through a variable now,
 	// but a rule can still say "/" outright.

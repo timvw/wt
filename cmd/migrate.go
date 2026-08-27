@@ -569,7 +569,11 @@ func resolvePrimaryCheckoutTarget(info repoInfo) string {
 // might be covered is worth a skip, a source that only might be covered is not
 // worth waiving one. See samePath.
 func migrateTrustGain(from, to string) (string, error) {
-	if trustWhitelistCovers(to) && !trustWhitelistAllows(from) {
+	covered, ok := trustWhitelistCovers(to)
+	if !ok {
+		return cannotTellReason(to), nil
+	}
+	if covered && !trustWhitelistAllows(from) {
 		return fmt.Sprintf(
 			"%s is covered by a [trust] rule, so moving it there would run its hooks unasked — "+
 				"and that path comes from the origin URL, not from you. Move it yourself if you meant to",

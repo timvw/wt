@@ -362,9 +362,40 @@ func TestTrustWhitelistCoversIsLooseAndTrustWhitelistAllowsIsNot(t *testing.T) {
 		t.Errorf("trustWhitelistAllows(%s) = true; the grant must not fold, or one rule would cover "+
 			"every directory whose name differs from it only by case", spelledDifferently)
 	}
-	if !trustWhitelistCovers(spelledDifferently) {
+	if covered, _ := trustWhitelistCovers(spelledDifferently); !covered {
 		t.Errorf("trustWhitelistCovers(%s) = false; a destination that may turn out to be the "+
 			"whitelisted directory would be moved into it unasked", spelledDifferently)
+	}
+}
+
+// TestTrustWhitelistCoversResolvesSymlinksAboveAPathThatIsNotThereYet: rules are
+// canonicalised and the destination is not there to be, so a symlink anywhere
+// above it leaves the two spellings comparing equal to nothing. Nobody has to
+// plant the symlink: a ~/src on another volume is an ordinary way to keep one.
+func TestTrustWhitelistCoversResolvesSymlinksAboveAPathThatIsNotThereYet(t *testing.T) {
+	base := t.TempDir()
+	physical := filepath.Join(base, "volume", "src", "mine")
+	if err := os.MkdirAll(physical, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// ~/src, as the user spells it, reaching the tree the rule was written for.
+	link := filepath.Join(base, "src")
+	if err := os.Symlink(filepath.Join(base, "volume", "src"), link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	savedPrefix, savedExact := trustPrefixes, trustExact
+	trustPrefixes, trustExact = []string{physical}, nil
+	t.Cleanup(func() { trustPrefixes, trustExact = savedPrefix, savedExact })
+
+	through := filepath.Join(link, "mine", "tool")
+	covered, ok := trustWhitelistCovers(through)
+	if !ok {
+		t.Fatalf("trustWhitelistCovers(%s) could not settle a path one symlink deep", through)
+	}
+	if !covered {
+		t.Errorf("trustWhitelistCovers(%s) = false, but it names a directory inside the whitelisted "+
+			"%s; wt migrate would move a repository there and run its hooks unasked", through, physical)
 	}
 }
 
