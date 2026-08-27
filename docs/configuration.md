@@ -22,13 +22,20 @@ says so and does not read it as your config file. A relative `WT_CONFIG` is the
 way to arrive here — set once, it names a different file in every repository you
 enter, and the repository decides what that file contains. The name is not the
 point: `WT_CONFIG=wt-user.toml` is as easy for a repository to commit as
-`.wt.toml`. A config file kept in a dotfiles repository and symlinked into
-`~/.config/wt` keeps working, including while you are inside that repository.
-[`hooks_policy`](#requiring-approval-for-every-hook) and
+`.wt.toml`. [`hooks_policy`](#requiring-approval-for-every-hook) and
 [`[trust]`](#trusting-paths-ahead-of-time) are honoured from your config file
 because it is yours, so a repository read as your config file could exempt itself
 from hook approval. Its settings still apply as a repository's, and its hooks
 still need `wt trust`.
+
+The path is judged as written, not as it resolves. A config file kept in a
+dotfiles repository and symlinked into `~/.config/wt` keeps working, including
+while you are standing in that repository — refusing it there would take your
+`root` and `pattern` with it and put the worktree somewhere else, and that file
+is already your config in every other repository anyway. The one symlink `wt`
+does refuse is one whose target is the current repository's own `.wt.toml`: that
+file has a repository-side job, and reading it as your config as well would give
+it the wider scope, where one approval covers every repository at once.
 
 **Example config file** (`~/.config/wt/config.toml`):
 

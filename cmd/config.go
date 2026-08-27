@@ -780,7 +780,19 @@ func loadWorktreeConfig() {
 		warnRepoConfigIsNotYourConfig(configFilePath)
 
 	// And the same file reached from outside the repository — a config symlinked
-	// to a checked-in .wt.toml — which no comparison of names would catch.
+	// to a checked-in .wt.toml — which no comparison of names would catch. This
+	// one is about scope rather than about an attacker: .wt.toml is the file a
+	// repository configures wt with by convention, so reading it as your config
+	// too would hand a repo-owned file the user-config scope, where an approval
+	// covers every repository at once and hooks_policy is honoured.
+	//
+	// Deliberately only .wt.toml, and deliberately not every file a symlink might
+	// resolve into. A config kept in a dotfiles repository and symlinked into
+	// ~/.config/wt is the ordinary setup: refusing it while you stand in that
+	// repository would take your root and pattern with it and put the worktree
+	// somewhere else. Nothing is given away by allowing it, either — that file is
+	// your config in every other repository already, so a commit that turns it
+	// hostile has you regardless of what wt does inside the one it lives in.
 	case repoConfigPath != "" && sameFile(configFilePath, repoConfigPath):
 		warnRepoConfigIsNotYourConfig(configFilePath)
 

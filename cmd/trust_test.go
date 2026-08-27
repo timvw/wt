@@ -1370,6 +1370,55 @@ exact = ["`+filepath.ToSlash(repoDir)+`"]
 	}
 }
 
+// TestDotfilesConfigAppliesInsideItsOwnRepo pins the other side of that line.
+//
+// Keeping your config in a dotfiles repository and symlinking it into
+// ~/.config/wt is the ordinary setup, and standing in that repository must not
+// make your own settings evaporate — root and pattern would go with them and the
+// worktree would land somewhere else. The path is judged as written, so this
+// keeps working; only a symlink whose target is the repository's own .wt.toml is
+// refused, because that file has a repository-side job and would be gaining the
+// wider scope.
+//
+// Nothing is conceded by allowing it: that file is already your config in every
+// other repository, so a commit that turns it hostile does not need wt to be
+// standing anywhere in particular.
+func TestDotfilesConfigAppliesInsideItsOwnRepo(t *testing.T) {
+	savedFlag, savedFn := configFlag, gitRepoRootFn
+	savedRoot, savedSources := worktreeRoot, configSources
+	t.Cleanup(func() {
+		configFlag, gitRepoRootFn = savedFlag, savedFn
+		worktreeRoot, configSources = savedRoot, savedSources
+		loadWorktreeConfig()
+	})
+
+	dotfiles := t.TempDir()
+	inRepo := filepath.Join(dotfiles, "wt", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(inRepo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inRepo, []byte(
+		"root = \""+filepath.ToSlash(filepath.Join(dotfiles, "wts"))+"\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.Symlink(inRepo, linked); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	gitRepoRootFn = func() (string, error) { return dotfiles, nil }
+	configFlag = ""
+	t.Setenv("WT_CONFIG", linked)
+	loadWorktreeConfig()
+
+	if !configFileFound {
+		t.Fatal("a config symlinked into a dotfiles repo stopped being read while standing in it")
+	}
+	if want := filepath.Join(dotfiles, "wts"); worktreeRoot != want {
+		t.Errorf("worktreeRoot = %q, want %q — the worktree would be created somewhere else", worktreeRoot, want)
+	}
+}
+
 // TestNewerTrustStoreIsNotOverwritten: an unrecognised version is only safe to
 // read as "nothing approved" when it is older. A newer store means another wt
 // wrote it, and treating it as empty would delete its approvals on the next
