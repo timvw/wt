@@ -995,7 +995,7 @@ func TestAProcessRelativeHomeIsNotAConfigDir(t *testing.T) {
 }
 
 // TestATrustRuleAnchoredOnAProcessRelativeHomeNamesNothing: the same home, one
-// layer down. A "~/trees/*" whitelist entry is meant to name the user's own
+// layer down. A "~/trees" whitelist entry is meant to name the user's own
 // trees; under this home it names the repository. Reachable even with configDir
 // refusing that home, because --config and WT_CONFIG name the file directly.
 func TestATrustRuleAnchoredOnAProcessRelativeHomeNamesNothing(t *testing.T) {
@@ -1003,8 +1003,8 @@ func TestATrustRuleAnchoredOnAProcessRelativeHomeNamesNothing(t *testing.T) {
 	t.Setenv("HOME", procHome)
 	t.Setenv("USERPROFILE", procHome)
 
-	if got := expandTilde("~/trees/*"); got != "" {
-		t.Errorf("expandTilde(\"~/trees/*\") = %q, want \"\": a whitelist rule that resolves against "+
+	if got := expandTilde("~/trees"); got != "" {
+		t.Errorf("expandTilde(\"~/trees\") = %q, want \"\": a whitelist rule that resolves against "+
 			"the working directory whitelists whatever is checked out there", got)
 	}
 }
