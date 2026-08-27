@@ -453,6 +453,70 @@ func TestMigrateWillNotMoveARepositoryOntoAStaleApproval(t *testing.T) {
 	}
 }
 
+// TestMigrateComparesApprovalsByCommandNotByOccupancy: asking only whether the
+// current path has *an* approval lets one launder another. A repository the user
+// once approved holds a record for the commands it had then; changing them
+// re-prompts where it stands, which is right — but if the destination already
+// answers to the new commands, "both paths have an approval" would wave the move
+// through and the new commands would run there unasked.
+func TestMigrateComparesApprovalsByCommandNotByOccupancy(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping migrate integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	homeDir := filepath.Join(tmpDir, "home")
+	worktreeRoot := filepath.Join(homeDir, "dev", "worktrees")
+	const benign = "[hooks]\npost_create = [\"echo benign\"]\n"
+	const payload = "[hooks]\npost_create = [\"echo owned\"]\n"
+
+	// The repository that used to sit at the derived path, approved for the
+	// payload commands and then deleted.
+	oldPath := filepath.Join(homeDir, "src", "acme", "tool")
+	if err := os.MkdirAll(oldPath, 0o755); err != nil {
+		t.Fatalf("Failed to create the original checkout: %v", err)
+	}
+	setupTestRepo(t, oldPath)
+	if err := os.WriteFile(filepath.Join(oldPath, ".wt.toml"), []byte(payload), 0o644); err != nil {
+		t.Fatalf("Failed to write .wt.toml: %v", err)
+	}
+	runWtIn(t, tmpDir, oldPath, homeDir, worktreeRoot, "trust")
+	if err := os.RemoveAll(oldPath); err != nil {
+		t.Fatalf("Failed to remove the original checkout: %v", err)
+	}
+
+	// A different repository, approved where it stands for something benign, and
+	// then changed to the commands the destination already answers to.
+	primaryPath := filepath.Join(worktreeRoot, "tool")
+	if err := os.MkdirAll(primaryPath, 0o755); err != nil {
+		t.Fatalf("Failed to create primary checkout path: %v", err)
+	}
+	setupTestRepo(t, primaryPath)
+	repoConfig := filepath.Join(primaryPath, ".wt.toml")
+	if err := os.WriteFile(repoConfig, []byte(benign), 0o644); err != nil {
+		t.Fatalf("Failed to write .wt.toml: %v", err)
+	}
+	runGitCommand(t, primaryPath, "remote", "add", "origin", "https://evil.example/acme/tool.git")
+	runWtIn(t, tmpDir, primaryPath, homeDir, worktreeRoot, "trust")
+	if err := os.WriteFile(repoConfig, []byte(payload), 0o644); err != nil {
+		t.Fatalf("Failed to swap .wt.toml: %v", err)
+	}
+
+	store, err := os.ReadFile(filepath.Join(homeDir, ".config", "wt", "trust.toml"))
+	if err != nil || strings.Count(string(store), "[[trusted]]") != 2 {
+		t.Fatalf("test setup: expected an approval for each path (err = %v)\n%s", err, store)
+	}
+
+	out := runMigrate(t, tmpDir, primaryPath, homeDir, worktreeRoot)
+
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("primary checkout was moved onto the stale approval at %s (stat err = %v)\nOutput: %s", oldPath, err, out)
+	}
+	if !strings.Contains(out, "still carries a hook approval") {
+		t.Errorf("migrate did not say why it declined:\n%s", out)
+	}
+}
+
 // TestMigrateRechecksTheDestinationAtMoveTime covers the gap between drawing the
 // plan and carrying it out.
 //

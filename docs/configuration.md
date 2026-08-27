@@ -974,7 +974,10 @@ deleted, so `~/src/acme/tool` can still carry the approval you gave the
 `acme/tool` you used to have. A repository named to land there, shipping a
 command you were likely to have approved somewhere — `make setup` — would arrive
 pre-approved. `wt migrate` declines that move too, and says which path to run
-`wt untrust` in.
+`wt untrust` in. Compared as command sets, not as "is anything approved here":
+a repository you approved once holds a record for the commands it had then, and
+asking only whether its current path has *an* approval would let that one wave
+through a move onto a different set waiting at the destination.
 
 ### Requiring approval for every hook
 

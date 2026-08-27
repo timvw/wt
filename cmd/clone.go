@@ -59,6 +59,22 @@ func runClone(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Checked on both routes into target. repoPlacementPath already refuses a
+	// *pattern* that renders here and offers an explicit destination as the way
+	// out — but the way out is a different path, not permission to name this one.
+	// What lands in wt's config directory becomes wt's config file and approval
+	// store: a committed trust.toml is a set of approvals the user never gave,
+	// and it would cover every repository on the machine. Typing the path rather
+	// than rendering it does not change what the repository would be supplying.
+	if owned := wtStateAtPath(target); owned != "" {
+		return fmt.Errorf(
+			"this clone would land at %s, which is %s.\n"+
+				"The files cloned there would become wt's own config file and approval store,\n"+
+				"which is what decides whether any repository's hooks run.\n"+
+				"Clone it somewhere else — a config file symlinked from there still applies",
+			target, owned)
+	}
+
 	if nonEmpty, err := dirExistsNonEmpty(target); err != nil {
 		return err
 	} else if nonEmpty {

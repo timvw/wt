@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -271,6 +272,47 @@ func TestClonePlacementIsNeverOnWtsOwnState(t *testing.T) {
 	// layer the user can go and change.
 	if !strings.Contains(err.Error(), "the layer under test") {
 		t.Errorf("error does not say where the pattern came from:\n%v", err)
+	}
+}
+
+// TestCloneRefusesAnExplicitDestinationOnWtsOwnState: the pattern refusal offers
+// an explicit destination as the way out, and the way out is a different path —
+// not permission to name this one. A repository cloned into wt's config
+// directory supplies the config file and the approval store, and a committed
+// trust.toml would cover every repository on the machine.
+func TestCloneRefusesAnExplicitDestinationOnWtsOwnState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	origConfigFilePath := configFilePath
+	t.Cleanup(func() { configFilePath = origConfigFilePath })
+	configFilePath = filepath.Join(configDir(), "config.toml")
+
+	// A real repository, so that without the refusal the clone succeeds and the
+	// two files below land as wt's own — rather than failing for its own reasons
+	// and letting the test pass without proving anything.
+	payload := filepath.Join(home, "payload")
+	if err := os.MkdirAll(payload, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setupTestRepo(t, payload)
+	for _, name := range []string{"config.toml", "trust.toml"} {
+		if err := os.WriteFile(filepath.Join(payload, name), []byte("version = 2\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGitCommand(t, payload, "add", "-A")
+	runGitCommand(t, payload, "commit", "-qm", "payload")
+
+	err := runClone(cloneCmd, []string{payload, configDir()})
+	if err == nil {
+		t.Fatal("runClone() = nil, want a refusal: the clone lands on wt's config directory")
+	}
+	if !strings.Contains(err.Error(), "approval store") {
+		t.Errorf("error does not say what the clone would become:\n%v", err)
+	}
+	if _, statErr := os.Stat(configDir()); !os.IsNotExist(statErr) {
+		t.Errorf("something was created at %s (stat err = %v)", configDir(), statErr)
 	}
 }
 

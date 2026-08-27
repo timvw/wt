@@ -575,36 +575,64 @@ func migrateTrustGain(from, to string) (string, error) {
 		// than being read as "nothing is".
 		return "", err
 	}
-	if approvalWaitingAt(store, to) && !approvalWaitingAt(store, from) {
-		return fmt.Sprintf(
-			"%s still carries a hook approval from a repository that used to be there, so moving it there "+
-				"would run this repository's hooks unasked if the commands match — and that path comes from "+
-				"the origin URL, not from you. Run 'wt untrust' there first, or move it yourself if you meant to",
-			to), nil
+	// Compared as sets of command hashes rather than as "is anything approved
+	// here". A path can hold several approvals — worktrees of one repository sit
+	// on branches whose .wt.toml differ, and each is kept — and asking only
+	// whether the source has one lets an approval the user gave to an earlier
+	// version of these hooks stand in for a different set waiting at the
+	// destination. What counts is a set the destination answers to and the
+	// current path does not.
+	waiting, ok := approvedHashesAt(store, to)
+	if !ok {
+		return cannotTellReason(to), nil
+	}
+	held, ok := approvedHashesAt(store, from)
+	if !ok {
+		return cannotTellReason(from), nil
+	}
+	for sha := range waiting {
+		if !held[sha] {
+			return fmt.Sprintf(
+				"%s still carries a hook approval from a repository that used to be there, so moving it "+
+					"there would run this repository's hooks unasked if the commands match — and that path "+
+					"comes from the origin URL, not from you. Run 'wt untrust' there first, or move it "+
+					"yourself if you meant to",
+				to), nil
+		}
 	}
 	return "", nil
 }
 
-// approvalWaitingAt reports whether the store holds an approval that a primary
-// checkout at path would answer to, whether or not anything is there now.
-func approvalWaitingAt(store trustStore, path string) bool {
+// cannotTellReason is the skip for a path wt could not settle. Not knowing what
+// a path names is not the same as knowing nothing is approved at it.
+func cannotTellReason(path string) string {
+	return fmt.Sprintf(
+		"%s is reached through symlinks wt cannot follow to an end, so it cannot tell which approvals "+
+			"already cover it. Move it yourself if you meant to",
+		path)
+}
+
+// approvedHashesAt returns the command sets a primary checkout at path would
+// already be approved for, whether or not anything is there now. The second
+// result is false when wt could not settle what the path names, which is not the
+// same answer as an empty set.
+func approvedHashesAt(store trustStore, path string) (map[string]bool, bool) {
 	want, ok := canonicalExistingPath(filepath.Join(path, ".git"))
 	if !ok {
-		// An unresolved path compares equal to nothing, which here would be the
-		// guard passing rather than holding.
-		return true
+		return nil, false
 	}
+	found := map[string]bool{}
 	for _, rec := range store.Trusted {
 		if rec.Scope == "" || rec.Scope == trustScopeUser {
 			continue
 		}
-		// A record wt cannot resolve is not evidence about this destination —
-		// and it is the attacker who needs a record to match, never to hide.
+		// A record wt cannot resolve is not evidence about this path — and it is
+		// the attacker who needs a record to match, never to hide.
 		if got, ok := canonicalExistingPath(rec.Scope); ok && got == want {
-			return true
+			found[rec.SHA256] = true
 		}
 	}
-	return false
+	return found, true
 }
 
 // refuseMoveOntoWtState asks what a destination is at the moment of the move,
