@@ -1075,14 +1075,23 @@ func TestTrustRulesAreLiteralPaths(t *testing.T) {
 		}
 	}
 
-	// A trailing space is legal in a directory name, so a rule carrying one names
-	// a directory that does not exist here. Trimming it would widen the rule to
-	// one that does, and that holds every repository below it. Not reported,
-	// unlike the entries above: this is a well-formed rule that matches nothing,
-	// which is also what a rule for a tree you have not cloned yet looks like.
-	trustPrefixes, trustExact = []string{root + " "}, nil
-	if trustWhitelistAllows(repoKey) {
-		t.Errorf("prefix = [%q] was trimmed and matched %s", root+" ", repo)
+	// On Unix a trailing space is part of a directory's name, so a rule carrying
+	// one names a directory that does not exist here. Trimming it would widen the
+	// rule to one that does, and that holds every repository below it. Not
+	// reported, unlike the entries above: this is a well-formed rule that matches
+	// nothing, which is also what a rule for a tree you have not cloned yet looks
+	// like.
+	//
+	// Windows is excluded rather than asserted the other way: Win32 strips
+	// trailing spaces from a path component, so the rule resolves to the same
+	// single directory it would have without one, and there is no narrower
+	// directory it could have meant. wt is not doing the trimming, and asserting
+	// that it lands on `root` would be a test of Win32, not of wt.
+	if runtime.GOOS != "windows" {
+		trustPrefixes, trustExact = []string{root + " "}, nil
+		if trustWhitelistAllows(repoKey) {
+			t.Errorf("prefix = [%q] was trimmed and matched %s", root+" ", repo)
+		}
 	}
 
 	// Written out, the rule works — this rejects rules that name nothing, not

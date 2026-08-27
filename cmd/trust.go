@@ -545,10 +545,15 @@ func trustWhitelistTarget(repoKey string) string {
 //     not worth being able to express in one character.
 func normaliseTrustPath(entry string) string {
 	// Whitespace-only entries are the blank line someone left in the list, not a
-	// directory. Everything else is used exactly as written: a trailing space is
-	// legal in a directory name on every filesystem wt runs on, and trimming
-	// "/srv/team " to "/srv/team" would hand the rule a different, wider tree
-	// than the one it names.
+	// directory. Everything else is used exactly as written: on Unix a trailing
+	// space is part of a directory's name, and trimming "/srv/team " to
+	// "/srv/team" would hand the rule a wider tree than the one it names.
+	//
+	// Windows reaches "/srv/team" anyway, because Win32 strips trailing spaces
+	// from a path component, so no directory there can be named "team ". That is
+	// the same deal as case-insensitivity: the rule still covers exactly the one
+	// directory its path names on that machine — wt just does not decide which
+	// that is.
 	if strings.TrimSpace(entry) == "" {
 		return ""
 	}

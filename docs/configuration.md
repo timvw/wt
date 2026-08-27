@@ -881,8 +881,11 @@ are relative ones — a rule has to name one directory, not a different one
 depending on where you ran `wt` from. Nothing else is adjusted either: an entry
 that is only whitespace is skipped as the blank line it is, but a trailing space
 inside a rule is part of the directory's name, since trimming `/srv/team ` to
-`/srv/team` would hand it a wider tree than it names. `wt trust --list` shows
-each rule next to what it resolves to, or marks it ignored.
+`/srv/team` would hand it a wider tree than it names. On Windows the rule reaches
+`C:\srv\team` regardless, because Windows itself strips trailing spaces from a
+path component — as with case-insensitivity there, a rule covers the one
+directory its path names on that machine. `wt trust --list` shows each rule next
+to what it resolves to, or marks it ignored.
 
 ### Requiring approval for every hook
 
