@@ -863,9 +863,10 @@ not, and a rule containing `$` or `%` is ignored and reported. This is the one
 place wt refuses to expand them, because an expansion that fails shortens a rule
 instead of failing it: an unset `SRC` turns `$SRC/repos` into `/repos`, and
 `$SRC/Users` into `/Users` — an existing directory holding every repository on
-the machine. Rules naming a filesystem root are rejected for the same reason.
-`wt trust --list` shows each rule next to what it resolves to, or marks it
-ignored.
+the machine. Rules naming a filesystem root are rejected for the same reason, as
+are relative ones — a rule has to name one directory, not a different one
+depending on where you ran `wt` from. `wt trust --list` shows each rule next to
+what it resolves to, or marks it ignored.
 
 ### Requiring approval for every hook
 

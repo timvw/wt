@@ -559,6 +559,18 @@ func normaliseTrustPath(entry string) string {
 	}
 	expanded := strings.TrimSpace(expandTilde(trimmed))
 	if expanded == "" {
+		warnTrustRuleIgnored(entry, "it starts with ~ and there is no home directory to resolve that against")
+		return ""
+	}
+	// canonicalPath resolves symlinks; it does not make a path absolute, and
+	// nothing downstream does either — a rule is compared against a repository's
+	// absolute .git path, so a relative one silently never matches while
+	// 'wt trust --list' shows it as resolving fine. Say it names nothing instead.
+	// Making it absolute would be worse than useless: it would resolve against
+	// whatever directory wt happened to be run from, so the same rule would cover
+	// a different tree each time.
+	if !filepath.IsAbs(expanded) {
+		warnTrustRuleIgnored(entry, "it is not an absolute path, and a rule has to name one directory rather than a different one per working directory")
 		return ""
 	}
 	path := canonicalPath(expanded)

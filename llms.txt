@@ -65,7 +65,7 @@ Configuration and hooks
 - The store path is always absolute: a non-absolute XDG_CONFIG_HOME (or APPDATA on Windows) is ignored with a warning per the XDG spec, so trust.toml can never land inside the repo being gated
 - If no absolute config dir can be found at all — none of XDG_CONFIG_HOME, APPDATA, HOME — wt records nothing and treats every hook as unapproved; set one, or use WT_HOOKS_APPROVE_ALL=1 for automation you control
 - [trust] whitelist (config file only): prefix = ["~/src/mine"], exact = ["~/src/acme/api"] — matching repos run hooks unasked and unrecorded; prefix matches whole path segments
-- [trust] rules are literal paths: "~" expands, environment variables do not, and a rule containing "$" or "%" is ignored and reported ("$SRC/Users" would collapse to "/Users"). Rules naming a filesystem root are rejected too
+- [trust] rules are literal paths: "~" expands, environment variables do not, and a rule containing "$" or "%" is ignored and reported ("$SRC/Users" would collapse to "/Users"). Rules that are relative, or name a filesystem root, are rejected too
 - hooks_policy (config file or WT_HOOKS_POLICY): prompt-untrusted (default), prompt-all, trusted-only, off
 - prompt-all re-confirms even approved and whitelisted hooks; trusted-only never prompts and is the CI choice
 - hooks_policy is never read from a repo-level .wt.toml; WT_HOOKS_APPROVE_ALL=1 approves everything (automation only)

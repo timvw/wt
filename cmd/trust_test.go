@@ -1048,16 +1048,30 @@ func TestTrustRulesAreLiteralPaths(t *testing.T) {
 		"${}" + root,                    // malformed, and silently eaten
 		"%" + name + "%",                // %VAR%, which expands recursively on Windows
 		string(filepath.Separator),      // no variable needed to name the root
+		filepath.Base(repo),             // relative: matches nothing, whatever the cwd
+		".",
 	} {
-		trustRuleWarnings.Delete(entry)
+		for _, check := range []struct {
+			kind string
+			set  func()
+		}{
+			{"prefix", func() { trustPrefixes, trustExact = []string{entry}, nil }},
+			{"exact", func() { trustPrefixes, trustExact = nil, []string{entry} }},
+		} {
+			// Cleared per check, not per entry: the notice is recorded once per
+			// rule per process, so a prefix check that reported would otherwise
+			// stand in for an exact check that never did.
+			trustRuleWarnings.Delete(entry)
+			check.set()
 
-		trustPrefixes, trustExact = []string{entry}, nil
-		if trustWhitelistAllows(repoKey) {
-			t.Errorf("prefix = [%q] whitelisted %s", entry, repo)
-		}
-		trustPrefixes, trustExact = nil, []string{entry}
-		if trustWhitelistAllows(repoKey) {
-			t.Errorf("exact = [%q] whitelisted %s", entry, repo)
+			if trustWhitelistAllows(repoKey) {
+				t.Errorf("%s = [%q] whitelisted %s", check.kind, entry, repo)
+			}
+			// Ignoring a rule silently is its own bug: the user wrote it to have
+			// an effect and would have no way to find out it has none.
+			if _, reported := trustRuleWarnings.Load(entry); !reported {
+				t.Errorf("%s = [%q] was ignored without saying so", check.kind, entry)
+			}
 		}
 	}
 
