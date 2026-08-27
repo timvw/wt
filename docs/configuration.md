@@ -946,6 +946,20 @@ path component — as with case-insensitivity there, a rule covers the one
 directory its path names on that machine. `wt trust --list` shows each rule next
 to what it resolves to, or marks it ignored.
 
+A rule is matched against the repository a working tree belongs to, and only
+when git confirmed which repository that is. `wt` asks git to list the
+repository's registered worktrees and looks for the one it is standing in; if it
+is not there, the approval is pinned to the directory's own path instead — still
+a working key, but not one a rule may act on. A rule is a statement about
+repositories kept in a tree, whereas an unconfirmed identity is only a statement
+about where a directory sits, and every directory under a whitelisted tree sits
+there. That lookup reads `git worktree list --porcelain -z`: a worktree path may
+contain a newline, which the line-based format prints raw, so one entry arrives
+as two lines and neither of them is the path — a repository could pick such a
+path for its own worktree and be unfindable on purpose. `-z` needs git 2.36;
+older git gets the line-based read, and anything it cannot confirm simply does
+not reach a rule.
+
 A rule covers a tree you fill yourself, so `wt migrate` will not move a
 repository into one. The primary checkout's destination is `~/src/{owner}/{name}`
 read off the origin URL, and the host is not part of it — a clone of

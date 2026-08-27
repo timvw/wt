@@ -113,6 +113,11 @@ var configRepoFound bool
 // is reliably available.
 var configRepoKey string
 
+// configRepoVerified records whether git confirmed that this working tree is a
+// worktree of the repository configRepoKey names, resolved alongside it. Only a
+// confirmed identity may be matched against a [trust] rule: see repoIdentity.
+var configRepoVerified bool
+
 // configSources tracks the origin of each resolved value.
 var configSources configSource
 
@@ -911,6 +916,7 @@ func loadWorktreeConfig() {
 	configRepoPath = ""
 	configRepoFound = false
 	configRepoKey = ""
+	configRepoVerified = false
 
 	if repoRootErr == nil {
 		configRepoPath = repoConfigPath
@@ -920,8 +926,8 @@ func loadWorktreeConfig() {
 		// check one file's contents while running another file's commands.
 		if data, err := os.ReadFile(repoConfigPath); err == nil {
 			configRepoFound = true
-			if key, err := repoTrustKeyFn(); err == nil {
-				configRepoKey = key
+			if id, err := repoTrustKeyFn(); err == nil {
+				configRepoKey, configRepoVerified = id.key, id.verified
 			}
 			var repoCfg Config
 			if md, err := toml.Decode(string(data), &repoCfg); err == nil {

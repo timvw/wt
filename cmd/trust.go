@@ -300,20 +300,36 @@ var repoTrustKeyFn = defaultRepoTrustKey
 // registers this worktree against that common dir. When it does not, the key
 // falls back to the working tree's own path: trust still works, it just cannot
 // be inherited from somewhere else.
-func defaultRepoTrustKey() (string, error) {
+func defaultRepoTrustKey() (repoIdentity, error) {
 	top, err := gitToplevel()
 	if err != nil {
-		return "", err
+		return repoIdentity{}, err
 	}
 
 	commonDir, err := gitCommonDir()
 	if err != nil || commonDir == "" {
-		return top, nil
+		return repoIdentity{key: top}, nil
 	}
 	if !worktreeRegistered(commonDir, top) {
-		return top, nil
+		return repoIdentity{key: top}, nil
 	}
-	return commonDir, nil
+	return repoIdentity{key: commonDir, verified: true}, nil
+}
+
+// repoIdentity is the repository an approval is pinned to, and whether git
+// confirmed which repository that is.
+type repoIdentity struct {
+	key string
+
+	// verified is true when git listed this working tree among the worktrees of
+	// the repository its .git names. False is not an error — the key is still
+	// the right thing to pin an approval to, and the prompt still works — but it
+	// is not something a [trust] rule may act on. A rule says "repositories I
+	// keep in this tree are mine", which is a claim about where a repository
+	// sits; an unconfirmed identity IS just where a directory sits, so matching
+	// one against the other would let any directory under the tree answer for a
+	// repository somewhere else.
+	verified bool
 }
 
 // gitToplevel returns the absolute path of the current working tree's root.
@@ -361,9 +377,27 @@ func gitCommonDir() (string, error) {
 // repository owning commonDir. A hand-written `.git` file pointing at someone
 // else's repository does not appear in that list; a real main or linked worktree
 // does.
+// Read with -z, because a worktree path is allowed to contain a newline and the
+// line-based format has no way to say so — git prints it raw, splitting one
+// entry across two lines so that neither is the path. A repository choosing such
+// a path for its own worktree would look unregistered, and an unregistered
+// worktree is identified by where it sits rather than by the repository it
+// belongs to. -z arrived in git 2.36; older git gets the line-based read, which
+// is why the caller does not let an unconfirmed identity match a [trust] rule.
 func worktreeRegistered(commonDir, top string) bool {
-	cmd := exec.Command("git", "--git-dir", commonDir, "worktree", "list", "--porcelain")
-	out, err := cmd.Output()
+	args := []string{"--git-dir", commonDir, "worktree", "list", "--porcelain", "-z"}
+	if out, err := exec.Command("git", args...).Output(); err == nil {
+		for _, field := range strings.Split(string(out), "\x00") {
+			// No trimming: with -z the field is exact, and leading or trailing
+			// whitespace is as much a part of a directory name as any letter.
+			if path, ok := strings.CutPrefix(field, "worktree "); ok && canonicalPath(path) == top {
+				return true
+			}
+		}
+		return false
+	}
+
+	out, err := exec.Command("git", args[:len(args)-1]...).Output()
 	if err != nil {
 		return false
 	}
@@ -411,6 +445,10 @@ func describeHookSource(source string) string {
 func hookSetTrust(source string) (hookTrust, error) {
 	t := hookTrust{source: source}
 
+	// Whether git confirmed which repository t.scope names. Only a confirmed
+	// identity may be matched against a [trust] rule: see repoIdentity.
+	verified := false
+
 	switch source {
 	case hookSourceConfigFile:
 		// One scope for the machine: the user's config file is not tied to any
@@ -426,12 +464,13 @@ func hookSetTrust(source string) (hookTrust, error) {
 		// The identity resolved at config load. Falling back to resolving it now
 		// covers callers that set the path globals directly, but the cached value
 		// is the one to prefer: see configRepoKey.
-		t.scope = configRepoKey
+		t.scope, verified = configRepoKey, configRepoVerified
 		if t.scope == "" {
-			var err error
-			if t.scope, err = repoTrustKeyFn(); err != nil {
+			id, err := repoTrustKeyFn()
+			if err != nil {
 				return hookTrust{}, err
 			}
+			t.scope, verified = id.key, id.verified
 		}
 	default:
 		// A source this switch has not been taught about gets no scope, so
@@ -450,7 +489,7 @@ func hookSetTrust(source string) (hookTrust, error) {
 	// Consulted before the store is opened, so a whitelisted tree keeps working
 	// when the store is unreadable: an escape hatch that depends on the
 	// machinery it bypasses is not one.
-	if t.scope != trustScopeUser && trustWhitelistAllows(t.scope) {
+	if t.scope != trustScopeUser && verified && trustWhitelistAllows(t.scope) {
 		t.trusted, t.whitelisted = true, true
 		return t, nil
 	}
@@ -782,12 +821,14 @@ func runTrust(cmd *cobra.Command) error {
 
 func runUntrust(cmd *cobra.Command) error {
 	scope := trustScopeUser
+	whitelisted := false
 	if !untrustGlobal {
 		repo, err := repoTrustKeyFn()
 		if err != nil {
 			return err
 		}
-		scope = repo
+		scope = repo.key
+		whitelisted = repo.verified && trustWhitelistAllows(scope)
 	}
 
 	store, err := loadTrustStore()
@@ -807,7 +848,7 @@ func runUntrust(cmd *cobra.Command) error {
 		return emitJSONSuccess(cmd, map[string]any{
 			"scope":             scope,
 			"removed":           removed,
-			"still_whitelisted": !untrustGlobal && trustWhitelistAllows(scope),
+			"still_whitelisted": whitelisted,
 		})
 	}
 	switch {
@@ -822,7 +863,7 @@ func runUntrust(cmd *cobra.Command) error {
 	// beats letting the user believe the hooks are now gated when they are not —
 	// which is just as wrong after "nothing to revoke", where a whitelisted repo
 	// never had a record to begin with, so that branch reports it too.
-	if !untrustGlobal && trustWhitelistAllows(scope) {
+	if whitelisted {
 		fmt.Printf("  Note: %s still matches a [trust] rule in %s, so its hooks keep running.\n", trustWhitelistTarget(scope), configFilePath)
 	}
 	return nil

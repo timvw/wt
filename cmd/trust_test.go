@@ -71,12 +71,12 @@ func repoWithHooks(t *testing.T, body string) (repoDir, trustKey string) {
 	trustKey = filepath.Join(repoDir, ".git")
 
 	savedPath, savedFound := configRepoPath, configRepoFound
-	savedKey, savedKeyFn := configRepoKey, repoTrustKeyFn
+	savedKey, savedVerified, savedKeyFn := configRepoKey, configRepoVerified, repoTrustKeyFn
 	savedHooks, savedSources, savedDeclared := worktreeHooks, hookSources, declaredHooks
-	repoTrustKeyFn = func() (string, error) { return trustKey, nil }
+	repoTrustKeyFn = func() (repoIdentity, error) { return repoIdentity{key: trustKey, verified: true}, nil }
 	t.Cleanup(func() {
 		configRepoPath, configRepoFound = savedPath, savedFound
-		configRepoKey, repoTrustKeyFn = savedKey, savedKeyFn
+		configRepoKey, configRepoVerified, repoTrustKeyFn = savedKey, savedVerified, savedKeyFn
 		worktreeHooks, hookSources = savedHooks, savedSources
 		declaredHooks = savedDeclared
 	})
@@ -127,8 +127,8 @@ func writeRepoConfig(t *testing.T, repoDir, body string) {
 		setHooks(&worktreeHooks, event, cmds)
 		hookSources[event] = hookSourceRepoConfig
 	}
-	if key, err := repoTrustKeyFn(); err == nil {
-		configRepoKey = key
+	if id, err := repoTrustKeyFn(); err == nil {
+		configRepoKey, configRepoVerified = id.key, id.verified
 	}
 }
 
@@ -290,8 +290,11 @@ func TestTrustKeyRejectsClaimedCommonDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if realKey != canonicalPath(filepath.Join(realRepo, ".git")) {
-		t.Errorf("trust key for a real checkout = %q, want its common git dir", realKey)
+	if realKey.key != canonicalPath(filepath.Join(realRepo, ".git")) {
+		t.Errorf("trust key for a real checkout = %q, want its common git dir", realKey.key)
+	}
+	if !realKey.verified {
+		t.Error("a real checkout's identity was not confirmed by git")
 	}
 
 	t.Chdir(impostor)
@@ -299,11 +302,80 @@ func TestTrustKeyRejectsClaimedCommonDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if impostorKey == realKey {
+	if impostorKey.key == realKey.key {
 		t.Fatal("a .git file claiming another repository's git dir inherited its trust key")
 	}
-	if impostorKey != canonicalPath(impostor) {
-		t.Errorf("impostor trust key = %q, want its own path %q", impostorKey, canonicalPath(impostor))
+	if impostorKey.key != canonicalPath(impostor) {
+		t.Errorf("impostor trust key = %q, want its own path %q", impostorKey.key, canonicalPath(impostor))
+	}
+	if impostorKey.verified {
+		t.Error("an unregistered directory was reported as a confirmed repository identity")
+	}
+}
+
+// TestTrustKeyFindsAWorktreeWhosePathHoldsANewline: a worktree path may contain
+// a newline, and `git worktree list --porcelain` prints it raw — one entry
+// spread over two lines, neither of which is the path. A line-based scan finds
+// no match, so the working tree looks unregistered, and an unregistered working
+// tree is identified by where it sits rather than by the repository it belongs
+// to. A repository choosing such a path for its own worktree would pick its own
+// identity that way, and a directory under a whitelisted tree is one every
+// [trust] rule written for that tree already answers for.
+func TestTrustKeyFindsAWorktreeWhosePathHoldsANewline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Win32 does not allow a newline in a path")
+	}
+	repo := t.TempDir()
+	gitInit(t, repo)
+
+	linked := filepath.Join(t.TempDir(), "new\nline")
+	runGit(t, repo, "worktree", "add", "-b", "feat/newline", linked)
+
+	t.Chdir(linked)
+	id, err := defaultRepoTrustKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := canonicalPath(filepath.Join(repo, ".git")); id.key != want {
+		t.Errorf("trust key = %q, want the common git dir %q", id.key, want)
+	}
+	if !id.verified {
+		t.Error("a registered worktree whose path holds a newline was not confirmed as one")
+	}
+}
+
+// TestWhitelistNeedsAConfirmedRepositoryIdentity: a [trust] rule says
+// "repositories I keep in this tree are mine", which is a claim about
+// repositories. When git has not confirmed that this working tree belongs to the
+// repository its .git names, the key is only where a directory sits — and every
+// directory under a whitelisted tree sits there. Letting an unconfirmed identity
+// answer a rule would hand each of them the approval meant for the repositories
+// the user put there themselves.
+func TestWhitelistNeedsAConfirmedRepositoryIdentity(t *testing.T) {
+	withIsolatedTrustStore(t)
+	withPolicy(t, hookPolicyPromptUntrusted)
+	repoDir, _ := repoWithHooks(t, "[hooks]\npost_create = [\"true\"]\n")
+
+	savedPrefix, savedExact := trustPrefixes, trustExact
+	trustPrefixes = []string{repoDir}
+	trustExact = nil
+	t.Cleanup(func() { trustPrefixes, trustExact = savedPrefix, savedExact })
+
+	confirmed, err := hookSetTrust(hookSourceRepoConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !confirmed.whitelisted {
+		t.Fatal("test setup: a confirmed identity under the rule was not whitelisted")
+	}
+
+	configRepoVerified = false
+	unconfirmed, err := hookSetTrust(hookSourceRepoConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unconfirmed.whitelisted || unconfirmed.trusted {
+		t.Error("an unconfirmed repository identity was allowed to match a [trust] rule")
 	}
 }
 
@@ -327,8 +399,11 @@ func TestTrustKeyIsSharedByWorktrees(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if linkedKey != mainKey {
-		t.Errorf("linked worktree key = %q, want the main checkout's %q", linkedKey, mainKey)
+	if linkedKey.key != mainKey.key {
+		t.Errorf("linked worktree key = %q, want the main checkout's %q", linkedKey.key, mainKey.key)
+	}
+	if !linkedKey.verified || !mainKey.verified {
+		t.Error("a registered worktree's identity was not confirmed by git")
 	}
 }
 
@@ -1231,7 +1306,9 @@ func TestUntrustSaysWhenAWhitelistRuleStillApplies(t *testing.T) {
 	trustPrefixes = []string{root}
 	trustExact = nil
 	savedFn := repoTrustKeyFn
-	repoTrustKeyFn = func() (string, error) { return filepath.Join(repo, ".git"), nil }
+	repoTrustKeyFn = func() (repoIdentity, error) {
+		return repoIdentity{key: filepath.Join(repo, ".git"), verified: true}, nil
+	}
 	savedGlobal := untrustGlobal
 	untrustGlobal = false
 	t.Cleanup(func() {
@@ -1268,7 +1345,7 @@ func TestUntrustGlobalRevokesTheConfigFileApproval(t *testing.T) {
 	}
 
 	savedFn := repoTrustKeyFn
-	repoTrustKeyFn = func() (string, error) { return "/somewhere/.git", nil }
+	repoTrustKeyFn = func() (repoIdentity, error) { return repoIdentity{key: "/somewhere/.git", verified: true}, nil }
 	savedGlobal := untrustGlobal
 	t.Cleanup(func() { repoTrustKeyFn, untrustGlobal = savedFn, savedGlobal })
 
