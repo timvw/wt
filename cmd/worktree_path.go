@@ -111,16 +111,16 @@ func wtStateAtPath(path string) string {
 		{configDir(), "where wt keeps its config file and its record of approved hooks"},
 		{configFilePath, "your config file"},
 	}
-	path = canonicalExisting(path)
+	path = canonicalExistingPath(path)
 	for _, o := range owned {
 		if o.path == "" || !filepath.IsAbs(o.path) {
 			continue
 		}
-		against := canonicalExisting(o.path)
+		against := canonicalExistingPath(o.path)
 		switch {
-		case against == path:
+		case samePathTree(path, against) && foldPath(path) == foldPath(against):
 			return o.what
-		case hasPathPrefix(path, against) || hasPathPrefix(against, path):
+		case samePathTree(path, against):
 			// Named, because the containing or contained case is the one where
 			// the rendered path alone does not show what the collision is with.
 			return fmt.Sprintf("%s (%s)", o.what, o.path)
@@ -129,29 +129,32 @@ func wtStateAtPath(path string) string {
 	return ""
 }
 
-// canonicalExisting resolves the symlinks in the part of p that exists and keeps
-// the rest as written.
+// samePathTree reports whether either path contains the other, comparing without
+// regard to case.
 //
-// filepath.EvalSymlinks gives up on the whole path when the leaf is missing,
-// which is every path here: the worktree does not exist yet, and on the fresh
-// machine this guards, neither does the config directory. Comparing the two
-// unresolved would miss a ~/.config symlinked into a dotfiles repo, where the
-// pattern names the target and the file still arrives at ~/.config/wt.
-func canonicalExisting(p string) string {
-	p = filepath.Clean(p)
-	rest := ""
-	for {
-		if resolved, err := filepath.EvalSymlinks(p); err == nil {
-			return filepath.Join(resolved, rest)
-		}
-		parent := filepath.Dir(p)
-		if parent == p {
-			return filepath.Join(p, rest)
-		}
-		rest = filepath.Join(filepath.Base(p), rest)
-		p = parent
-	}
+// A byte comparison is not what the filesystem will do. macOS and Windows are
+// case-insensitive by default, so "~/.config/WT" is the very directory
+// configDir() names — a one-character edit to a pattern that walks straight past
+// an exact match and lands on trust.toml all the same. Verified: it did.
+//
+// Folded on every platform rather than on darwin and windows, and the difference
+// only ever refuses more. What gets refused is a path differing from wt's own
+// config directory in nothing but case, which no pattern wants on purpose — so
+// the cost on a case-sensitive filesystem is nil, and it covers the ones that
+// turn up anyway: a casefolded ext4 directory, a mounted exFAT volume, a
+// case-insensitive APFS volume on an otherwise case-sensitive machine.
+//
+// Case is the fold that is reachable without knowing anything about the machine.
+// A macOS volume also equates the NFC and NFD spellings of a non-ASCII name,
+// which this does not, and neither ".config" nor "wt" has one — reaching that
+// would mean naming the user's home directory outright in a spelling they do not
+// use, rather than reading it from {.env.HOME}.
+func samePathTree(a, b string) bool {
+	a, b = foldPath(a), foldPath(b)
+	return hasPathPrefix(a, b) || hasPathPrefix(b, a)
 }
+
+func foldPath(p string) string { return strings.ToLower(p) }
 
 // patternSourceLabel names the layer the worktree pattern came from, so the
 // refusal above says whose setting to go and change.

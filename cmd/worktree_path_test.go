@@ -61,6 +61,15 @@ func TestWorktreeIsNeverPlacedOnWtsOwnState(t *testing.T) {
 			name:    "a directory inside it",
 			pattern: slash(filepath.Join(cfgDir, "worktrees")),
 		},
+		{
+			// A one-character edit that walks past an exact comparison and
+			// lands on the very same directory: macOS and Windows are
+			// case-insensitive by default. Refused everywhere, since a pattern
+			// differing from wt's config directory in nothing but case is not
+			// something anyone writes on purpose.
+			name:    "the same directory in a different case",
+			pattern: slash(filepath.Join(filepath.Dir(cfgDir), strings.ToUpper(filepath.Base(cfgDir)))),
+		},
 	}
 
 	for _, tt := range refused {
@@ -133,7 +142,7 @@ func TestWorktreeIsNeverPlacedOnWtsOwnState(t *testing.T) {
 	})
 }
 
-func TestCanonicalExisting(t *testing.T) {
+func TestCanonicalExistingPath(t *testing.T) {
 	dir := t.TempDir()
 	real := filepath.Join(dir, "real")
 	if err := os.MkdirAll(real, 0o755); err != nil {
@@ -145,8 +154,9 @@ func TestCanonicalExisting(t *testing.T) {
 		// machine, the config directory is there yet. EvalSymlinks refuses the
 		// whole path for that; this must not.
 		missing := filepath.Join(real, "not", "here")
-		if got := canonicalExisting(missing); got != canonicalExisting(real)+string(filepath.Separator)+filepath.Join("not", "here") {
-			t.Errorf("canonicalExisting(%q) = %q, want the resolved parent with the missing tail kept", missing, got)
+		want := filepath.Join(canonicalExistingPath(real), "not", "here")
+		if got := canonicalExistingPath(missing); got != want {
+			t.Errorf("canonicalExistingPath(%q) = %q, want %q — the resolved parent with the missing tail kept", missing, got, want)
 		}
 	})
 
@@ -158,10 +168,18 @@ func TestCanonicalExisting(t *testing.T) {
 		if err := os.Symlink(real, link); err != nil {
 			t.Fatal(err)
 		}
-		got := canonicalExisting(filepath.Join(link, "missing"))
-		want := filepath.Join(canonicalExisting(real), "missing")
+		got := canonicalExistingPath(filepath.Join(link, "missing"))
+		want := filepath.Join(canonicalExistingPath(real), "missing")
 		if got != want {
-			t.Errorf("canonicalExisting() = %q, want %q", got, want)
+			t.Errorf("canonicalExistingPath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("makes a relative path absolute", func(t *testing.T) {
+		// isPathWithinRoot compares its two arguments against each other, so a
+		// path left relative here would answer that question wrongly.
+		if got := canonicalExistingPath("x"); !filepath.IsAbs(got) {
+			t.Errorf("canonicalExistingPath(%q) = %q, want an absolute path", "x", got)
 		}
 	})
 }

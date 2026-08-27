@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -294,4 +295,58 @@ func TestMigrateJSONOutput(t *testing.T) {
 	if payload.Data.Migrated == 0 {
 		t.Fatalf("expected migrate json migrated > 0, got %d", payload.Data.Migrated)
 	}
+}
+
+// TestMigrateRefusesAPrimaryTargetOutsideSrc pins shut the second door onto wt's
+// own state. The first is the worktree pattern (see
+// TestWorktreeIsNeverPlacedOnWtsOwnState); this one does not go through the
+// pattern at all.
+//
+// resolvePrimaryCheckoutTarget joins the owner and name parsed out of the origin
+// URL onto ~/src, and filepath.Join cleans as it joins. An origin of
+// "https://host/x/../../.config/wt.git" therefore resolves to ~/.config/wt — so
+// `wt migrate` would move the repository's committed files on top of wt's config
+// file and approval store, which is what decides whether its hooks run.
+func TestMigrateRefusesAPrimaryTargetOutsideSrc(t *testing.T) {
+	home := t.TempDir()
+
+	hostile := []struct {
+		name  string
+		owner string
+		repo  string
+	}{
+		{"owner climbs out of ~/src", "x/../../.config", "wt"},
+		{"name climbs out of ~/src", "acme", "../../.config/wt"},
+	}
+
+	for _, tt := range hostile {
+		t.Run(tt.name, func(t *testing.T) {
+			info := repoInfo{Owner: tt.owner, Name: tt.repo}
+
+			// Show the target really would land there without the guard, so
+			// this test fails loudly if the joining ever stops cleaning.
+			naive := filepath.Join(home, "src", filepath.FromSlash(tt.owner), tt.repo)
+			if want := filepath.Join(home, ".config", "wt"); naive != want {
+				t.Fatalf("fixture no longer reaches the config directory: %q, want %q", naive, want)
+			}
+
+			if got := resolvePrimaryCheckoutTarget(info); got != "" {
+				t.Errorf("resolvePrimaryCheckoutTarget() = %q, want \"\": that path is not under ~/src", got)
+			}
+		})
+	}
+
+	t.Run("an ordinary origin still resolves", func(t *testing.T) {
+		// The guard is about ".." components, not about owners with slashes in
+		// them: a nested GitLab group is an ordinary owner and must keep working.
+		t.Setenv("HOME", home)
+		if runtime.GOOS == "windows" {
+			t.Setenv("USERPROFILE", home)
+		}
+		got := resolvePrimaryCheckoutTarget(repoInfo{Owner: "group/subgroup", Name: "repo"})
+		want := filepath.Join(home, "src", "group", "subgroup", "repo")
+		if got != want {
+			t.Errorf("resolvePrimaryCheckoutTarget() = %q, want %q", got, want)
+		}
+	})
 }

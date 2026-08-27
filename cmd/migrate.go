@@ -148,6 +148,19 @@ func buildMigratePlan(entries []parsedWorktree, force bool) ([]migrateItem, erro
 		}
 
 		if wt.Main {
+			if primaryTarget == "" {
+				// Skipped rather than fatal: the other worktrees still have
+				// somewhere to go, and this one has nowhere wt is willing to
+				// name. See resolvePrimaryCheckoutTarget.
+				plan = append(plan, migrateItem{
+					Branch:  branchLabel,
+					From:    from,
+					Primary: true,
+					Action:  migrateActionSkip,
+					Reason:  "origin URL does not resolve to a path under ~/src",
+				})
+				continue
+			}
 			if !isPathWithinRoot(from, absWorktreeRoot) {
 				plan = append(plan, migrateItem{
 					Branch:  branchLabel,
@@ -170,6 +183,22 @@ func buildMigratePlan(entries []parsedWorktree, force bool) ([]migrateItem, erro
 					Reason:  "primary checkout already at target path",
 				})
 				continue
+			}
+
+			// The primary checkout's destination does not come from the pattern,
+			// so renderWorktreePath never sees it — but it is still built from
+			// the repository: resolvePrimaryCheckoutTarget joins the owner and
+			// name parsed out of the origin URL, and filepath.Join cleans, so an
+			// owner of "x/../../.config" reaches ~/.config/wt from ~/src. Moving
+			// a checkout onto wt's own state is the same hole as creating a
+			// worktree there, and gets the same answer.
+			if owned := wtStateAtPath(to); owned != "" {
+				return nil, fmt.Errorf(
+					"the primary checkout would be moved to %s, which is %s.\n"+
+						"That path comes from this repository's origin URL, and the files moved there\n"+
+						"would become wt's own config file and approval store, which is what decides\n"+
+						"whether this repository's hooks run",
+					to, owned)
 			}
 
 			state, err := detectTargetState(to)
@@ -450,14 +479,28 @@ func movePrimaryCheckout(from, to string, force bool) error {
 	return nil
 }
 
+// resolvePrimaryCheckoutTarget returns where the primary checkout belongs, or ""
+// when the origin URL does not name a path that stays under ~/src.
+//
+// Owner and Name are parsed out of the origin remote, which is a URL somebody
+// handed the user, and filepath.Join cleans as it joins: an owner of
+// "x/../../.config" with a name of "wt" resolves to ~/.config/wt rather than to
+// anything under ~/src. That is a directory whose contents decide whether this
+// repository's hooks run, and the move puts the repository's committed files
+// there. wt clone refuses the same fields for the same reason — see
+// repoPlacementPath — and migrate reads them from a repository already on disk.
 func resolvePrimaryCheckoutTarget(info repoInfo) string {
+	owner := strings.Trim(info.Owner, "/")
+	if hasDotDotSegment(owner) || hasDotDotSegment(info.Name) {
+		return ""
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return filepath.Join("src", info.Name)
 	}
 
 	srcRoot := filepath.Join(home, "src")
-	owner := strings.Trim(info.Owner, "/")
 	if owner == "" {
 		return filepath.Join(srcRoot, info.Name)
 	}
@@ -481,17 +524,33 @@ func isPathWithinRoot(path, root string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }
 
+// canonicalExistingPath resolves the symlinks in the part of path that exists
+// and keeps the rest as written.
+//
+// filepath.EvalSymlinks gives up on the whole path when any component is
+// missing, and both callers routinely hand it one that is: a migration target
+// has not been created yet, and wtStateAtPath guards a config directory that on
+// a fresh machine is not there either. Resolving nothing in that case would let
+// a ~/.config symlinked into a dotfiles repo compare unequal to the path the
+// files actually arrive at.
 func canonicalExistingPath(path string) string {
-	abs := path
 	if absolute, err := filepath.Abs(path); err == nil {
-		abs = absolute
+		path = absolute
 	}
+	path = filepath.Clean(path)
 
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		return filepath.Clean(resolved)
+	rest := ""
+	for {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return filepath.Join(path, rest)
+		}
+		rest = filepath.Join(filepath.Base(path), rest)
+		path = parent
 	}
-
-	return filepath.Clean(abs)
 }
 
 func prepareMigrateTarget(target string, force bool) error {

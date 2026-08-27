@@ -73,7 +73,8 @@ Configuration and hooks
 - A relative --config / WT_CONFIG is refused outright: it names a different file per directory, so the checkout supplies it (and "../wt-user.toml" reaches the superproject that vendored a submodule)
 - An absolute one naming a file inside the repo you are in is refused too, with a warning: read as your config it could whitelist itself via [trust]. The name need not be .wt.toml
 - Judged as written, not as resolved: a config symlinked from a dotfiles repo still applies while you stand in that repo (refusing it would move your worktrees). The one symlink refused targets the current repo's own .wt.toml, which would gain user-config scope
-- A repo's .wt.toml may set pattern, and an absolute pattern is not anchored in root — but wt refuses one landing on its own config dir, a dir containing it, or your config file: the checked-out files would BECOME config.toml and trust.toml, supplying the gate rather than passing it. Compared with the symlinks resolved as far as each path exists
+- A repo's .wt.toml may set pattern, and an absolute pattern is not anchored in root — but wt refuses one landing on its own config dir, a dir containing it, or your config file: the checked-out files would BECOME config.toml and trust.toml, supplying the gate rather than passing it. Compared with symlinks resolved as far as each path exists and case folded (~/.config/WT is the same directory on macOS/Windows)
+- wt migrate skips the primary checkout when the origin URL does not resolve under ~/src: owner/name are parsed from the remote and filepath.Join cleans, so "x/../../.config" + "wt" reaches ~/.config/wt. wt clone already refuses ".." in host/owner/name the same way
 - Non-interactive runs (scripts, CI, --format json) decline and report on stderr rather than failing the command
 
 Untracked file materialisation ([files])
