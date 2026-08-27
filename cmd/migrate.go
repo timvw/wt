@@ -201,6 +201,29 @@ func buildMigratePlan(entries []parsedWorktree, force bool) ([]migrateItem, erro
 					to, owned)
 			}
 
+			// A [trust] rule says "repositories I keep here run their hooks
+			// unasked" — a statement about a tree the user fills themselves.
+			// Where this repository would land is not their choice: the target
+			// is ~/src/{owner}/{name} built from the origin URL, and the host is
+			// not part of it, so a clone of https://evil.example/acme/pwn lands
+			// in the same ~/src/acme a rule was written for github.com/acme.
+			// Since the destination is what would carry the approval, the move
+			// is where it has to be declined.
+			if trustWhitelistAllows(to) && !trustWhitelistAllows(from) {
+				plan = append(plan, migrateItem{
+					Branch:  branchLabel,
+					From:    from,
+					To:      to,
+					Primary: true,
+					Action:  migrateActionSkip,
+					Reason: fmt.Sprintf(
+						"%s is covered by a [trust] rule, so moving it there would run its hooks unasked — "+
+							"and that path comes from the origin URL, not from you. Move it yourself if you meant to",
+						to),
+				})
+				continue
+			}
+
 			state, err := detectTargetState(to)
 			if err != nil {
 				return nil, err
@@ -378,6 +401,14 @@ func applyMigratePlan(cmd *cobra.Command, plan []migrateItem) error {
 			record(item, "skipped", item.Reason)
 		case migrateActionMove, migrateActionMoveForce:
 			force := item.Action == migrateActionMoveForce
+			if err := refuseMoveOntoWtState(item.To); err != nil {
+				if !jsonMode {
+					fmt.Printf("Failed primary checkout: %v\n", err)
+				}
+				failCount++
+				record(item, "failed", err.Error())
+				continue
+			}
 			if err := movePrimaryCheckout(item.From, item.To, force); err != nil {
 				if !jsonMode {
 					fmt.Printf("Failed primary checkout: %v\n", err)
@@ -405,6 +436,14 @@ func applyMigratePlan(cmd *cobra.Command, plan []migrateItem) error {
 			continue
 		case migrateActionMove, migrateActionMoveForce:
 			force := item.Action == migrateActionMoveForce
+			if err := refuseMoveOntoWtState(item.To); err != nil {
+				if !jsonMode {
+					fmt.Printf("Failed %s: %v\n", item.Branch, err)
+				}
+				failCount++
+				record(item, "failed", err.Error())
+				continue
+			}
 			if err := prepareMigrateTarget(item.To, force); err != nil {
 				if !jsonMode {
 					fmt.Printf("Failed %s: %v\n", item.Branch, err)
@@ -506,6 +545,27 @@ func resolvePrimaryCheckoutTarget(info repoInfo) string {
 	}
 
 	return filepath.Join(srcRoot, filepath.FromSlash(owner), info.Name)
+}
+
+// refuseMoveOntoWtState asks what a destination is at the moment of the move,
+// rather than trusting the answer from when the plan was drawn.
+//
+// The plan is built against the filesystem as it stands, and then the moves
+// change it. The primary goes first and materialises everything it had
+// committed, so a `link -> ../../../.config` in that repository is a name that
+// resolves to nothing while the plan is drawn and a live symlink by the time the
+// linked worktrees move. A pattern pointing through it therefore passed a check
+// that was true when it ran and false when it mattered. Ask again, here.
+func refuseMoveOntoWtState(to string) error {
+	owned := wtStateAtPath(to)
+	if owned == "" {
+		return nil
+	}
+	return fmt.Errorf(
+		"refusing to move onto %s, which is %s.\n"+
+			"  The files moved there would become wt's own config file and approval store,\n"+
+			"  which is what decides whether this repository's hooks run",
+		to, owned)
 }
 
 func isPathWithinRoot(path, root string) bool {

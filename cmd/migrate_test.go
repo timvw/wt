@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -349,4 +351,142 @@ func TestMigrateRefusesAPrimaryTargetOutsideSrc(t *testing.T) {
 			t.Errorf("resolvePrimaryCheckoutTarget() = %q, want %q", got, want)
 		}
 	})
+}
+
+// TestMigrateWillNotMoveARepositoryIntoAWhitelistedTree covers the one move that
+// changes whether a repository's hooks are asked about at all.
+//
+// A [trust] rule is the user saying "what I keep here is mine". The primary's
+// migrate target is ~/src/{owner}/{name} taken from the origin URL, and the host
+// is not in it — so a clone of evil.example/acme lands in the ~/src/acme a rule
+// was written for github.com/acme, and the repository picks its own approval.
+func TestMigrateWillNotMoveARepositoryIntoAWhitelistedTree(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping migrate integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	homeDir := filepath.Join(tmpDir, "home")
+	worktreeRoot := filepath.Join(homeDir, "dev", "worktrees")
+	primaryPath := filepath.Join(worktreeRoot, "pwn")
+
+	if err := os.MkdirAll(primaryPath, 0o755); err != nil {
+		t.Fatalf("Failed to create primary checkout path: %v", err)
+	}
+	setupTestRepo(t, primaryPath)
+	runGitCommand(t, primaryPath, "remote", "add", "origin", "https://evil.example/acme/pwn.git")
+
+	cfgDir := filepath.Join(homeDir, ".config", "wt")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("Failed to create config dir: %v", err)
+	}
+	whitelisted := filepath.Join(homeDir, "src", "acme")
+	config := fmt.Sprintf("[trust]\nprefix = [%q]\n", filepath.ToSlash(whitelisted))
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(config), 0o644); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+
+	out := runMigrate(t, tmpDir, primaryPath, homeDir, worktreeRoot)
+
+	target := filepath.Join(whitelisted, "pwn")
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("primary checkout was moved into the whitelisted tree at %s (stat err = %v)\nOutput: %s", target, err, out)
+	}
+	if !strings.Contains(out, "[trust] rule") {
+		t.Errorf("migrate did not say why it declined:\n%s", out)
+	}
+}
+
+// TestMigrateRechecksTheDestinationAtMoveTime covers the gap between drawing the
+// plan and carrying it out.
+//
+// The primary moves first, and moving it materialises everything it had
+// committed — including a symlink climbing back out to the config directory. A
+// linked worktree whose pattern points through that symlink was checked while
+// the link resolved to nothing, and moved once it resolved to somewhere.
+func TestMigrateRechecksTheDestinationAtMoveTime(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping migrate integration test in short mode")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs a privilege we cannot assume on Windows")
+	}
+
+	tmpDir := t.TempDir()
+	homeDir := filepath.Join(tmpDir, "home")
+	worktreeRoot := filepath.Join(homeDir, "dev", "worktrees")
+	primaryPath := filepath.Join(worktreeRoot, "pwn")
+	legacyPath := filepath.Join(tmpDir, "legacy", "feature")
+
+	if err := os.MkdirAll(primaryPath, 0o755); err != nil {
+		t.Fatalf("Failed to create primary checkout path: %v", err)
+	}
+	setupTestRepo(t, primaryPath)
+	runGitCommand(t, primaryPath, "remote", "add", "origin", "https://github.com/acme/pwn.git")
+
+	// Where migrate will put the primary. Nothing on this path exists yet, which
+	// is what makes the plan-time check pass.
+	futurePrimary := filepath.Join(homeDir, "src", "acme", "pwn")
+	configDirPath := filepath.Join(homeDir, ".config")
+	// ~/.config exists and ~/.config/wt does not: a machine with a home
+	// directory and a fresh wt, where nothing has been approved yet and the
+	// store is easiest to author. Without it the move fails for its own
+	// reasons, and the test would pass without proving anything.
+	if err := os.MkdirAll(configDirPath, 0o755); err != nil {
+		t.Fatalf("Failed to create config parent: %v", err)
+	}
+	if err := os.Symlink(filepath.Join("..", "..", "..", ".config"), filepath.Join(primaryPath, "link")); err != nil {
+		t.Fatalf("Failed to create payload symlink: %v", err)
+	}
+	pattern := filepath.ToSlash(filepath.Join(futurePrimary, "link", "wt"))
+	if err := os.WriteFile(filepath.Join(primaryPath, ".wt.toml"), []byte(fmt.Sprintf("pattern = %q\n", pattern)), 0o644); err != nil {
+		t.Fatalf("Failed to write .wt.toml: %v", err)
+	}
+	runGitCommand(t, primaryPath, "add", "-A")
+	runGitCommand(t, primaryPath, "commit", "-m", "payload")
+	runGitCommand(t, primaryPath, "branch", "feature")
+
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("Failed to create legacy root: %v", err)
+	}
+	runGitCommand(t, primaryPath, "worktree", "add", legacyPath, "feature")
+
+	// The premise: the symlink really does reach the config directory from where
+	// the primary is going, so this fails loudly if the layout ever changes.
+	if got := filepath.Clean(filepath.Join(futurePrimary, "..", "..", "..", ".config")); got != configDirPath {
+		t.Fatalf("fixture no longer reaches the config directory: %q, want %q", got, configDirPath)
+	}
+
+	out := runMigrate(t, tmpDir, primaryPath, homeDir, worktreeRoot)
+
+	planted := filepath.Join(configDirPath, "wt")
+	if entries, err := os.ReadDir(planted); err == nil && len(entries) > 0 {
+		t.Fatalf("a worktree was moved onto the config directory at %s: %v\nOutput: %s", planted, entries, out)
+	}
+	if !strings.Contains(out, "refusing to move onto") {
+		t.Errorf("migrate did not refuse the move at the point of making it:\n%s", out)
+	}
+}
+
+// runMigrate runs the built binary against a scratch HOME and returns its
+// output. The exit status is deliberately not asserted on: refusing a move
+// counts as a failed item and exits non-zero, which is the outcome these tests
+// want rather than a reason to stop.
+func runMigrate(t *testing.T, tmpDir, dir, homeDir, worktreeRoot string) string {
+	t.Helper()
+
+	cmd := exec.Command(buildWtBinary(t, tmpDir), "migrate")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"HOME="+homeDir,
+		"USERPROFILE="+homeDir,
+		"XDG_CONFIG_HOME="+filepath.Join(homeDir, ".config"),
+		"WORKTREE_ROOT="+worktreeRoot,
+	)
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if err != nil && !errors.As(err, &exit) {
+		t.Fatalf("could not run migrate: %v\nOutput: %s", err, out)
+	}
+	return string(out)
 }

@@ -94,7 +94,12 @@ exist yet is followed rather than read as an ordinary missing directory: a
 to have one, and writing the target is exactly what makes the link live. On
 Windows the comparison also drops the trailing dots and spaces Win32 drops from
 every path component, so a pattern ending `wt.` is the directory it reaches
-rather than a name of its own. The files checked out there would *become*
+rather than a name of its own. `wt migrate` asks the same question again at the
+moment it moves each worktree, not only when it draws up the plan: moving the
+primary checkout materialises everything that repository had committed, so a
+`link -> ../../../.config` inside it resolves to nothing while the plan is made
+and to your config directory by the time the linked worktrees follow. The files
+checked out there would *become*
 `config.toml` and `trust.toml`, and those are the gate itself — the config file
 is the one layer hooks are not vetted from, and `trust.toml` is the record of
 what you approved. A branch carrying both would not slip a hook past the gate,
@@ -940,6 +945,14 @@ tree than it names. On Windows the rule reaches
 path component — as with case-insensitivity there, a rule covers the one
 directory its path names on that machine. `wt trust --list` shows each rule next
 to what it resolves to, or marks it ignored.
+
+A rule covers a tree you fill yourself, so `wt migrate` will not move a
+repository into one. The primary checkout's destination is `~/src/{owner}/{name}`
+read off the origin URL, and the host is not part of it — a clone of
+`https://evil.example/acme/pwn` would land in the same `~/src/acme` you wrote a
+rule for `github.com/acme`, and arrive already approved. That migration is
+skipped with a reason instead. Moving it there yourself still works, because then
+the path is your choice rather than the URL's.
 
 ### Requiring approval for every hook
 
