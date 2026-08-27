@@ -462,6 +462,21 @@ func TestTrustKeyIsSharedByWorktrees(t *testing.T) {
 	}
 }
 
+// TestATrustRuleThatMeansHereIsIgnored: the warning this rule already got said a
+// rule "has to name one directory rather than a different one per working
+// directory" — and the check behind it asked only whether the path was absolute,
+// which /proc/self/cwd is. The comment was right and the code was checking
+// something else, so a whitelist entry could cover whatever wt was standing in.
+func TestATrustRuleThatMeansHereIsIgnored(t *testing.T) {
+	trustRuleWarnings = sync.Map{}
+	t.Cleanup(func() { trustRuleWarnings = sync.Map{} })
+	const rule = "/proc/self/cwd"
+	if got := normaliseTrustPath(rule); got != "" {
+		t.Errorf("normaliseTrustPath(%q) = %q, want \"\": a rule meaning \"here\" whitelists whatever is "+
+			"checked out here", rule, got)
+	}
+}
+
 func gitInit(t *testing.T, dir string) {
 	t.Helper()
 	runGit(t, dir, "init", "-q")

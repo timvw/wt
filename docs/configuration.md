@@ -1055,7 +1055,9 @@ instead of failing it: an unset `SRC` turns `$SRC/repos` into `/repos`, and
 `$SRC/Users` into `/Users` — an existing directory holding every repository on
 the machine. Rules naming a filesystem root are rejected for the same reason, as
 are relative ones — a rule has to name one directory, not a different one
-depending on where you ran `wt` from. Nothing else is adjusted either: an entry
+depending on where you ran `wt` from. `/proc/self/cwd` is refused on those same
+grounds despite being absolute: it is where you ran `wt` from, spelled as though
+it were not. Nothing else is adjusted either: an entry
 that is only whitespace is skipped as the blank line it is, but a trailing space
 inside a rule is part of the directory's name: `/srv/team` with a space on the
 end is a different directory, and trimming it back would hand the rule a wider

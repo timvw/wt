@@ -711,7 +711,7 @@ func normaliseTrustPath(entry string) string {
 	}
 	expanded := expandTilde(entry)
 	if expanded == "" {
-		warnTrustRuleIgnored(entry, "it starts with ~ and there is no home directory to resolve that against")
+		warnTrustRuleIgnored(entry, "it starts with ~ and there is no home directory naming one directory to resolve that against")
 		return ""
 	}
 	// canonicalPath resolves symlinks; it does not make a path absolute, and
@@ -721,8 +721,16 @@ func normaliseTrustPath(entry string) string {
 	// Making it absolute would be worse than useless: it would resolve against
 	// whatever directory wt happened to be run from, so the same rule would cover
 	// a different tree each time.
-	if !filepath.IsAbs(expanded) {
-		warnTrustRuleIgnored(entry, "it is not an absolute path, and a rule has to name one directory rather than a different one per working directory")
+	// namesOneDirectory, and note the reason the message already gave: "one
+	// directory rather than a different one per working directory" is exactly
+	// what /proc/self/cwd fails and IsAbs does not ask. The comment was right and
+	// the code was checking something else.
+	if !namesOneDirectory(expanded) {
+		why := "it is not an absolute path"
+		if filepath.IsAbs(expanded) {
+			why = "it names a different directory depending on which process asks"
+		}
+		warnTrustRuleIgnored(entry, why+", and a rule has to name one directory rather than a different one per working directory")
 		return ""
 	}
 	// canonicalExistingPath rather than canonicalPath, so that a rule naming a
