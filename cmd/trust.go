@@ -467,6 +467,14 @@ func hookSetTrust(source string) (hookTrust, error) {
 }
 
 // trustHookSet records an approval for a resolved hook set.
+//
+// Read-modify-write without a lock. The write itself is atomic — a temp file and
+// a rename, so no reader ever sees half a store — but two wt processes that load
+// before either saves will have the later one's snapshot win, and an approval
+// the other made or revoked in between goes with it. Nothing outside the machine
+// can cause that interleaving: it needs the user to run two trust commands at
+// once, and the loser is visible the next time they look. A lock file that
+// survives a Ctrl-C is a worse failure than that, so this stays as it is.
 func trustHookSet(t hookTrust) error {
 	if t.scope == "" || t.sha == "" {
 		return fmt.Errorf("hooks from %s cannot be remembered", describeHookSource(t.source))
