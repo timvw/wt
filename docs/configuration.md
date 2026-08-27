@@ -961,12 +961,12 @@ older git gets the line-based read, and anything it cannot confirm simply does
 not reach a rule.
 
 A rule covers a tree you fill yourself, so `wt migrate` will not move a
-repository into one. The primary checkout's destination is `~/src/{owner}/{name}`
-read off the origin URL, and the host is not part of it — a clone of
-`https://evil.example/acme/pwn` would land in the same `~/src/acme` you wrote a
-rule for `github.com/acme`, and arrive already approved. That migration is
-skipped with a reason instead. Moving it there yourself still works, because then
-the path is your choice rather than the URL's.
+repository into one it is not already in. The primary checkout's destination is
+`~/src/{owner}/{name}` read off the origin URL, and the host is not part of it —
+a clone of `https://evil.example/acme/pwn` would land in the same `~/src/acme`
+you wrote a rule for `github.com/acme`, and arrive already approved. That
+migration is skipped with a reason instead. Moving it there yourself still
+works, because then the path is your choice rather than the URL's.
 
 The same goes for an approval already waiting at that path. Records are pinned to
 `(scope, sha256 of the commands)` and nothing prunes one when a checkout is
@@ -978,6 +978,26 @@ pre-approved. `wt migrate` declines that move too, and says which path to run
 a repository you approved once holds a record for the commands it had then, and
 asking only whether its current path has *an* approval would let that one wave
 through a move onto a different set waiting at the destination.
+
+Those two checks ask about a directory that does not exist yet, so the
+filesystem has not settled which one the name reaches. The destination is
+therefore matched loosely — case folded, and on Windows without the trailing
+dots and spaces Win32 drops from every path component, so an origin URL ending
+`tool..git` cannot render a `tool.` that matches no rule and no record and is
+then created as the `tool` both of them name. The repository the move starts
+from is matched exactly, because crediting *it* with an approval is what waives
+the refusal. Granting stays exact everywhere: on a case-sensitive filesystem
+`~/src/Mine` and `~/src/mine` are two directories, and a rule for one is not a
+rule for the other.
+
+`wt clone` meets the same records from the other side, and answers differently
+because you named the source. Its destination has to be empty, and an empty path
+is what says the repository those records were given to is gone — so they are
+discarded before the new one lands, and the clone says how many went. Without
+that, someone who takes over an abandoned namespace, or a `repo_pattern` that
+happens to render onto a path an old checkout occupied, would arrive holding an
+approval you gave to something else. You are asked about the new repository's
+hooks the first time they run, as with any other clone.
 
 ### Requiring approval for every hook
 

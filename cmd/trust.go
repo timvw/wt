@@ -562,6 +562,30 @@ func trustWhitelistAllows(repoKey string) bool {
 	return false
 }
 
+// trustWhitelistCovers reports whether a [trust] rule would cover a repository
+// placed at path — including a path nothing has been created at yet, whose case
+// the filesystem has not settled and whose trailing dots Win32 has not dropped.
+//
+// The loose counterpart to trustWhitelistAllows, and never a substitute for it:
+// this one only ever decides to refuse a move. See samePath.
+func trustWhitelistCovers(path string) bool {
+	if path == "" || path == trustScopeUser {
+		return false
+	}
+	target := trustWhitelistTarget(path)
+	for _, entry := range trustExact {
+		if p := normaliseTrustPath(entry); p != "" && mayBeSamePath(p, target) {
+			return true
+		}
+	}
+	for _, entry := range trustPrefixes {
+		if p := normaliseTrustPath(entry); p != "" && hasPathPrefixFold(target, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // trustWhitelistTarget turns a repository identity into the path a user would
 // recognise as "the repo".
 //
@@ -696,6 +720,81 @@ func hasPathPrefix(path, prefix string) bool {
 		prefix += string(filepath.Separator)
 	}
 	return strings.HasPrefix(path, prefix)
+}
+
+// samePath and mayBeSamePath are the two ways this package asks whether two
+// paths name one directory. Which one to reach for is decided by what the
+// answer is allowed to get wrong.
+//
+// samePath is the strict one, and the only one fit to grant anything: on a
+// case-sensitive filesystem ~/src/Mine and ~/src/mine are two directories, and
+// a rule or an approval for one is not a rule or an approval for the other.
+//
+// mayBeSamePath folds case, and on Windows the trailing dots and spaces Win32
+// drops from every component — the folds a filesystem applies to a path that
+// nothing has been created at yet, before it settles which directory the name
+// reaches. Fit only where the looser answer refuses or revokes: over-matching
+// there costs an approval the user can give again, while under-matching lets a
+// name that compares equal to nothing land on a directory something already
+// covers.
+func samePath(a, b string) bool { return a == b }
+
+func mayBeSamePath(a, b string) bool { return foldPath(a) == foldPath(b) }
+
+// dropTrustRecordsAt discards every approval scoped to a repository at path and
+// reports how many went. For the moment wt is about to put a repository at a
+// path that has nothing at it.
+//
+// An approval is pinned to (scope, sha256 of the commands), and nothing prunes
+// one when a checkout is deleted — so a record outlives the repository it was
+// given to, and an empty path is exactly what says that repository is gone. A
+// different repository arriving there must not inherit it: someone who takes
+// over an abandoned namespace, or a repo_pattern that happens to render onto a
+// path a checkout used to occupy, need only declare a command the user is
+// likely to have approved there once ("make setup") to match a record nobody
+// wrote for them.
+func dropTrustRecordsAt(path string) (int, error) {
+	want, ok := canonicalExistingPath(filepath.Join(path, ".git"))
+	if !ok {
+		return 0, fmt.Errorf(
+			"%s is reached through symlinks wt cannot follow to an end, so it cannot tell which hook\n"+
+				"approvals already name it — and an approval left behind by a repository that used to be\n"+
+				"there would cover this one. Run 'wt untrust' there first, or pick another path",
+			path)
+	}
+
+	store, err := loadTrustStore()
+	if err != nil {
+		// Nowhere to keep approvals is nowhere to inherit one from: isTrusted
+		// can never say yes, so there is nothing here to prune. Every other
+		// failure is wt not knowing what is approved, which is not "nothing is".
+		if errors.Is(err, errNoTrustStoreDir) {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	kept := make([]trustRecord, 0, len(store.Trusted))
+	for _, rec := range store.Trusted {
+		// A user-config approval is not pinned to a path, so no path can free
+		// it — and a record wt cannot resolve is not evidence about this path.
+		if rec.Scope != "" && rec.Scope != trustScopeUser {
+			if got, ok := canonicalExistingPath(rec.Scope); ok && mayBeSamePath(got, want) {
+				continue
+			}
+		}
+		kept = append(kept, rec)
+	}
+
+	removed := len(store.Trusted) - len(kept)
+	if removed == 0 {
+		return 0, nil
+	}
+	store.Trusted = kept
+	if err := saveTrustStore(store); err != nil {
+		return 0, err
+	}
+	return removed, nil
 }
 
 var (

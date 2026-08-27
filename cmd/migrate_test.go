@@ -453,6 +453,106 @@ func TestMigrateWillNotMoveARepositoryOntoAStaleApproval(t *testing.T) {
 	}
 }
 
+// TestMigrateWillNotMoveARepositoryOntoAPathThatMayCarryAnApproval pins which
+// side of the comparison folds, from the outside. The destination is spelled
+// out of the origin URL, so a repository picks it — and on a filesystem that
+// folds, a spelling no record names is created as the directory one does.
+func TestMigrateWillNotMoveARepositoryOntoAPathThatMayCarryAnApproval(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping migrate integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	homeDir := filepath.Join(tmpDir, "home")
+	worktreeRoot := filepath.Join(homeDir, "dev", "worktrees")
+	const hooks = "[hooks]\npost_create = [\"echo owned\"]\n"
+
+	oldPath := filepath.Join(homeDir, "src", "acme", "tool")
+	if err := os.MkdirAll(oldPath, 0o755); err != nil {
+		t.Fatalf("Failed to create the original checkout: %v", err)
+	}
+	setupTestRepo(t, oldPath)
+	if err := os.WriteFile(filepath.Join(oldPath, ".wt.toml"), []byte(hooks), 0o644); err != nil {
+		t.Fatalf("Failed to write .wt.toml: %v", err)
+	}
+	runWtIn(t, tmpDir, oldPath, homeDir, worktreeRoot, "trust")
+	if err := os.RemoveAll(oldPath); err != nil {
+		t.Fatalf("Failed to remove the original checkout: %v", err)
+	}
+
+	// Same owner and name as the record, differing only in a way a filesystem
+	// may not distinguish.
+	primaryPath := filepath.Join(worktreeRoot, "tool")
+	if err := os.MkdirAll(primaryPath, 0o755); err != nil {
+		t.Fatalf("Failed to create primary checkout path: %v", err)
+	}
+	setupTestRepo(t, primaryPath)
+	if err := os.WriteFile(filepath.Join(primaryPath, ".wt.toml"), []byte(hooks), 0o644); err != nil {
+		t.Fatalf("Failed to write .wt.toml: %v", err)
+	}
+	runGitCommand(t, primaryPath, "remote", "add", "origin", "https://evil.example/acme/Tool.git")
+
+	out := runMigrate(t, tmpDir, primaryPath, homeDir, worktreeRoot)
+
+	aliased := filepath.Join(homeDir, "src", "acme", "Tool")
+	if _, err := os.Stat(aliased); !os.IsNotExist(err) {
+		t.Fatalf("primary checkout was moved to %s, which may be the %s a record already names (stat err = %v)\nOutput: %s",
+			aliased, oldPath, err, out)
+	}
+	if !strings.Contains(out, "still carries a hook approval") {
+		t.Errorf("migrate did not say why it declined:\n%s", out)
+	}
+}
+
+// TestApprovedHashesAtMatchesLooselyOnlyWhenAskedTo: a destination does not
+// exist yet, so nothing has settled its case and Win32 has not yet dropped the
+// trailing dot from a name like "tool." — the name the migration compares is
+// not the name the filesystem will go on to create. So the destination is asked
+// loosely and the source strictly, and each is then only wrong in the direction
+// that refuses a move rather than the one that runs a hook.
+func TestApprovedHashesAtMatchesLooselyOnlyWhenAskedTo(t *testing.T) {
+	base := t.TempDir()
+	store := trustStore{Trusted: []trustRecord{
+		{Scope: filepath.Join(base, "acme", "tool", ".git"), SHA256: "abc"},
+	}}
+	spelledDifferently := filepath.Join(base, "acme", "Tool")
+
+	loose, ok := approvedHashesAt(store, spelledDifferently, mayBeSamePath)
+	if !ok || !loose["abc"] {
+		t.Errorf("approvedHashesAt(%s, mayBeSamePath) = %v, %v; a destination that may be the "+
+			"approved directory has to count as one", spelledDifferently, loose, ok)
+	}
+
+	strict, ok := approvedHashesAt(store, spelledDifferently, samePath)
+	if !ok || strict["abc"] {
+		t.Errorf("approvedHashesAt(%s, samePath) = %v, %v; the strict comparison must not fold, or "+
+			"a source could be credited with an approval it does not hold and waive the refusal",
+			spelledDifferently, strict, ok)
+	}
+}
+
+// TestApprovedHashesAtSeesThroughAWin32PathAlias is the case that is not merely
+// defensive: an origin URL ending "tool..git" renders a destination of "tool.",
+// which names no directory anything is recorded for, and which Windows then
+// creates as the "tool" a record does name.
+func TestApprovedHashesAtSeesThroughAWin32PathAlias(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Win32 drops trailing dots from every path component; other systems keep them")
+	}
+
+	base := t.TempDir()
+	store := trustStore{Trusted: []trustRecord{
+		{Scope: filepath.Join(base, "acme", "tool", ".git"), SHA256: "abc"},
+	}}
+	alias := filepath.Join(base, "acme") + `\tool.`
+
+	waiting, ok := approvedHashesAt(store, alias, mayBeSamePath)
+	if !ok || !waiting["abc"] {
+		t.Errorf("approvedHashesAt(%s, mayBeSamePath) = %v, %v; that path is created as %s, which "+
+			"carries an approval this repository did not earn", alias, waiting, ok, filepath.Join(base, "acme", "tool"))
+	}
+}
+
 // TestMigrateComparesApprovalsByCommandNotByOccupancy: asking only whether the
 // current path has *an* approval lets one launder another. A repository the user
 // once approved holds a record for the commands it had then; changing them

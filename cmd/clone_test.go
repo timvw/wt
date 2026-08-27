@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -313,6 +314,59 @@ func TestCloneRefusesAnExplicitDestinationOnWtsOwnState(t *testing.T) {
 	}
 	if _, statErr := os.Stat(configDir()); !os.IsNotExist(statErr) {
 		t.Errorf("something was created at %s (stat err = %v)", configDir(), statErr)
+	}
+}
+
+// TestCloneDiscardsAnApprovalLeftAtTheDestination: an approval is pinned to
+// (scope, sha256 of the commands), and nothing prunes one when a checkout is
+// deleted — so a record outlives the repository it was given to. The
+// destination being empty is exactly what says that repository is gone, and a
+// different one cloned into its place must not inherit the approval by
+// declaring a command the user is likely to have approved there once.
+func TestCloneDiscardsAnApprovalLeftAtTheDestination(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	source := filepath.Join(home, "source")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setupTestRepo(t, source)
+	if err := os.WriteFile(filepath.Join(source, ".wt.toml"),
+		[]byte("[hooks]\npost_create = [\"echo owned\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, source, "add", "-A")
+	runGitCommand(t, source, "commit", "-qm", "hooks")
+
+	// Three approvals: one left at the path being cloned into, and two that have
+	// nothing to do with it. Removing the lot would be its own bug.
+	dest := filepath.Join(home, "src", "acme", "tool")
+	elsewhere := filepath.Join(home, "src", "acme", "other")
+	if err := saveTrustStore(trustStore{Trusted: []trustRecord{
+		{Scope: filepath.Join(dest, ".git"), Source: hookSourceRepoConfig, SHA256: "stale"},
+		{Scope: filepath.Join(elsewhere, ".git"), Source: hookSourceRepoConfig, SHA256: "unrelated"},
+		{Scope: trustScopeUser, Source: hookSourceConfigFile, SHA256: "mine"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runClone(cloneCmd, []string{source, dest}); err != nil {
+		t.Fatalf("runClone() = %v, want the clone to succeed", err)
+	}
+
+	store, err := loadTrustStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	left := make([]string, 0, len(store.Trusted))
+	for _, rec := range store.Trusted {
+		left = append(left, rec.SHA256)
+	}
+	slices.Sort(left)
+	if want := []string{"mine", "unrelated"}; !slices.Equal(left, want) {
+		t.Errorf("approvals after the clone = %v, want %v: the record left at %s should go, and only that one",
+			left, want, dest)
 	}
 }
 

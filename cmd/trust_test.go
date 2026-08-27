@@ -344,6 +344,30 @@ func TestTrustKeyFindsAWorktreeWhosePathHoldsANewline(t *testing.T) {
 	}
 }
 
+// TestTrustWhitelistCoversIsLooseAndTrustWhitelistAllowsIsNot: the two
+// questions a whitelist rule gets asked are not the same question. Granting
+// must stay exact, because on a case-sensitive filesystem ~/src/Mine and
+// ~/src/mine are two directories and a rule for one is not a rule for the
+// other. Refusing to move a repository somewhere must not, because that
+// destination does not exist yet and the filesystem has not settled which
+// directory the name reaches.
+func TestTrustWhitelistCoversIsLooseAndTrustWhitelistAllowsIsNot(t *testing.T) {
+	base := t.TempDir()
+	savedPrefix, savedExact := trustPrefixes, trustExact
+	trustPrefixes, trustExact = nil, []string{filepath.Join(base, "acme", "tool")}
+	t.Cleanup(func() { trustPrefixes, trustExact = savedPrefix, savedExact })
+
+	spelledDifferently := filepath.Join(base, "acme", "Tool")
+	if trustWhitelistAllows(spelledDifferently) {
+		t.Errorf("trustWhitelistAllows(%s) = true; the grant must not fold, or one rule would cover "+
+			"every directory whose name differs from it only by case", spelledDifferently)
+	}
+	if !trustWhitelistCovers(spelledDifferently) {
+		t.Errorf("trustWhitelistCovers(%s) = false; a destination that may turn out to be the "+
+			"whitelisted directory would be moved into it unasked", spelledDifferently)
+	}
+}
+
 // TestWhitelistNeedsAConfirmedRepositoryIdentity: a [trust] rule says
 // "repositories I keep in this tree are mine", which is a claim about
 // repositories. When git has not confirmed that this working tree belongs to the

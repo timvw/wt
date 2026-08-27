@@ -81,6 +81,22 @@ func runClone(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("destination %s already exists and is not empty", target)
 	}
 
+	// Nothing is at target — which is what says any approval recorded for it was
+	// given to a repository that is no longer there. Discard those before a
+	// different repository moves in, or it inherits them: an approval is pinned
+	// to (scope, sha256 of the commands), so an attacker who takes over an
+	// abandoned namespace, or a repo_pattern that renders onto a path an old
+	// checkout occupied, arrives pre-approved by declaring a command the user
+	// once approved there.
+	//
+	// Done here rather than after the clone because what makes the records stale
+	// is that the path is empty, and that is what was just established. A clone
+	// that then fails leaves the user's approvals no less correct.
+	dropped, err := dropTrustRecordsAt(target)
+	if err != nil {
+		return err
+	}
+
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return fmt.Errorf("create parent dir for %s: %w", target, err)
 	}
@@ -111,14 +127,21 @@ func runClone(cmd *cobra.Command, args []string) error {
 
 	if isJSONOutput() {
 		return emitJSONSuccess(cmd, map[string]any{
-			"status":      "cloned",
-			"url":         url,
-			"path":        target,
-			"navigate_to": target,
+			"status":                  "cloned",
+			"url":                     url,
+			"path":                    target,
+			"navigate_to":             target,
+			"stale_approvals_dropped": dropped,
 		})
 	}
 
 	fmt.Printf("✓ Cloned to: %s\n", target)
+	// Said out loud, because it is the one case where a repository the user has
+	// approved before will ask again: the approval belonged to whatever used to
+	// be at this path, not to what was just cloned into it.
+	if dropped > 0 {
+		fmt.Printf("  Note: discarded %d hook approval(s) left at this path by a repository that is no longer there.\n", dropped)
+	}
 	printCDMarker(target)
 	return nil
 }

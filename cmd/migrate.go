@@ -560,8 +560,16 @@ func resolvePrimaryCheckoutTarget(info repoInfo) string {
 //
 // Only a gain counts. A repository already sitting inside a whitelisted tree, or
 // already carrying an approval, loses nothing by being tidied within it.
+// Each side is asked the question it is allowed to get wrong. The destination
+// does not exist yet, so nothing has settled its case and Win32 has not yet
+// dropped the trailing dot from a name like "tool." — an origin URL ending
+// "tool..git" renders a destination that compares equal to no rule and no
+// record, and is then created as the "tool" both of them name. So the
+// destination is asked loosely and the source strictly: a destination that only
+// might be covered is worth a skip, a source that only might be covered is not
+// worth waiving one. See samePath.
 func migrateTrustGain(from, to string) (string, error) {
-	if trustWhitelistAllows(to) && !trustWhitelistAllows(from) {
+	if trustWhitelistCovers(to) && !trustWhitelistAllows(from) {
 		return fmt.Sprintf(
 			"%s is covered by a [trust] rule, so moving it there would run its hooks unasked — "+
 				"and that path comes from the origin URL, not from you. Move it yourself if you meant to",
@@ -582,11 +590,11 @@ func migrateTrustGain(from, to string) (string, error) {
 	// version of these hooks stand in for a different set waiting at the
 	// destination. What counts is a set the destination answers to and the
 	// current path does not.
-	waiting, ok := approvedHashesAt(store, to)
+	waiting, ok := approvedHashesAt(store, to, mayBeSamePath)
 	if !ok {
 		return cannotTellReason(to), nil
 	}
-	held, ok := approvedHashesAt(store, from)
+	held, ok := approvedHashesAt(store, from, samePath)
 	if !ok {
 		return cannotTellReason(from), nil
 	}
@@ -613,10 +621,12 @@ func cannotTellReason(path string) string {
 }
 
 // approvedHashesAt returns the command sets a primary checkout at path would
-// already be approved for, whether or not anything is there now. The second
-// result is false when wt could not settle what the path names, which is not the
-// same answer as an empty set.
-func approvedHashesAt(store trustStore, path string) (map[string]bool, bool) {
+// already be approved for, whether or not anything is there now. same decides
+// when a record's scope and this path are one directory; callers pick it to
+// suit which way their answer is safe to be wrong. The second result is false
+// when wt could not settle what the path names, which is not the same answer as
+// an empty set.
+func approvedHashesAt(store trustStore, path string, same func(a, b string) bool) (map[string]bool, bool) {
 	want, ok := canonicalExistingPath(filepath.Join(path, ".git"))
 	if !ok {
 		return nil, false
@@ -628,7 +638,7 @@ func approvedHashesAt(store trustStore, path string) (map[string]bool, bool) {
 		}
 		// A record wt cannot resolve is not evidence about this path — and it is
 		// the attacker who needs a record to match, never to hide.
-		if got, ok := canonicalExistingPath(rec.Scope); ok && got == want {
+		if got, ok := canonicalExistingPath(rec.Scope); ok && same(got, want) {
 			found[rec.SHA256] = true
 		}
 	}
