@@ -108,9 +108,18 @@ already said yes to. A branch carrying both arrives with a `[trust]` rule
 covering itself, or an approval it computed for its own commands. It would not
 slip a hook past the gate, it would supply the gate.
 
+A repository that *contains* this one counts as the repository too. A submodule
+is its own repository, and the superproject holding it is not you — it is more
+committed content, chosen by whoever chose the submodule. So a `WT_CONFIG`
+reaching a file the superproject committed is refused for the same reason a
+`--config ../main/.wt.toml` from a linked worktree is.
+
 The second is git's own global configuration: `~/.gitconfig`,
-`$XDG_CONFIG_HOME/git` (`~/.config/git` by default), and whatever
-`GIT_CONFIG_GLOBAL` names. `core.hooksPath` is a hook command under another
+`$XDG_CONFIG_HOME/git` (`~/.config/git` by default) and the `config` file in it,
+and whatever `GIT_CONFIG_GLOBAL` or `GIT_CONFIG_SYSTEM` names. The file as well
+as the directory, because guarding a directory says nothing about where a
+symlink inside it points, and `~/.config/git/config` is as often a link into a
+dotfiles repository as `trust.toml` is. `core.hooksPath` is a hook command under another
 name — a branch checked out over `~/.config/git` supplies git's config and a
 `hooks` directory beside it, and the next `git worktree add`, `wt`'s own
 included, runs what is in it. Nothing was approved and nothing was prompted for,
@@ -157,7 +166,9 @@ into every repository it creates afterwards, so filling it arms every future
 clone rather than one repository. `core.fsmonitor` names a program git runs on
 any command that reads the index, which is nearly all of them. A `~user/...`
 value is expanded the way git expands it, since a value `wt` read as relative
-would be one it silently declined to guard.
+would be one it silently declined to guard — and a *relative* value is resolved
+against the top of the working tree and guarded there rather than dropped,
+because `core.hooksPath = ../shared-hooks` leaves the repository from there.
 
 That list is not a claim to be exhaustive about every git setting naming a
 program. Most name a binary you already have (`core.pager`, `gpg.program`)

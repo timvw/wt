@@ -931,3 +931,64 @@ func TestTheTrustStoreIsGuardedWhereItPointsElsewhere(t *testing.T) {
 			"checked out there supplies wt's record of approved hooks", dotfiles)
 	}
 }
+
+// TestTheXdgGitConfigFileIsGuardedWhereItPointsElsewhere: guarding a directory
+// says nothing about where a symlink inside it points. ~/.config/git/config is
+// as often a link into a dotfiles repository as trust.toml is, and a dangling one
+// — dotfiles not cloned yet — is a path a pattern can render onto.
+func TestTheXdgGitConfigFileIsGuardedWhereItPointsElsewhere(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	if err := os.MkdirAll(filepath.Join(home, ".config", "git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dotfiles := filepath.Join(home, "dotfiles")
+	link := filepath.Join(home, ".config", "git", "config")
+	if err := os.Symlink(filepath.Join(dotfiles, "gitconfig"), link); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+
+	if owned := wtStateAtPath(dotfiles); owned == "" {
+		t.Errorf("wtStateAtPath(%q) = \"\", want a refusal: git's global config points inside it, so "+
+			"a branch checked out there supplies core.hooksPath", dotfiles)
+	}
+}
+
+// TestGitConfigSystemIsGuardedWhenSet: /etc/gitconfig is root's and not
+// placeable, but GIT_CONFIG_SYSTEM redirects it, and a value under the user's own
+// home is as fillable as any other. The settings it carries are the same ones.
+func TestGitConfigSystemIsGuardedWhenSet(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	elsewhere := filepath.Join(t.TempDir(), "armed", "config")
+	t.Setenv("GIT_CONFIG_SYSTEM", elsewhere)
+
+	if owned := wtStateAtPath(elsewhere); owned == "" {
+		t.Errorf("wtStateAtPath(%q) = \"\", want a refusal: GIT_CONFIG_SYSTEM names git's system "+
+			"config, which carries core.hooksPath like any other scope", elsewhere)
+	}
+}
+
+// TestARelativeCoreHooksPathThatLeavesTheRepositoryIsGuarded: git resolves
+// core.hooksPath against the top of the working tree, and "../shared-hooks"
+// leaves it from there — so "relative means inside the repository, which a
+// worktree cannot be placed in anyway" was not true.
+func TestARelativeCoreHooksPathThatLeavesTheRepositoryIsGuarded(t *testing.T) {
+	parent := t.TempDir()
+	repo := filepath.Join(parent, "tool")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "init", "-q")
+	runGit(t, repo, "config", "core.hooksPath", "../shared-hooks")
+	t.Chdir(repo)
+
+	shared := filepath.Join(parent, "shared-hooks")
+	if owned := wtStateAtPath(shared); owned == "" {
+		t.Errorf("wtStateAtPath(%q) = \"\", want a refusal: core.hooksPath reaches it from the top of "+
+			"the working tree, and git runs what is checked out there", shared)
+	}
+}

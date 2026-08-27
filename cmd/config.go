@@ -759,7 +759,42 @@ func repoWorkingTrees(repoRoot string) []string {
 		return roots
 	}
 	roots = append(roots, commonDir, filepath.Dir(commonDir))
-	return append(roots, gitWorktreePaths(commonDir)...)
+	roots = append(roots, gitWorktreePaths(commonDir)...)
+	return append(roots, superprojectWorkingTrees()...)
+}
+
+// superprojectWorkingTrees names the working trees of the repositories this one
+// is a submodule of, outermost last.
+//
+// A submodule is a repository, and the superproject holding it is not the user —
+// it is more committed content, chosen by whoever chose the submodule. So
+// `WT_CONFIG=../../wt-user.toml` reaching a file the superproject committed is
+// the repo-config layer read as the user config file, the same finding as the
+// linked-worktree one, one level out. Such a file could whitelist the tree it
+// sits in, and the submodule's own verified scope beneath <super>/.git/modules
+// would then match the rule.
+//
+// Walked rather than asked once, because submodules nest.
+func superprojectWorkingTrees() []string {
+	var roots []string
+	dir := ""
+	for range 32 {
+		cmd := exec.Command("git", "rev-parse", "--show-superproject-working-tree")
+		if dir != "" {
+			cmd.Dir = dir
+		}
+		out, err := cmd.Output()
+		if err != nil {
+			return roots
+		}
+		super := gitOutputPath(out)
+		if super == "" || !filepath.IsAbs(super) {
+			return roots
+		}
+		roots = append(roots, super)
+		dir = super
+	}
+	return roots
 }
 
 // sameFile reports whether two paths name the same file on disk.

@@ -1630,3 +1630,41 @@ func TestConfigShowPatternParityBetweenTextAndJSON_Config(t *testing.T) {
 		})
 	}
 }
+
+// TestASuperprojectCannotSupplyTheUserConfig: a submodule is a repository, and
+// the superproject holding it is not the user — it is more committed content,
+// chosen by whoever chose the submodule. A WT_CONFIG reaching a file the
+// superproject committed is the repo-config layer read as the user config file,
+// which is the linked-worktree finding one level out. Such a file could whitelist
+// the tree it sits in, and the submodule's own verified scope beneath
+// <super>/.git/modules would then match the rule.
+func TestASuperprojectCannotSupplyTheUserConfig(t *testing.T) {
+	super := t.TempDir()
+	runGit(t, super, "init", "-q")
+	runGit(t, super, "config", "user.email", "t@example.com")
+	runGit(t, super, "config", "user.name", "t")
+	runGit(t, super, "commit", "-q", "--allow-empty", "-m", "root")
+
+	inner := t.TempDir()
+	runGit(t, inner, "init", "-q")
+	runGit(t, inner, "config", "user.email", "t@example.com")
+	runGit(t, inner, "config", "user.name", "t")
+	runGit(t, inner, "commit", "-q", "--allow-empty", "-m", "root")
+
+	runGit(t, super, "-c", "protocol.file.allow=always", "submodule", "--quiet", "add", inner, "dep")
+	sub := filepath.Join(super, "dep")
+	if _, err := os.Stat(sub); err != nil {
+		t.Skipf("this git will not add a local submodule: %v", err)
+	}
+	t.Chdir(sub)
+
+	planted := filepath.Join(super, "wt-user.toml")
+	if err := os.WriteFile(planted, []byte("[trust]\nprefix = [\"/\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !configFileSuppliedByRepo(planted, sub) {
+		t.Errorf("configFileSuppliedByRepo(%q) = false; that file is committed content of the "+
+			"repository containing this one, and a [trust] rule in it would cover this submodule",
+			planted)
+	}
+}

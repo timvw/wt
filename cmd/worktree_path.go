@@ -149,6 +149,14 @@ func gitGlobalConfigPaths() []string {
 		// already supplied.
 		warnRelativeGitEnv("GIT_CONFIG_GLOBAL", p)
 	}
+	// The system file too. /etc/gitconfig is root's and not placeable, but
+	// GIT_CONFIG_SYSTEM redirects it, and a value under the user's own home is
+	// as fillable as any other — the settings it carries are the same ones.
+	if p := os.Getenv("GIT_CONFIG_SYSTEM"); namesOneDirectory(p) {
+		paths = append(paths, p)
+	} else if strings.TrimSpace(p) != "" {
+		warnRelativeGitEnv("GIT_CONFIG_SYSTEM", p)
+	}
 	home, err := os.UserHomeDir()
 	if err == nil && filepath.IsAbs(home) {
 		paths = append(paths, filepath.Join(home, ".gitconfig"))
@@ -159,7 +167,12 @@ func gitGlobalConfigPaths() []string {
 	xdg := os.Getenv("XDG_CONFIG_HOME")
 	switch {
 	case namesOneDirectory(xdg):
-		paths = append(paths, filepath.Join(xdg, "git"))
+		// The file as well as the directory. Guarding a directory says nothing
+		// about where a symlink inside it points, and ~/.config/git/config is as
+		// often a link into a dotfiles repository as trust.toml is — a dangling
+		// one being a path a pattern can render onto. ~/.gitconfig is named as a
+		// file already and needs no equivalent.
+		paths = append(paths, filepath.Join(xdg, "git"), filepath.Join(xdg, "git", "config"))
 	default:
 		// A relative one is the GIT_CONFIG_GLOBAL hole under another name, and
 		// worse for being quiet: wt ignores a non-absolute XDG_CONFIG_HOME per
@@ -176,7 +189,8 @@ func gitGlobalConfigPaths() []string {
 			warnRelativeGitEnv("XDG_CONFIG_HOME", xdg)
 		}
 		if err == nil && filepath.IsAbs(home) {
-			paths = append(paths, filepath.Join(home, ".config", "git"))
+			paths = append(paths, filepath.Join(home, ".config", "git"),
+				filepath.Join(home, ".config", "git", "config"))
 		}
 	}
 	return append(paths, gitGlobalIncludePaths()...)
@@ -211,7 +225,13 @@ func gitGlobalConfigPaths() []string {
 // working directory. `path = dotfiles/gitconfig` in ~/.gitconfig is ~/dotfiles,
 // and is as much an armed slot as the absolute spelling of the same thing.
 func gitGlobalIncludePaths() []string {
-	out, err := exec.Command("git", "config", "--global", "--includes", "--show-origin", "--null",
+	// Both scopes, since --system carries the same include machinery and
+	// GIT_CONFIG_SYSTEM can point it at a file the user can write.
+	return append(gitIncludePathsIn("--global"), gitIncludePathsIn("--system")...)
+}
+
+func gitIncludePathsIn(scope string) []string {
+	out, err := exec.Command("git", "config", scope, "--includes", "--show-origin", "--null",
 		"--get-regexp", `^include(if\..*)?\.path$`).Output()
 	if err != nil {
 		return nil
@@ -331,13 +351,20 @@ func gitRepoOwnedPaths() []string {
 		if err != nil {
 			continue
 		}
-		// A relative value is relative to the working tree or the working
-		// directory depending on the key — either way it is somewhere inside a
-		// repository, and a worktree cannot be placed inside one. Only an
-		// absolute value names somewhere else. core.fsmonitor's "true" and
-		// "false" fall out here too, being neither.
 		if p := expandGitPath(gitOutputPath(out)); filepath.IsAbs(p) {
 			paths = append(paths, p)
+		} else if p != "" {
+			// A relative value is not confined to the repository: git resolves
+			// core.hooksPath against the top of the working tree, and "../shared-
+			// hooks" leaves it from there. Resolved and guarded rather than
+			// dropped — the sibling it names is exactly the sort of path nothing
+			// has created yet, which is what a pattern can reach.
+			//
+			// core.fsmonitor's "true" and "false" resolve to directories inside
+			// the working tree, which a worktree cannot be placed in anyway.
+			if top, err := gitToplevel(); err == nil && top != "" {
+				paths = append(paths, filepath.Join(top, p))
+			}
 		}
 	}
 	return paths
