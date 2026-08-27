@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -182,6 +183,91 @@ func TestRepoPlacementPathRejectsTraversal(t *testing.T) {
 	// A ".." inside a segment is a legitimate host and must still resolve.
 	if _, err := repoPlacementPath(repoInfo{Host: "a..b", Owner: "o", Name: "r"}, "main"); err != nil {
 		t.Errorf("host %q should be allowed: %v", "a..b", err)
+	}
+}
+
+// TestRepoPlacementPathRejectsExpansion covers the other half of the traversal
+// problem: expandHome runs on the rendered path, so a value the URL supplied is
+// still expanded after "{.repo.Owner}" has been substituted into it. "$HOME" is
+// not a directory of that name, and neither the ".." check nor the repo_root
+// anchoring is looking at what it turns into.
+func TestRepoPlacementPathRejectsExpansion(t *testing.T) {
+	clean := repoInfo{Host: "github.com", Owner: "timvw", Name: "wt"}
+
+	// Deliberately somewhere the wtStateAtPath backstop will not recognise: the
+	// two guards catch the real exploit independently, and this one has to fail
+	// when the refusal below is removed, not shrug because the other caught it.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), ".config"))
+
+	refused := []struct {
+		what string
+		info repoInfo
+	}{
+		{"$ in the owner", repoInfo{Host: "github.com", Owner: "$HOME/.config", Name: "wt"}},
+		{"$ in the host", repoInfo{Host: "${HOME}", Owner: "o", Name: "r"}},
+		{"$ in the name", repoInfo{Host: "github.com", Owner: "o", Name: "$HOME"}},
+		{"% in the owner", repoInfo{Host: "github.com", Owner: "%APPDATA%", Name: "wt"}},
+		{"a leading ~ in the owner", repoInfo{Host: "github.com", Owner: "~/.config", Name: "wt"}},
+	}
+	for _, tt := range refused {
+		t.Run(tt.what, func(t *testing.T) {
+			// The pattern that makes it reachable: without {.repoRoot} the
+			// rendered path is relative, and an expansion to an absolute one
+			// then walks past the anchoring too.
+			withCloneConfig(t, "{.repo.Owner}/{.repo.Name}")
+			if path, err := repoPlacementPath(tt.info, "main"); err == nil {
+				t.Fatalf("repoPlacementPath() = %q, want an error: the URL chose where that expands to", path)
+			}
+		})
+	}
+
+	t.Run("the branch too", func(t *testing.T) {
+		withCloneConfig(t, defaultRepoPattern)
+		if _, err := repoPlacementPath(clean, "$HOME"); err == nil {
+			t.Error("expected an error for a default branch containing \"$\", got nil")
+		}
+	})
+
+	t.Run("a ~ that is not leading is a directory name", func(t *testing.T) {
+		// Only a leading ~ expands, so refusing every one of them would refuse
+		// paths that are merely oddly named.
+		root := withCloneConfig(t, defaultRepoPattern)
+		got, err := repoPlacementPath(repoInfo{Host: "github.com", Owner: "a/~/b", Name: "wt"}, "main")
+		if err != nil {
+			t.Fatalf("repoPlacementPath() error = %v, want a path", err)
+		}
+		if want := filepath.Join(root, "github.com", "a", "~", "b", "wt", "main"); got != want {
+			t.Errorf("repoPlacementPath() = %q, want %q", got, want)
+		}
+	})
+}
+
+// A clone writes a whole repository at once, so a destination on wt's own state
+// is the substitution renderWorktreePath refuses — the cloned config.toml and
+// trust.toml become the ones wt reads. Refused here whatever route reached it,
+// not only via the expansion above.
+func TestClonePlacementIsNeverOnWtsOwnState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	cfgDir := configDir()
+
+	origConfigFilePath, origSources := configFilePath, configSources
+	t.Cleanup(func() { configFilePath, configSources = origConfigFilePath, origSources })
+	configFilePath = filepath.Join(cfgDir, "config.toml")
+	configSources.RepoPattern = "config file"
+
+	withCloneConfig(t, "{.repoRoot}/{.repo.Name}")
+	reposRoot = cfgDir
+
+	path, err := repoPlacementPath(repoInfo{Host: "github.com", Owner: "evil", Name: "payload"}, "main")
+	if err == nil {
+		t.Fatalf("repoPlacementPath() = %q, want an error: the clone lands inside wt's config directory", path)
+	}
+	// repo_pattern is never read from a repository, so the refusal names the
+	// layer the user can go and change.
+	if !strings.Contains(err.Error(), "config file") {
+		t.Errorf("error does not say where the pattern came from:\n%v", err)
 	}
 }
 

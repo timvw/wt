@@ -71,10 +71,11 @@ Configuration and hooks
 - prompt-all re-confirms even approved and whitelisted hooks; trusted-only never prompts and is the CI choice
 - hooks_policy is never read from a repo-level .wt.toml; WT_HOOKS_APPROVE_ALL=1 skips the approval check (automation only), but does not override "off"/WT_HOOKS_DISABLED
 - A relative --config / WT_CONFIG is refused outright: it names a different file per directory, so the checkout supplies it (and "../wt-user.toml" reaches the superproject that vendored a submodule)
-- An absolute one naming a file inside the repo you are in is refused too, with a warning: read as your config it could whitelist itself via [trust]. The name need not be .wt.toml
+- An absolute one naming a file inside the repo you are in is refused too, with a warning: read as your config it could whitelist itself via [trust]. The name need not be .wt.toml, and the containment test is case folded — a differently-cased spelling of the repo's own directory opens the same committed file on macOS/Windows, and sameFile only knows about .wt.toml
 - Judged as written, not as resolved: a config symlinked from a dotfiles repo still applies while you stand in that repo (refusing it would move your worktrees). The one symlink refused targets the current repo's own .wt.toml, which would gain user-config scope
 - A repo's .wt.toml may set pattern, and an absolute pattern is not anchored in root — but wt refuses one landing on its own config dir, a dir containing it, or your config file: the checked-out files would BECOME config.toml and trust.toml, supplying the gate rather than passing it. Compared with symlinks resolved as far as each path exists and case folded (~/.config/WT is the same directory on macOS/Windows)
-- wt migrate skips the primary checkout when the origin URL does not resolve under ~/src: owner/name are parsed from the remote and filepath.Join cleans, so "x/../../.config" + "wt" reaches ~/.config/wt. wt clone already refuses ".." in host/owner/name the same way
+- wt migrate skips the primary checkout when the origin URL does not resolve under ~/src: owner/name are parsed from the remote and filepath.Join cleans, so "x/../../.config" + "wt" reaches ~/.config/wt
+- wt clone derives placement from URL fields, so host/owner/name/branch may not contain a ".." segment, a "$" or "%", or a leading "~": the rendered path is expanded, and "$HOME/.config" is not a directory name. The final destination is checked against wt's own state too. Every refusal points at the [dest] argument — an explicit destination is the user choosing the path
 - Non-interactive runs (scripts, CI, --format json) decline and report on stderr rather than failing the command
 
 Untracked file materialisation ([files])

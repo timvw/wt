@@ -40,6 +40,15 @@ func repoPlacementPath(info repoInfo, branch string) (string, error) {
 	// scp-like "../escape:owner/repo.git" parses "../escape" as the host. Refuse
 	// rather than write outside the configured layout. A ".." inside a segment
 	// ("a..b") is a legitimate host and stays allowed.
+	//
+	// The same four fields must also not carry the characters expandHome acts
+	// on, because it runs on the rendered path — after these values are in it.
+	// "$HOME" in an owner is not a directory named $HOME, it is the expansion
+	// that "https://evil.example/$HOME/.config/wt.git" was written to get: with
+	// a relative repo_pattern the clone lands on wt's own config directory, and
+	// what git checks out there becomes config.toml and trust.toml. Neither the
+	// ".." check above nor the repo_root anchoring below sees it, since the
+	// expansion happens after both. Verified: it did.
 	for _, v := range []struct{ what, value string }{
 		{"host", info.Host},
 		{"owner", info.Owner},
@@ -48,6 +57,9 @@ func repoPlacementPath(info repoInfo, branch string) (string, error) {
 	} {
 		if hasDotDotSegment(v.value) {
 			return "", fmt.Errorf("refusing to derive placement: %s %q contains a %q path segment; pass an explicit destination", v.what, v.value, "..")
+		}
+		if char := expansionMetachar(v.value); char != "" {
+			return "", fmt.Errorf("refusing to derive placement: %s %q contains %q, which expands to somewhere the URL chose rather than to a directory of that name; pass an explicit destination", v.what, v.value, char)
 		}
 	}
 
@@ -91,7 +103,50 @@ func repoPlacementPath(info repoInfo, branch string) (string, error) {
 	if !strings.Contains(pattern, "{.repoRoot}") && !filepath.IsAbs(path) {
 		path = filepath.Join(reposRoot, path)
 	}
-	return filepath.Clean(path), nil
+	path = filepath.Clean(path)
+
+	// Defence in depth: the refusals above cover the routes onto wt's own state
+	// that are known, this covers the destination whatever route reached it. A
+	// clone writes a whole repository at once, so landing here is the same
+	// substitution renderWorktreePath refuses — see wtStateAtPath.
+	if owned := wtStateAtPath(path); owned != "" {
+		return "", fmt.Errorf(
+			"this clone would land at %s, which is %s.\n"+
+				"The files cloned there would become wt's own config file and approval store,\n"+
+				"which is what decides whether any repository's hooks run.\n"+
+				"Change the pattern — it currently comes from %s — or pass an explicit destination",
+			path, owned, repoPatternSourceLabel())
+	}
+	return path, nil
+}
+
+// expansionMetachar returns the character in s that expandHome would act on, or
+// "" when there is none. "$" and "%" are refused on every platform, not only
+// where they expand: the same URL should be placed the same way everywhere, and
+// a repository whose name genuinely contains one is served by the explicit
+// destination the refusal points at. A "~" only expands leading, so only a
+// leading one is refused — "a/~/b" is a directory named "~".
+func expansionMetachar(s string) string {
+	switch {
+	case strings.Contains(s, "$"):
+		return "$"
+	case strings.Contains(s, "%"):
+		return "%"
+	case strings.HasPrefix(s, "~"):
+		return "~"
+	}
+	return ""
+}
+
+// repoPatternSourceLabel names the layer repo_pattern came from, so the refusal
+// above says whose setting to go and change. repo_pattern is never read from a
+// repository's .wt.toml, so this always names something of the user's; what the
+// clone source supplies is the value interpolated into it.
+func repoPatternSourceLabel() string {
+	if configSources.RepoPattern != "" {
+		return configSources.RepoPattern
+	}
+	return "the built-in default"
 }
 
 // hasDotDotSegment reports whether s contains a ".." path segment under either

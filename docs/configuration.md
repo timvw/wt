@@ -348,6 +348,19 @@ repo-level `.wt.toml`: `wt clone` targets a repository other than the one you
 are standing in, so letting that repo's config redirect the destination (or run
 clone hooks) would be wrong.
 
+The pattern is yours, but the values substituted into it come from the URL you
+pasted, so `wt clone` refuses one that tries to choose the destination itself.
+A `..` segment in the host, owner, repository name or default branch is
+rejected — `https://host/../../tmp/pwn.git` parses to owner `../../tmp`, and an
+scp-like `../escape:owner/repo.git` puts it in the host. So is a `$` or `%`
+anywhere in those four, or a leading `~`: the rendered path is expanded, so
+`https://evil.example/$HOME/.config/wt.git` is not a directory called `$HOME`
+but wt's own config directory, and a repository cloned there would supply the
+`config.toml` and `trust.toml` that decide whether hooks run. As a backstop the
+final destination is refused if it lands on that directory or your config file
+however it got there. All of these say to pass an explicit destination, which
+is you choosing the path rather than the URL.
+
 ### Grouping clones ("categories")
 
 There is no built-in notion of work/personal/oss. If you want that grouping,
