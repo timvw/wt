@@ -82,7 +82,7 @@ Two differences from the global config file:
 `pattern` **is** read from `.wt.toml`, and one that renders to an absolute path
 is not anchored in your `root` at all. That is deliberate — a project may have a
 layout in mind — but it means the repository chooses the directory
-`git worktree add` writes into. There are two it may not choose: `wt`
+`git worktree add` writes into. There are three it may not choose: `wt`
 refuses a pattern landing on its own config directory, on a directory that
 contains it, or on your config file — compared with symlinks resolved as far as
 each path exists, without regard to case, since `~/.config/WT` is that same
@@ -113,6 +113,30 @@ name — a branch checked out over `~/.config/git` supplies git's config and a
 included, runs what is in it. Nothing was approved and nothing was prompted for,
 and like `trust.toml` it applies in every repository afterwards rather than only
 in that one.
+
+The files that configuration pulls in count as part of it. git ignores an
+`[include]` or `[includeIf]` whose file is not there rather than complaining, so
+a `path = ~/dotfiles/gitconfig` on a machine where you have not cloned your
+dotfiles yet is an armed slot, not a broken setting — a pattern rendering onto
+`~/dotfiles` fills it, and every git command afterwards reads what the repository
+committed. `wt` guards the files those rules name, without evaluating an
+`includeIf`'s condition: whether the file is read *here* is not the question, it
+is read in whichever repository matches, and the placement is what puts it there.
+
+The third is the repository's own git directory, and `core.hooksPath` where that
+points somewhere else. `git worktree add` will check out into an existing
+directory as long as it is empty, and `.git/hooks` is empty on any clone made
+with no init template — so a branch whose tree is one executable `post-checkout`
+file, placed there, is run by the very next `git worktree add`, `wt`'s own
+included. That is the shortest path from a committed `pattern` to arbitrary code,
+and it never touches the approval gate at all.
+
+One thing `wt` cannot guard: a **relative** `GIT_CONFIG_GLOBAL`. git resolves it
+against the working directory, so it names a different file in every repository —
+including one a repository committed, holding `core.hooksPath`. That file is read
+the moment any git command runs there, whatever `wt` does; there is no placement
+to refuse, because nothing needs placing. `wt` says so on stderr and otherwise
+guards the default locations. Set it to an absolute path.
 
 That is where the guard stops, and it stops on purpose: it covers `wt`'s
 configuration and the configuration of the program `wt` drives. An absolute

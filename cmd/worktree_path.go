@@ -3,9 +3,11 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/timvw/wt/internal/tmpl"
 )
@@ -133,12 +135,14 @@ const gitConfigIsWhatRuns = "where git keeps the configuration it applies to eve
 // user's business — see docs/configuration.md.
 func gitGlobalConfigPaths() []string {
 	var paths []string
-	// GIT_CONFIG_GLOBAL replaces both of the below when set, but it is read from
-	// the environment wt was started in, so an empty or relative one is not
-	// something to guess at: only an absolute path names a file to protect, and
-	// the defaults are listed anyway in case it is ignored.
+	// GIT_CONFIG_GLOBAL replaces both of the below when set. Only an absolute
+	// value names a file to protect; the defaults are listed anyway, in case it
+	// is ignored. A relative one is a hole wt cannot plug and did not open — see
+	// warnRelativeGitConfigGlobal.
 	if p := os.Getenv("GIT_CONFIG_GLOBAL"); filepath.IsAbs(p) {
 		paths = append(paths, p)
+	} else if strings.TrimSpace(p) != "" {
+		warnRelativeGitConfigGlobal(p)
 	}
 	home, err := os.UserHomeDir()
 	if err == nil && filepath.IsAbs(home) {
@@ -148,13 +152,110 @@ func gitGlobalConfigPaths() []string {
 	// ~/.config/git plants a committed config there just as well, which is the
 	// same reason wt guards its own config directory rather than only its file.
 	xdg := os.Getenv("XDG_CONFIG_HOME")
-	if !filepath.IsAbs(xdg) {
-		if err != nil || !filepath.IsAbs(home) {
-			return paths
-		}
-		xdg = filepath.Join(home, ".config")
+	if filepath.IsAbs(xdg) {
+		paths = append(paths, filepath.Join(xdg, "git"))
+	} else if err == nil && filepath.IsAbs(home) {
+		paths = append(paths, filepath.Join(home, ".config", "git"))
 	}
-	return append(paths, filepath.Join(xdg, "git"))
+	return append(paths, gitGlobalIncludePaths()...)
+}
+
+// gitGlobalIncludePaths names the files git's global configuration pulls in by
+// [include] and [includeIf].
+//
+// An included file is git's global configuration, spelled indirectly — and git
+// ignores an include whose file is not there rather than complaining, so a
+// `path = ~/dotfiles/gitconfig` on a machine where the dotfiles have not been
+// cloned is an armed slot rather than a broken setting. A repository whose
+// pattern renders onto ~/dotfiles fills it, and every git command afterwards
+// reads what it committed. Guarding ~/.gitconfig and leaving what it includes
+// open would be guarding the doorway and not the door.
+//
+// The conditions on an [includeIf] are not evaluated. Whether the file is read
+// in THIS repository is not the question — it is read in whichever repository
+// matches, and the placement is what puts the file there.
+//
+// Read from git rather than parsed here: the values are wanted before the files
+// exist, and `git config --global` reports them either way.
+func gitGlobalIncludePaths() []string {
+	out, err := exec.Command("git", "config", "--global", "--null",
+		"--get-regexp", `^include(if\..*)?\.path$`).Output()
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for _, record := range strings.Split(string(out), "\x00") {
+		_, value, hasValue := strings.Cut(record, "\n")
+		if !hasValue {
+			continue
+		}
+		// git resolves "~" here and takes a relative path against the config
+		// file holding it. wt only guards what it can name from here, which is
+		// the absolute ones — a relative include is a different file per config
+		// file, and guessing which would be worse than saying nothing.
+		if expanded := expandTilde(value); filepath.IsAbs(expanded) {
+			paths = append(paths, expanded)
+		}
+	}
+	return paths
+}
+
+// relativeGitConfigGlobalWarning keeps the notice to once per process.
+var relativeGitConfigGlobalWarning sync.Once
+
+// warnRelativeGitConfigGlobal says out loud that this PR's promise does not hold
+// for this environment.
+//
+// git takes GIT_CONFIG_GLOBAL relative to the working directory, so a value like
+// "gitconfig" means a different file in every repository — including one a
+// repository committed, holding core.hooksPath. wt cannot close that: the file
+// is read the moment any git command runs there, whatever wt does or refuses to
+// do, and nothing wt does created it. But "nothing runs until you approve it" is
+// silently untrue on such a machine, and the only wrong answer is to keep quiet.
+func warnRelativeGitConfigGlobal(value string) {
+	relativeGitConfigGlobalWarning.Do(func() {
+		fmt.Fprintf(os.Stderr,
+			"⚠ GIT_CONFIG_GLOBAL is set to %q, which is a relative path.\n"+
+				"  git resolves it per directory, so a repository that commits a file by that name\n"+
+				"  supplies your global git config — including core.hooksPath, which wt cannot gate.\n"+
+				"  Set it to an absolute path.\n\n",
+			value)
+	})
+}
+
+// gitHookDirIsWhatRuns explains a placement onto the repository's own git
+// directory. Phrased to read after "which is", like the rest of the owned table.
+const gitHookDirIsWhatRuns = "inside this repository's own git directory, where git keeps the hooks " +
+	"it runs for it — a worktree there is the repository writing its own .git"
+
+// gitRepoOwnedPaths names the places the repository wt is standing in gets its
+// hooks run from.
+//
+// `git worktree add` will check out into an existing directory as long as it is
+// empty, and .git/hooks is empty on any clone made with no init template. A
+// branch whose tree is a post-checkout file, placed there, is run by the very
+// next `git worktree add` — wt's own — with the approval gate never consulted.
+// Verified rather than reasoned about; it takes two commands.
+//
+// core.hooksPath for the same reason one step further out: it is where git will
+// look instead, so a value naming a directory that does not exist yet is the
+// same armed slot as an [include] pointing at absent dotfiles.
+func gitRepoOwnedPaths() []string {
+	var paths []string
+	if dir, err := gitCommonDir(); err == nil && filepath.IsAbs(dir) {
+		paths = append(paths, dir)
+	}
+	out, err := exec.Command("git", "config", "--get", "core.hooksPath").Output()
+	if err != nil {
+		return paths
+	}
+	// Relative to the top of the working tree, per git — which is the
+	// repository's own directory, already covered by refusing to place a
+	// worktree inside another. Only an absolute value names somewhere else.
+	if p := expandTilde(strings.TrimSpace(string(out))); filepath.IsAbs(p) {
+		paths = append(paths, p)
+	}
+	return paths
 }
 
 func wtStateAtPath(path string) string {
@@ -164,6 +265,9 @@ func wtStateAtPath(path string) string {
 	}
 	for _, p := range gitGlobalConfigPaths() {
 		owned = append(owned, struct{ path, what string }{p, gitConfigIsWhatRuns})
+	}
+	for _, p := range gitRepoOwnedPaths() {
+		owned = append(owned, struct{ path, what string }{p, gitHookDirIsWhatRuns})
 	}
 	path, ok := canonicalExistingPath(path)
 	if !ok {

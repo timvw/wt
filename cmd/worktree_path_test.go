@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -488,10 +489,106 @@ func TestGitConfigGlobalIsGuardedWhenSet(t *testing.T) {
 	if owned := wtStateAtPath(elsewhere); owned == "" {
 		t.Errorf("wtStateAtPath(%q) = \"\", want a refusal: GIT_CONFIG_GLOBAL names git's global config", elsewhere)
 	}
-	// A relative one names a different file per working directory, so git's own
-	// handling of it is not something to guess at — the defaults still stand.
+	// A relative one is resolved by git against the working directory, so it
+	// names a different file in every repository — including one a repository
+	// committed. wt cannot guard a path that moves, and it did not open the
+	// hole: the file is read the moment any git command runs there. It names no
+	// path to protect, the defaults still stand, and the user is told.
+	relativeGitConfigGlobalWarning = sync.Once{}
+	t.Cleanup(func() { relativeGitConfigGlobalWarning = sync.Once{} })
+	stderr := captureStderr(t)
 	t.Setenv("GIT_CONFIG_GLOBAL", "gitconfig")
 	if owned := wtStateAtPath(filepath.Join(home, ".gitconfig")); owned == "" {
 		t.Error(`wtStateAtPath(~/.gitconfig) = "", want a refusal even with a relative GIT_CONFIG_GLOBAL`)
+	}
+	if got := stderr(); !strings.Contains(got, "GIT_CONFIG_GLOBAL") {
+		t.Errorf("nothing said about a relative GIT_CONFIG_GLOBAL; got %q.\n"+
+			"wt cannot close that hole, so the one thing it must not do is imply the gate holds", got)
+	}
+}
+
+// TestWorktreeMayNotBePlacedInTheRepositorysOwnGitDir: .git/hooks is empty on a
+// clone made with no init template, `git worktree add` checks out into an empty
+// directory, and git runs what it finds there on the very next worktree add.
+// A branch whose tree is one executable post-checkout file is then arbitrary
+// code, with the approval gate never consulted.
+func TestWorktreeMayNotBePlacedInTheRepositorysOwnGitDir(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	t.Chdir(repo)
+
+	for _, path := range []string{
+		filepath.Join(repo, ".git", "hooks"),
+		filepath.Join(repo, ".git"),
+		filepath.Join(repo, ".git", "config"),
+	} {
+		if owned := wtStateAtPath(path); owned == "" {
+			t.Errorf("wtStateAtPath(%q) = \"\", want a refusal: a worktree there is the repository "+
+				"writing its own .git, and git runs what lands in hooks/", path)
+		}
+	}
+
+	// The repository's working tree is where worktrees legitimately go.
+	if owned := wtStateAtPath(filepath.Join(repo, "sub")); owned != "" {
+		t.Errorf("wtStateAtPath(%q/sub) = %q, want \"\"", repo, owned)
+	}
+}
+
+// TestCoreHooksPathIsGuardedWhereItPointsElsewhere: core.hooksPath is where git
+// will look instead of .git/hooks, so a value naming a directory that does not
+// exist yet is the same armed slot as an absent [include].
+func TestCoreHooksPathIsGuardedWhereItPointsElsewhere(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	shared := filepath.Join(t.TempDir(), "githooks")
+	runGit(t, repo, "config", "core.hooksPath", shared)
+	t.Chdir(repo)
+
+	if owned := wtStateAtPath(shared); owned == "" {
+		t.Errorf("wtStateAtPath(%q) = \"\", want a refusal: core.hooksPath names it, so a branch "+
+			"checked out there is what git runs", shared)
+	}
+}
+
+// TestGitConfigIncludesAreGuarded: git ignores an [include] whose file is not
+// there rather than complaining, so a path into dotfiles that have not been
+// cloned is an armed slot. Filling it is supplying git's global config.
+func TestGitConfigIncludesAreGuarded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	// Unset, not empty: git reads an empty GIT_CONFIG_GLOBAL as "there is no
+	// global config" and would report no includes at all. t.Setenv registers the
+	// restore either way.
+	t.Setenv("GIT_CONFIG_GLOBAL", "")
+	if err := os.Unsetenv("GIT_CONFIG_GLOBAL"); err != nil {
+		t.Fatal(err)
+	}
+
+	dotfiles := filepath.Join(home, "dotfiles")
+	config := "[include]\n\tpath = " + filepath.ToSlash(filepath.Join(dotfiles, "gitconfig")) + "\n" +
+		"[includeIf \"gitdir:~/src/acme/\"]\n\tpath = " +
+		filepath.ToSlash(filepath.Join(home, "work", "acme.inc")) + "\n"
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{
+		filepath.Join(dotfiles, "gitconfig"),
+		// Both directions: a worktree AT ~/dotfiles plants the gitconfig under it.
+		dotfiles,
+		// An includeIf is included in whichever repository matches its condition,
+		// which is not a reason to leave the file it names open here.
+		filepath.Join(home, "work", "acme.inc"),
+	} {
+		if owned := wtStateAtPath(path); owned == "" {
+			t.Errorf("wtStateAtPath(%q) = \"\", want a refusal: ~/.gitconfig includes it, so a "+
+				"branch checked out there is read as git's global config", path)
+		}
+	}
+
+	if owned := wtStateAtPath(filepath.Join(home, "src")); owned != "" {
+		t.Errorf("wtStateAtPath(~/src) = %q, want \"\"", owned)
 	}
 }
