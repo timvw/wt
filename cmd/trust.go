@@ -385,32 +385,42 @@ func gitCommonDir() (string, error) {
 // belongs to. -z arrived in git 2.36; older git gets the line-based read, which
 // is why the caller does not let an unconfirmed identity match a [trust] rule.
 func worktreeRegistered(commonDir, top string) bool {
-	args := []string{"--git-dir", commonDir, "worktree", "list", "--porcelain", "-z"}
-	if out, err := exec.Command("git", args...).Output(); err == nil {
-		for _, field := range strings.Split(string(out), "\x00") {
-			// No trimming: with -z the field is exact, and leading or trailing
-			// whitespace is as much a part of a directory name as any letter.
-			if path, ok := strings.CutPrefix(field, "worktree "); ok && canonicalPath(path) == top {
-				return true
-			}
-		}
-		return false
-	}
-
-	out, err := exec.Command("git", args[:len(args)-1]...).Output()
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		path, ok := strings.CutPrefix(strings.TrimSpace(line), "worktree ")
-		if !ok {
-			continue
-		}
-		if canonicalPath(path) == top {
+	for _, path := range gitWorktreePaths(commonDir) {
+		if path == top {
 			return true
 		}
 	}
 	return false
+}
+
+// gitWorktreePaths lists the working trees registered for a repository, each
+// canonicalised. Nil when git could not be asked, which every caller reads as
+// "wt could not confirm" rather than as "there are none".
+func gitWorktreePaths(commonDir string) []string {
+	args := []string{"--git-dir", commonDir, "worktree", "list", "--porcelain", "-z"}
+	if out, err := exec.Command("git", args...).Output(); err == nil {
+		// No trimming: with -z each field is exact, and leading or trailing
+		// whitespace is as much a part of a directory name as any letter.
+		return worktreePathFields(strings.Split(string(out), "\x00"), false)
+	}
+	out, err := exec.Command("git", args[:len(args)-1]...).Output()
+	if err != nil {
+		return nil
+	}
+	return worktreePathFields(strings.Split(string(out), "\n"), true)
+}
+
+func worktreePathFields(fields []string, trim bool) []string {
+	var paths []string
+	for _, field := range fields {
+		if trim {
+			field = strings.TrimSpace(field)
+		}
+		if path, ok := strings.CutPrefix(field, "worktree "); ok {
+			paths = append(paths, canonicalPath(path))
+		}
+	}
+	return paths
 }
 
 // canonicalPath resolves symlinks so two spellings of the same directory
@@ -722,23 +732,34 @@ func hasPathPrefix(path, prefix string) bool {
 	return strings.HasPrefix(path, prefix)
 }
 
-// samePath and mayBeSamePath are the two ways this package asks whether two
-// paths name one directory. Which one to reach for is decided by what the
-// answer is allowed to get wrong.
+// scopedUnder and mayBeScopedUnder are the two ways this package asks whether
+// an approval belongs to a repository at a path. Which one to reach for is
+// decided by what the answer is allowed to get wrong.
 //
-// samePath is the strict one, and the only one fit to grant anything: on a
+// At or under, not equal to: a repository's own scope is its .git, but a
+// submodule's is <repo>/.git/modules/<name>, and a record pinned there answers
+// for commands that run when the superproject is checked out. Asking only about
+// the .git itself would let a submodule's approval survive the repository it
+// belongs to.
+//
+// scopedUnder is the strict one, and the only one fit to grant anything: on a
 // case-sensitive filesystem ~/src/Mine and ~/src/mine are two directories, and
-// a rule or an approval for one is not a rule or an approval for the other.
+// an approval for one is not an approval for the other.
 //
-// mayBeSamePath folds case, and on Windows the trailing dots and spaces Win32
-// drops from every component — the folds a filesystem applies to a path that
-// nothing has been created at yet, before it settles which directory the name
-// reaches. Fit only where the looser answer refuses or revokes: over-matching
-// there costs an approval the user can give again, while under-matching lets a
-// name that compares equal to nothing land on a directory something already
-// covers.
-func samePath(a, b string) bool { return a == b }
+// mayBeScopedUnder folds case, and on Windows the trailing dots and spaces
+// Win32 drops from every component — the folds a filesystem applies to a path
+// that nothing has been created at yet, before it settles which directory the
+// name reaches. Fit only where the looser answer refuses or revokes:
+// over-matching there costs an approval the user can give again, while
+// under-matching lets a name that compares equal to nothing land on a directory
+// something already covers.
+func scopedUnder(scope, root string) bool { return hasPathPrefix(scope, root) }
 
+func mayBeScopedUnder(scope, root string) bool { return hasPathPrefixFold(scope, root) }
+
+// mayBeSamePath is the same fold applied to two paths that name one directory
+// rather than one containing the other — for a [trust] rule naming a single
+// repository, where "under" would silently widen the rule to a tree.
 func mayBeSamePath(a, b string) bool { return foldPath(a) == foldPath(b) }
 
 // dropTrustRecordsAt discards every approval scoped to a repository at path and
@@ -754,7 +775,10 @@ func mayBeSamePath(a, b string) bool { return foldPath(a) == foldPath(b) }
 // likely to have approved there once ("make setup") to match a record nobody
 // wrote for them.
 func dropTrustRecordsAt(path string) (int, error) {
-	want, ok := canonicalExistingPath(filepath.Join(path, ".git"))
+	// The whole directory, not just its .git: everything at or under an empty
+	// path belongs to whatever used to be there, including the scopes of its
+	// submodules and of a bare repository kept at the path itself.
+	want, ok := canonicalExistingPath(path)
 	if !ok {
 		return 0, fmt.Errorf(
 			"%s is reached through symlinks wt cannot follow to an end, so it cannot tell which hook\n"+
@@ -779,7 +803,7 @@ func dropTrustRecordsAt(path string) (int, error) {
 		// A user-config approval is not pinned to a path, so no path can free
 		// it — and a record wt cannot resolve is not evidence about this path.
 		if rec.Scope != "" && rec.Scope != trustScopeUser {
-			if got, ok := canonicalExistingPath(rec.Scope); ok && mayBeSamePath(got, want) {
+			if got, ok := canonicalExistingPath(rec.Scope); ok && mayBeScopedUnder(got, want) {
 				continue
 			}
 		}

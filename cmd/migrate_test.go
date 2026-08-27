@@ -514,18 +514,22 @@ func TestApprovedHashesAtMatchesLooselyOnlyWhenAskedTo(t *testing.T) {
 	base := t.TempDir()
 	store := trustStore{Trusted: []trustRecord{
 		{Scope: filepath.Join(base, "acme", "tool", ".git"), SHA256: "abc"},
+		// A submodule's scope sits beneath the repository's .git rather than at
+		// it, and its hooks run when the superproject is checked out — so it is
+		// as much a command set waiting at the path as the repository's own.
+		{Scope: filepath.Join(base, "acme", "tool", ".git", "modules", "dep"), SHA256: "sub"},
 	}}
 	spelledDifferently := filepath.Join(base, "acme", "Tool")
 
-	loose, ok := approvedHashesAt(store, spelledDifferently, mayBeSamePath)
-	if !ok || !loose["abc"] {
-		t.Errorf("approvedHashesAt(%s, mayBeSamePath) = %v, %v; a destination that may be the "+
+	loose, ok := approvedHashesAt(store, spelledDifferently, mayBeScopedUnder)
+	if !ok || !loose["abc"] || !loose["sub"] {
+		t.Errorf("approvedHashesAt(%s, mayBeScopedUnder) = %v, %v; a destination that may be the "+
 			"approved directory has to count as one", spelledDifferently, loose, ok)
 	}
 
-	strict, ok := approvedHashesAt(store, spelledDifferently, samePath)
-	if !ok || strict["abc"] {
-		t.Errorf("approvedHashesAt(%s, samePath) = %v, %v; the strict comparison must not fold, or "+
+	strict, ok := approvedHashesAt(store, spelledDifferently, scopedUnder)
+	if !ok || len(strict) > 0 {
+		t.Errorf("approvedHashesAt(%s, scopedUnder) = %v, %v; the strict comparison must not fold, or "+
 			"a source could be credited with an approval it does not hold and waive the refusal",
 			spelledDifferently, strict, ok)
 	}
@@ -546,9 +550,9 @@ func TestApprovedHashesAtSeesThroughAWin32PathAlias(t *testing.T) {
 	}}
 	alias := filepath.Join(base, "acme") + `\tool.`
 
-	waiting, ok := approvedHashesAt(store, alias, mayBeSamePath)
+	waiting, ok := approvedHashesAt(store, alias, mayBeScopedUnder)
 	if !ok || !waiting["abc"] {
-		t.Errorf("approvedHashesAt(%s, mayBeSamePath) = %v, %v; that path is created as %s, which "+
+		t.Errorf("approvedHashesAt(%s, mayBeScopedUnder) = %v, %v; that path is created as %s, which "+
 			"carries an approval this repository did not earn", alias, waiting, ok, filepath.Join(base, "acme", "tool"))
 	}
 }

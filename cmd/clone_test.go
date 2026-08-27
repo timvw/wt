@@ -339,12 +339,19 @@ func TestCloneDiscardsAnApprovalLeftAtTheDestination(t *testing.T) {
 	runGitCommand(t, source, "add", "-A")
 	runGitCommand(t, source, "commit", "-qm", "hooks")
 
-	// Three approvals: one left at the path being cloned into, and two that have
+	// Four approvals: two left at the path being cloned into, and two that have
 	// nothing to do with it. Removing the lot would be its own bug.
+	//
+	// The second stale one is a submodule's. A submodule is its own repository
+	// with its own hooks, and its scope sits beneath the superproject's .git
+	// rather than at it — so an approval pinned there survives an exact-match
+	// prune, and a new repository shipping a submodule of the same name inherits
+	// it as soon as the submodule is initialised.
 	dest := filepath.Join(home, "src", "acme", "tool")
 	elsewhere := filepath.Join(home, "src", "acme", "other")
 	if err := saveTrustStore(trustStore{Trusted: []trustRecord{
 		{Scope: filepath.Join(dest, ".git"), Source: hookSourceRepoConfig, SHA256: "stale"},
+		{Scope: filepath.Join(dest, ".git", "modules", "dep"), Source: hookSourceRepoConfig, SHA256: "stale-submodule"},
 		{Scope: filepath.Join(elsewhere, ".git"), Source: hookSourceRepoConfig, SHA256: "unrelated"},
 		{Scope: trustScopeUser, Source: hookSourceConfigFile, SHA256: "mine"},
 	}}); err != nil {

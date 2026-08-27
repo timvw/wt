@@ -112,10 +112,58 @@ func renderWorktreePath(info repoInfo, branch string) (string, error) {
 const unfollowableChain = "reached through symlinks wt cannot follow to an end, " +
 	"so it cannot tell whether that is its own config directory"
 
+// gitConfigIsWhatRuns explains the second thing a worktree may not be placed on
+// top of. Phrased to read after "which is", like the rest of the owned table.
+const gitConfigIsWhatRuns = "where git keeps the configuration it applies to every repository, " +
+	"which names programs git runs on its own (core.hooksPath, credential.helper, and the rest)"
+
+// gitGlobalConfigPaths names the files and directories git reads as its global
+// configuration.
+//
+// wt's gate is about hook commands, and core.hooksPath is a hook command by
+// another name: a branch checked out over ~/.config/git supplies git's own
+// config and a hooks directory alongside it, and the next `git worktree add` —
+// wt's own, or any other — runs what is in it. Nothing was approved and nothing
+// was prompted for, and like the trust store it fires in every repository
+// afterwards rather than only in this one.
+//
+// The same reasoning as wt's own config directory, and the same limit: this
+// covers the configuration of the program wt drives, not every program's
+// dotfiles. A worktree pattern rendering an absolute path is otherwise the
+// user's business — see docs/configuration.md.
+func gitGlobalConfigPaths() []string {
+	var paths []string
+	// GIT_CONFIG_GLOBAL replaces both of the below when set, but it is read from
+	// the environment wt was started in, so an empty or relative one is not
+	// something to guess at: only an absolute path names a file to protect, and
+	// the defaults are listed anyway in case it is ignored.
+	if p := os.Getenv("GIT_CONFIG_GLOBAL"); filepath.IsAbs(p) {
+		paths = append(paths, p)
+	}
+	home, err := os.UserHomeDir()
+	if err == nil && filepath.IsAbs(home) {
+		paths = append(paths, filepath.Join(home, ".gitconfig"))
+	}
+	// The directory, not just the config file in it: a worktree AT
+	// ~/.config/git plants a committed config there just as well, which is the
+	// same reason wt guards its own config directory rather than only its file.
+	xdg := os.Getenv("XDG_CONFIG_HOME")
+	if !filepath.IsAbs(xdg) {
+		if err != nil || !filepath.IsAbs(home) {
+			return paths
+		}
+		xdg = filepath.Join(home, ".config")
+	}
+	return append(paths, filepath.Join(xdg, "git"))
+}
+
 func wtStateAtPath(path string) string {
 	owned := []struct{ path, what string }{
 		{configDir(), "where wt keeps its config file and its record of approved hooks"},
 		{configFilePath, "your config file"},
+	}
+	for _, p := range gitGlobalConfigPaths() {
+		owned = append(owned, struct{ path, what string }{p, gitConfigIsWhatRuns})
 	}
 	path, ok := canonicalExistingPath(path)
 	if !ok {

@@ -1644,3 +1644,70 @@ sha256 = "whatever a later wt puts here"
 		t.Errorf("the newer store was rewritten:\n%s", after)
 	}
 }
+
+// TestRepoConfigIsNotYourConfigInAnyOfItsWorktrees: the file a repository
+// commits is its file at every path it is checked out to, and wt's whole job is
+// moving you between those paths. A WT_CONFIG naming the main checkout's
+// .wt.toml was refused while you stood in the main checkout and then honoured
+// the moment you were somewhere else — which is the direction that reads a
+// committed [trust] table as yours and runs the repository's hooks.
+func TestRepoConfigIsNotYourConfigInAnyOfItsWorktrees(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping git integration test in short mode")
+	}
+
+	savedHooks, savedSources, savedPolicy := worktreeHooks, hookSources, hooksPolicy
+	savedPrefix, savedExact := trustPrefixes, trustExact
+	t.Cleanup(func() {
+		worktreeHooks, hookSources, hooksPolicy = savedHooks, savedSources, savedPolicy
+		trustPrefixes, trustExact = savedPrefix, savedExact
+		loadWorktreeConfig()
+	})
+
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "xdg"))
+
+	mainCheckout := filepath.Join(tmpDir, "repo")
+	if err := os.MkdirAll(mainCheckout, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setupTestRepo(t, mainCheckout)
+
+	linked := filepath.Join(tmpDir, "worktrees", "feature")
+	if err := os.WriteFile(filepath.Join(mainCheckout, ".wt.toml"), []byte(`hooks_policy = "off"
+
+[trust]
+exact = ["`+filepath.ToSlash(linked)+`"]
+
+[hooks]
+post_create = ["theirs"]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, mainCheckout, "add", "-A")
+	runGitCommand(t, mainCheckout, "commit", "-qm", "policy")
+	runGitCommand(t, mainCheckout, "branch", "feature")
+	runGitCommand(t, mainCheckout, "worktree", "add", linked, "feature")
+
+	// Standing in the linked worktree, pointed at the file the *main* checkout
+	// supplies. Neither is inside the other, and they are two files on disk.
+	t.Chdir(linked)
+	t.Setenv("WT_CONFIG", filepath.Join(mainCheckout, ".wt.toml"))
+
+	stderr := captureStderr(t)
+	loadWorktreeConfig()
+	out := stderr()
+
+	if configFileFound {
+		t.Error("the main checkout's .wt.toml was read as the config file from a linked worktree")
+	}
+	if len(trustPrefixes) > 0 || len(trustExact) > 0 {
+		t.Errorf("the repository whitelisted its own worktree: prefix=%v exact=%v", trustPrefixes, trustExact)
+	}
+	if hooksPolicy != "" {
+		t.Errorf("the repository set hooks_policy = %q", hooksPolicy)
+	}
+	if !strings.Contains(out, ".wt.toml") {
+		t.Errorf("nothing said about ignoring it; the user would see settings vanish for no reason:\n%s", out)
+	}
+}

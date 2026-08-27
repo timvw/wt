@@ -590,11 +590,11 @@ func migrateTrustGain(from, to string) (string, error) {
 	// version of these hooks stand in for a different set waiting at the
 	// destination. What counts is a set the destination answers to and the
 	// current path does not.
-	waiting, ok := approvedHashesAt(store, to, mayBeSamePath)
+	waiting, ok := approvedHashesAt(store, to, mayBeScopedUnder)
 	if !ok {
 		return cannotTellReason(to), nil
 	}
-	held, ok := approvedHashesAt(store, from, samePath)
+	held, ok := approvedHashesAt(store, from, scopedUnder)
 	if !ok {
 		return cannotTellReason(from), nil
 	}
@@ -621,12 +621,12 @@ func cannotTellReason(path string) string {
 }
 
 // approvedHashesAt returns the command sets a primary checkout at path would
-// already be approved for, whether or not anything is there now. same decides
-// when a record's scope and this path are one directory; callers pick it to
-// suit which way their answer is safe to be wrong. The second result is false
-// when wt could not settle what the path names, which is not the same answer as
-// an empty set.
-func approvedHashesAt(store trustStore, path string, same func(a, b string) bool) (map[string]bool, bool) {
+// already be approved for, whether or not anything is there now — its own, and
+// those of the submodules scoped beneath its .git. under decides which records
+// belong to a repository there; callers pick it to suit which way their answer
+// is safe to be wrong. The second result is false when wt could not settle what
+// the path names, which is not the same answer as an empty set.
+func approvedHashesAt(store trustStore, path string, under func(scope, root string) bool) (map[string]bool, bool) {
 	want, ok := canonicalExistingPath(filepath.Join(path, ".git"))
 	if !ok {
 		return nil, false
@@ -638,7 +638,7 @@ func approvedHashesAt(store trustStore, path string, same func(a, b string) bool
 		}
 		// A record wt cannot resolve is not evidence about this path — and it is
 		// the attacker who needs a record to match, never to hide.
-		if got, ok := canonicalExistingPath(rec.Scope); ok && same(got, want) {
+		if got, ok := canonicalExistingPath(rec.Scope); ok && under(got, want) {
 			found[rec.SHA256] = true
 		}
 	}

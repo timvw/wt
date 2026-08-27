@@ -437,3 +437,61 @@ func mustCanonical(t *testing.T, path string) string {
 	}
 	return resolved
 }
+
+// TestWorktreeMayNotBePlacedOnGitsOwnConfig: wt's gate is about hook commands,
+// and core.hooksPath is a hook command under another name. A committed pattern
+// rendering onto ~/.config/git checks a branch out over git's global
+// configuration and a hooks directory beside it, and the next `git worktree
+// add` — wt's own — runs what is in it. Nothing is approved and nothing is
+// prompted for, and it fires in every repository afterwards.
+func TestWorktreeMayNotBePlacedOnGitsOwnConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("GIT_CONFIG_GLOBAL", "")
+
+	for _, path := range []string{
+		filepath.Join(home, ".config", "git"),
+		filepath.Join(home, ".config", "git", "hooks"),
+		// A worktree AT ~/.config plants a committed git/config underneath it
+		// just as well, which is why the containment runs both ways.
+		filepath.Join(home, ".config"),
+		filepath.Join(home, ".gitconfig"),
+		// os.Open is case-insensitive on macOS and Windows, and so is git.
+		filepath.Join(home, ".config", "GIT"),
+	} {
+		if owned := wtStateAtPath(path); owned == "" {
+			t.Errorf("wtStateAtPath(%q) = \"\", want a refusal: a branch checked out there supplies "+
+				"core.hooksPath and the programs it names", path)
+		}
+	}
+
+	// And an ordinary path is still an ordinary path.
+	if owned := wtStateAtPath(filepath.Join(home, ".config", "gitui")); owned != "" {
+		t.Errorf("wtStateAtPath(~/.config/gitui) = %q, want \"\": guarding git's config directory "+
+			"must not spread to every name that starts the same way", owned)
+	}
+}
+
+// TestGitConfigGlobalIsGuardedWhenSet: GIT_CONFIG_GLOBAL replaces the defaults,
+// so the file it names is the one that decides what git runs.
+func TestGitConfigGlobalIsGuardedWhenSet(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	elsewhere := filepath.Join(t.TempDir(), "gitconfig")
+	t.Setenv("GIT_CONFIG_GLOBAL", elsewhere)
+
+	if owned := wtStateAtPath(elsewhere); owned == "" {
+		t.Errorf("wtStateAtPath(%q) = \"\", want a refusal: GIT_CONFIG_GLOBAL names git's global config", elsewhere)
+	}
+	// A relative one names a different file per working directory, so git's own
+	// handling of it is not something to guess at — the defaults still stand.
+	t.Setenv("GIT_CONFIG_GLOBAL", "gitconfig")
+	if owned := wtStateAtPath(filepath.Join(home, ".gitconfig")); owned == "" {
+		t.Error(`wtStateAtPath(~/.gitconfig) = "", want a refusal even with a relative GIT_CONFIG_GLOBAL`)
+	}
+}

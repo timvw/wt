@@ -82,7 +82,7 @@ Two differences from the global config file:
 `pattern` **is** read from `.wt.toml`, and one that renders to an absolute path
 is not anchored in your `root` at all. That is deliberate — a project may have a
 layout in mind — but it means the repository chooses the directory
-`git worktree add` writes into. There is one directory it may not choose: `wt`
+`git worktree add` writes into. There are two it may not choose: `wt`
 refuses a pattern landing on its own config directory, on a directory that
 contains it, or on your config file — compared with symlinks resolved as far as
 each path exists, without regard to case, since `~/.config/WT` is that same
@@ -104,6 +104,27 @@ checked out there would *become*
 is the one layer hooks are not vetted from, and `trust.toml` is the record of
 what you approved. A branch carrying both would not slip a hook past the gate,
 it would supply the gate.
+
+The second is git's own global configuration: `~/.gitconfig`,
+`$XDG_CONFIG_HOME/git` (`~/.config/git` by default), and whatever
+`GIT_CONFIG_GLOBAL` names. `core.hooksPath` is a hook command under another
+name — a branch checked out over `~/.config/git` supplies git's config and a
+`hooks` directory beside it, and the next `git worktree add`, `wt`'s own
+included, runs what is in it. Nothing was approved and nothing was prompted for,
+and like `trust.toml` it applies in every repository afterwards rather than only
+in that one.
+
+That is where the guard stops, and it stops on purpose: it covers `wt`'s
+configuration and the configuration of the program `wt` drives. An absolute
+pattern may still render anywhere else in your home directory, which is the
+price of `pattern` being a project's to set — `git worktree add` will not write
+into a directory that already has anything in it, so what it reaches are paths
+nothing has created yet. If that trade is not one you want, set the pattern
+somewhere a repository cannot outrank: `git config wt.pattern` in the
+repository's own `.git/config`, which is read after `.wt.toml` and is not a file
+a clone can ship, or `WORKTREE_PATTERN` in your environment, which is read after
+everything. The config file will not do it — `.wt.toml` overrides it, which is
+the point of `.wt.toml`.
 
 ## Git config
 

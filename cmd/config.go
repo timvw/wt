@@ -667,6 +667,49 @@ func configFileInRepo(configPath, repoRoot string) bool {
 	return dirWithin(filepath.Dir(abs), root)
 }
 
+// configFileSuppliedByRepo reports whether the config file wt is about to read
+// is one the repository it is about to gate gets to write.
+//
+// repoRoot is the working tree wt is standing in, or "" when it is not in one.
+// Every other working tree of the same repository counts too — each holds the
+// repository's files at its own path, and a config file is refused for what
+// supplies it, not for which directory wt happens to have been run from.
+func configFileSuppliedByRepo(configPath, repoRoot string) bool {
+	if configPath == "" {
+		return false
+	}
+	for _, root := range repoWorkingTrees(repoRoot) {
+		if configFileInRepo(configPath, root) {
+			return true
+		}
+		if sameFile(configPath, filepath.Join(root, ".wt.toml")) {
+			return true
+		}
+	}
+	return false
+}
+
+// repoWorkingTrees returns the directories whose contents the repository wt is
+// standing in gets to choose.
+//
+// The working tree wt is in comes first and is always included, so a git that
+// cannot list anything leaves the guard no weaker than it was. The main
+// checkout is derived from the common git directory rather than listed, so it
+// is covered even then — it is the one a WT_CONFIG typed once and left in a
+// shell profile is most likely to name.
+func repoWorkingTrees(repoRoot string) []string {
+	var roots []string
+	if repoRoot != "" {
+		roots = append(roots, repoRoot)
+	}
+	commonDir, err := gitCommonDir()
+	if err != nil || commonDir == "" {
+		return roots
+	}
+	roots = append(roots, commonDir, filepath.Dir(commonDir))
+	return append(roots, gitWorktreePaths(commonDir)...)
+}
+
 // sameFile reports whether two paths name the same file on disk.
 //
 // Compared by identity rather than by name: a config path can be given relative
@@ -821,15 +864,20 @@ func loadWorktreeConfig() {
 	// an attack — WT_CONFIG=$PWD/.wt.toml — but reads the repository's file as
 	// yours just the same. The name is not the point: WT_CONFIG=wt-user.toml is
 	// a file a repository can commit as easily as .wt.toml.
-	case repoRootErr == nil && configFileInRepo(configFilePath, repoRoot):
-		warnRepoConfigIsNotYourConfig(configFilePath)
-
-	// And the same file reached from outside the repository — a config symlinked
-	// to a checked-in .wt.toml — which no comparison of names would catch. This
-	// one is about scope rather than about an attacker: .wt.toml is the file a
-	// repository configures wt with by convention, so reading it as your config
-	// too would hand a repo-owned file the user-config scope, where an approval
-	// covers every repository at once and hooks_policy is honoured.
+	//
+	// Asked of every working tree of the repository rather than only the one wt
+	// is standing in. A repository supplies the file in all of them, and wt's
+	// whole job is moving you between them: a WT_CONFIG naming the main
+	// checkout's .wt.toml would be refused there and then quietly honoured after
+	// 'wt checkout', which is the direction that runs the commands.
+	//
+	// The second test is the same file reached from outside the repository — a
+	// config symlinked to a checked-in .wt.toml — which no comparison of names
+	// would catch. That one is about scope rather than about an attacker:
+	// .wt.toml is the file a repository configures wt with by convention, so
+	// reading it as your config too would hand a repo-owned file the user-config
+	// scope, where an approval covers every repository at once and hooks_policy
+	// is honoured.
 	//
 	// Deliberately only .wt.toml, and deliberately not every file a symlink might
 	// resolve into. A config kept in a dotfiles repository and symlinked into
@@ -838,7 +886,7 @@ func loadWorktreeConfig() {
 	// somewhere else. Nothing is given away by allowing it, either — that file is
 	// your config in every other repository already, so a commit that turns it
 	// hostile has you regardless of what wt does inside the one it lives in.
-	case repoConfigPath != "" && sameFile(configFilePath, repoConfigPath):
+	case configFileSuppliedByRepo(configFilePath, repoRoot):
 		warnRepoConfigIsNotYourConfig(configFilePath)
 
 	default:
