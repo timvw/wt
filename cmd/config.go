@@ -546,13 +546,16 @@ const defaultConfigTemplate = `# wt configuration file
 # Pre-hooks abort on failure; post-hooks warn only.
 # Set WT_HOOKS_DISABLED=1 to skip all hooks.
 #
-# Hooks from a repository's committed .wt.toml are not run until you approve
-# them ('wt trust'). Hooks from THIS file are yours, so they run as-is unless
-# you ask for more:
-#   prompt-untrusted  (default) approve hooks that came from a repo's .wt.toml
-#   prompt-all        confirm every hook batch, whatever supplied it
-#   trusted-only      never prompt; skip anything not already approved
+# No hook runs until you approve it ('wt trust'), including the ones you write
+# in this file — an approval is what says a command is yours, and a file is not
+# evidence of that on its own. Approving is once per set of commands; editing a
+# command asks again.
+#   prompt-untrusted  (default) show anything not yet approved, and ask
+#   prompt-all        ask every time, even for hooks already approved
+#   trusted-only      never ask; skip anything not already approved (CI)
 #   off               run no hooks at all
+# To approve a whole tree ahead of time instead, see [trust] in
+# docs/configuration.md.
 # hooks_policy = "prompt-untrusted"
 # NOTE: Always quote path variables ("$WT_PATH") to handle spaces in paths.
 #
