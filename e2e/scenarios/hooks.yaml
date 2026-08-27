@@ -280,7 +280,10 @@ scenarios:
     steps:
       # The rule names the directory the test repo lives in. %s rather than an
       # expansion inside the format string: the hook body must stay literal.
-      - run: mkdir -p "$TEST_DIR/config" && printf '[trust]\nprefix = ["%s"]\n' "$TEST_DIR_NATIVE" > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN create whitelisted-hook-branch
+      # \047 is a single quote, making this a TOML *literal* string — on Windows
+      # TEST_DIR_NATIVE is a backslash path and "C:\Users\..." is not a valid
+      # basic string, since TOML reads \U and \t as escapes.
+      - run: mkdir -p "$TEST_DIR/config" && printf '[trust]\nprefix = [\047%s\047]\n' "$TEST_DIR_NATIVE" > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN create whitelisted-hook-branch
         expect:
           exit_code: 0
       - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/whitelisted-hook-branch/.repo-hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
