@@ -1279,3 +1279,43 @@ post_create = ["theirs"]
 		}
 	}
 }
+
+// TestNewerTrustStoreIsNotOverwritten: an unrecognised version is only safe to
+// read as "nothing approved" when it is older. A newer store means another wt
+// wrote it, and treating it as empty would delete its approvals on the next
+// write — on a machine where both versions are installed, every run undoing the
+// other's.
+func TestNewerTrustStoreIsNotOverwritten(t *testing.T) {
+	withIsolatedTrustStore(t)
+
+	path := trustFilePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("version = " + fmt.Sprint(trustStoreVersion+1) + `
+
+[[approved]]
+scope = "/some/repo/.git"
+sha256 = "whatever a later wt puts here"
+`)
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := loadTrustStore(); err == nil {
+		t.Fatal("a newer trust store was read as if this wt understood it")
+	}
+
+	// The write path goes through the read path, so refusing to read is what
+	// keeps the file intact.
+	if err := trustHookSet(hookTrust{scope: "/some/other/repo/.git", source: hookSourceRepoConfig, sha: "abc"}); err == nil {
+		t.Error("trustHookSet() wrote to a store it could not read")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, original) {
+		t.Errorf("the newer store was rewritten:\n%s", after)
+	}
+}

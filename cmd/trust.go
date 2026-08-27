@@ -112,12 +112,22 @@ func loadTrustStore() (trustStore, error) {
 	if _, err := toml.DecodeFile(path, &store); err != nil {
 		return trustStore{}, fmt.Errorf("failed to read trust store %s: %w", path, err)
 	}
-	// Records from another format are dropped rather than interpreted. Version 1
-	// pinned the sha256 of a .wt.toml's bytes; these pin the sha256 of a source's
-	// commands. Reading one as the other would compare unrelated hashes, so the
-	// only safe reading is "nothing here is approved" — said out loud, because
-	// re-approving with no explanation is the failure this file warns about
-	// below.
+	// A newer store is a different thing from an older one. Dropping its records
+	// would be read-only if wt only read; but the next 'wt trust' writes the
+	// store back, and it would go back in this version's format — quietly
+	// deleting approvals a newer wt made, on a machine where both are installed.
+	// Refuse instead, and leave the file alone.
+	if store.Version > trustStoreVersion {
+		return trustStore{}, fmt.Errorf(
+			"trust store %s is version %d, and this wt reads version %d; "+
+				"upgrade wt, or move that file aside to start over",
+			path, store.Version, trustStoreVersion)
+	}
+	// Older records are dropped rather than interpreted. Version 1 pinned the
+	// sha256 of a .wt.toml's bytes; these pin the sha256 of a source's commands.
+	// Reading one as the other would compare unrelated hashes, so the only safe
+	// reading is "nothing here is approved" — said out loud, because re-approving
+	// with no explanation is the failure this file warns about below.
 	if store.Version != trustStoreVersion {
 		warnStaleTrustStore(store.Version)
 		return trustStore{Version: trustStoreVersion}, nil
