@@ -149,8 +149,86 @@ func wtStateAtPath(path string) string {
 // which this does not, and neither ".config" nor "wt" has one — reaching that
 // would mean naming the user's home directory outright in a spelling they do not
 // use, rather than reading it from {.env.HOME}.
+//
+// And case is not the only spelling a filesystem folds. macOS firmlinks make
+// /Users/alice and /System/Volumes/Data/Users/alice one directory — same device,
+// same inode, and EvalSymlinks leaves both alone because neither is a symlink —
+// so "/System/Volumes/Data{.env.HOME}/.config/wt" is a one-line detour around
+// any comparison of names. A Linux bind mount aliases two paths the same way.
+// Where the filesystem can answer, ask it: identity for the deepest part of each
+// path that exists, names only for what is not there yet. Verified: it does.
 func samePathTree(a, b string) bool {
-	return hasPathPrefixFold(a, b) || hasPathPrefixFold(b, a)
+	if hasPathPrefixFold(a, b) || hasPathPrefixFold(b, a) {
+		return true
+	}
+
+	pa, aOK := splitAtExisting(a)
+	pb, bOK := splitAtExisting(b)
+	if !aOK || !bOK {
+		return false
+	}
+	if os.SameFile(pa.info, pb.info) {
+		// One directory, and both remainders are relative to it. Either being
+		// empty means that side is the directory the other hangs off.
+		return pa.tail == "" || pb.tail == "" ||
+			hasPathPrefixFold(pa.tail, pb.tail) || hasPathPrefixFold(pb.tail, pa.tail)
+	}
+	// The two can exist to different depths, so neither base need be the other.
+	// Only a path that exists in full can hold the other's base: if one's own
+	// existence stopped higher up, it stopped at a component the other does not
+	// have, and there they diverge rather than nest.
+	return (pa.tail == "" && dirWithin(pb.base, pa.base)) ||
+		(pb.tail == "" && dirWithin(pa.base, pb.base))
+}
+
+// pathParts is a path split where the filesystem stops: base is the deepest
+// ancestor that exists, so the OS can be asked which directory it is, and tail
+// is what below it is still only a name.
+type pathParts struct {
+	base string
+	info os.FileInfo
+	tail string
+}
+
+// splitAtExisting splits path at the deepest ancestor that exists.
+//
+// Something always does — a worktree is placed before it is created, and on a
+// fresh machine wt's config directory has not been made either, but the home
+// directory holding both is there. That is far enough down for identity to
+// settle which directory each side is really talking about.
+func splitAtExisting(path string) (pathParts, bool) {
+	path = filepath.Clean(path)
+	tail := ""
+	for {
+		if info, err := os.Stat(path); err == nil {
+			return pathParts{base: path, info: info, tail: tail}, true
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return pathParts{}, false
+		}
+		tail = filepath.Join(filepath.Base(path), tail)
+		path = parent
+	}
+}
+
+// dirWithin reports whether dir is root, or sits under it, asking the
+// filesystem which directory each ancestor is rather than what it is called.
+func dirWithin(dir, root string) bool {
+	target, err := os.Stat(root)
+	if err != nil {
+		return false
+	}
+	for p := filepath.Clean(dir); ; {
+		if info, err := os.Stat(p); err == nil && os.SameFile(info, target) {
+			return true
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return false
+		}
+		p = parent
+	}
 }
 
 // hasPathPrefixFold is hasPathPrefix without regard to case. See samePathTree

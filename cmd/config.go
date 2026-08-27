@@ -648,7 +648,18 @@ func configFileInRepo(configPath, repoRoot string) bool {
 	if err != nil {
 		return true
 	}
-	return hasPathPrefixFold(filepath.Clean(abs), filepath.Clean(root))
+	if hasPathPrefixFold(filepath.Clean(abs), filepath.Clean(root)) {
+		return true
+	}
+	// A name is not the only way to spell a directory. macOS firmlinks give the
+	// repository a second absolute path (/System/Volumes/Data/Users/alice/src/x
+	// is /Users/alice/src/x), a Linux bind mount does the same, and os.Open
+	// honours either — so the containment has to be settled by identity too.
+	//
+	// Deliberately the directories the file sits in, not the file: a config
+	// symlinked out to a dotfiles repository is the ordinary setup this stays
+	// lexical for, and following the link would be what refuses it.
+	return dirWithin(filepath.Dir(abs), root)
 }
 
 // sameFile reports whether two paths name the same file on disk.

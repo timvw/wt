@@ -85,8 +85,11 @@ layout in mind — but it means the repository chooses the directory
 `git worktree add` writes into. There is one directory it may not choose: `wt`
 refuses a pattern landing on its own config directory, on a directory that
 contains it, or on your config file — compared with symlinks resolved as far as
-each path exists, and without regard to case, since `~/.config/WT` is that same
-directory on macOS and Windows. The files checked out there would *become*
+each path exists, without regard to case, since `~/.config/WT` is that same
+directory on macOS and Windows, and by asking the filesystem which directory
+each path really is, since `/System/Volumes/Data/Users/you` is your home
+directory under a name that resolves to nothing. The files checked out there
+would *become*
 `config.toml` and `trust.toml`, and those are the gate itself — the config file
 is the one layer hooks are not vetted from, and `trust.toml` is the record of
 what you approved. A branch carrying both would not slip a hook past the gate,

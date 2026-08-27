@@ -117,6 +117,29 @@ func TestWorktreeIsNeverPlacedOnWtsOwnState(t *testing.T) {
 		}
 	})
 
+	t.Run("reached through a macOS firmlink", func(t *testing.T) {
+		// The alias no resolution step removes: /Users/alice and
+		// /System/Volumes/Data/Users/alice are one directory, and neither is a
+		// symlink, so EvalSymlinks returns both unchanged. Prefixing the
+		// committed pattern with the data volume was a one-line walk past a
+		// comparison of names.
+		if runtime.GOOS != "darwin" {
+			t.Skip("firmlinks are a macOS volume layout")
+		}
+		// Checked against the home directory rather than the config directory:
+		// neither ~/.config nor ~/.config/wt has been created here, which is the
+		// fresh machine the attack wants anyway.
+		alias := filepath.Join("/System/Volumes/Data", canonicalExistingPath(cfgDir))
+		if !sameDirectory(t, filepath.Join("/System/Volumes/Data", canonicalExistingPath(home)), home) {
+			t.Skipf("%s does not alias the home directory on this machine", alias)
+		}
+
+		worktreePattern = slash(alias)
+		if path, err := renderWorktreePath(info, "payload"); err == nil {
+			t.Fatalf("renderWorktreePath() = %q, want an error: that is the config directory by another name", path)
+		}
+	})
+
 	t.Run("reached through a symlinked config directory", func(t *testing.T) {
 		// A ~/.config symlinked into a dotfiles repo is an ordinary setup. The
 		// pattern then names the target, matches nothing lexically, and the
@@ -140,6 +163,96 @@ func TestWorktreeIsNeverPlacedOnWtsOwnState(t *testing.T) {
 			t.Fatalf("renderWorktreePath() = %q, want an error: that is ~/.config/wt by another name", path)
 		}
 	})
+}
+
+// sameDirectory reports whether two paths name the same directory, which is the
+// premise the firmlink subtest above needs and cannot assume.
+func sameDirectory(t *testing.T, a, b string) bool {
+	t.Helper()
+	infoA, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	infoB, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(infoA, infoB)
+}
+
+// TestSamePathTreeComparesIdentity pins the comparison that makes the firmlink
+// subtest above possible to fix at all: two names for one directory, related by
+// nothing a string comparison can see.
+//
+// Exercised with a symlink because that is the aliasing a test can create on any
+// platform. wtStateAtPath resolves symlinks before it gets here, so this is not
+// how the guard meets one in practice — the point is that samePathTree answers
+// correctly without that help, which is what a firmlink or a bind mount leaves
+// it with.
+func TestSamePathTreeComparesIdentity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs a privilege we cannot assume on Windows")
+	}
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	if err := os.MkdirAll(filepath.Join(real, "deep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{
+			// Neither leaf exists — the fresh-machine case, where the config
+			// directory has not been created yet either.
+			name: "the same missing leaf under two names for one directory",
+			a:    filepath.Join(link, "wt"),
+			b:    filepath.Join(real, "wt"),
+			want: true,
+		},
+		{
+			name: "one alias contains the other's leaf",
+			a:    link,
+			b:    filepath.Join(real, "wt"),
+			want: true,
+		},
+		{
+			// Both sides exist, to different depths: the shallower one holds the
+			// deeper, and neither base is the other.
+			name: "an alias above a directory that exists",
+			a:    link,
+			b:    filepath.Join(real, "deep"),
+			want: true,
+		},
+		{
+			name: "different leaves under one directory are unrelated",
+			a:    filepath.Join(link, "wt"),
+			b:    filepath.Join(real, "other"),
+			want: false,
+		},
+		{
+			name: "a neighbour that merely starts the same way",
+			a:    real + "-worktrees",
+			b:    filepath.Join(real, "wt"),
+			want: false,
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := samePathTree(tt.a, tt.b); got != tt.want {
+				t.Errorf("samePathTree(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+			if got := samePathTree(tt.b, tt.a); got != tt.want {
+				t.Errorf("samePathTree(%q, %q) = %v, want %v — the answer must not depend on the order", tt.b, tt.a, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestCanonicalExistingPath(t *testing.T) {

@@ -1345,7 +1345,7 @@ exact = ["`+filepath.ToSlash(repoDir)+`"]
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	for _, spelling := range []string{
+	spellings := []string{
 		filepath.Join(repoDir, ".wt.toml"),
 		filepath.Join(repoDir, ".", ".wt.toml"),
 		filepath.Join(repoDir, "wt-user.toml"),
@@ -1357,7 +1357,21 @@ exact = ["`+filepath.ToSlash(repoDir)+`"]
 		// that does not exist and is declined rather than read either way.
 		// sameFile is no backstop here — it only knows about .wt.toml.
 		filepath.Join(filepath.Dir(repoDir), strings.ToUpper(filepath.Base(repoDir)), "wt-user.toml"),
-	} {
+	}
+
+	// And the repository's second absolute path: macOS firmlinks make
+	// /System/Volumes/Data/Users/alice/src/x the same directory as
+	// /Users/alice/src/x, which no comparison of names relates and os.Open
+	// opens all the same. A Linux bind mount does this too; there is no way to
+	// make one in a test, so this stands in for the whole class.
+	if runtime.GOOS == "darwin" {
+		alias := filepath.Join("/System/Volumes/Data", canonicalExistingPath(repoDir))
+		if sameDirectory(t, alias, repoDir) {
+			spellings = append(spellings, filepath.Join(alias, "wt-user.toml"))
+		}
+	}
+
+	for _, spelling := range spellings {
 		t.Setenv("WT_CONFIG", spelling)
 		stderr := captureStderr(t)
 		loadWorktreeConfig()
