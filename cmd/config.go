@@ -628,6 +628,12 @@ func warnConfigHomeNotAbsolute(name, value string) {
 // repository. What must not work is a path that names a file inside this
 // repository, because the repository chose its contents — and the file reached
 // via a relative WT_CONFIG always does.
+//
+// Case-folded, because os.Open is: on macOS and Windows an absolute path that
+// spells the repository's own directory in a different case opens the very same
+// committed file, and a byte comparison would call it yours. Nor is sameFile a
+// backstop here — it only knows about .wt.toml, and this is about the file a
+// repository named something else.
 func configFileInRepo(configPath, repoRoot string) bool {
 	if configPath == "" || repoRoot == "" {
 		return false
@@ -642,7 +648,7 @@ func configFileInRepo(configPath, repoRoot string) bool {
 	if err != nil {
 		return true
 	}
-	return hasPathPrefix(filepath.Clean(abs), filepath.Clean(root))
+	return hasPathPrefixFold(filepath.Clean(abs), filepath.Clean(root))
 }
 
 // sameFile reports whether two paths name the same file on disk.

@@ -1309,7 +1309,13 @@ func TestRepoConfigIsNeverYourConfigFile(t *testing.T) {
 		loadWorktreeConfig()
 	})
 
-	repoDir := t.TempDir()
+	// Named rather than t.TempDir() directly: the last component has to have a
+	// case to vary for the spelling at the end of the table below, and a temp
+	// directory's "001" does not.
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(repoDir, ".wt.toml"), []byte(`hooks_policy = "off"
 
 [trust]
@@ -1344,6 +1350,13 @@ exact = ["`+filepath.ToSlash(repoDir)+`"]
 		filepath.Join(repoDir, ".", ".wt.toml"),
 		filepath.Join(repoDir, "wt-user.toml"),
 		linked,
+		// The repository's own directory spelled in a different case, which
+		// os.Open resolves to the same committed file on macOS and Windows while
+		// a byte comparison calls the file yours. Refused on every platform: the
+		// comparison is folded, so on a case-sensitive filesystem this is a path
+		// that does not exist and is declined rather than read either way.
+		// sameFile is no backstop here — it only knows about .wt.toml.
+		filepath.Join(filepath.Dir(repoDir), strings.ToUpper(filepath.Base(repoDir)), "wt-user.toml"),
 	} {
 		t.Setenv("WT_CONFIG", spelling)
 		stderr := captureStderr(t)

@@ -150,8 +150,13 @@ func wtStateAtPath(path string) string {
 // would mean naming the user's home directory outright in a spelling they do not
 // use, rather than reading it from {.env.HOME}.
 func samePathTree(a, b string) bool {
-	a, b = foldPath(a), foldPath(b)
-	return hasPathPrefix(a, b) || hasPathPrefix(b, a)
+	return hasPathPrefixFold(a, b) || hasPathPrefixFold(b, a)
+}
+
+// hasPathPrefixFold is hasPathPrefix without regard to case. See samePathTree
+// for why the fold is unconditional rather than per-GOOS.
+func hasPathPrefixFold(path, prefix string) bool {
+	return hasPathPrefix(foldPath(path), foldPath(prefix))
 }
 
 func foldPath(p string) string { return strings.ToLower(p) }
