@@ -58,7 +58,7 @@ Configuration and hooks
 - Hook env vars: WT_PATH, WT_BRANCH, WT_MAIN, WT_REPO_NAME, WT_REPO_HOST, WT_REPO_OWNER
 - Under cmd /c only, hooks are skipped when a hook env value contains & | < > ^ " or a line break: cmd expands %WT_PATH% while parsing, so it would run as syntax, and the pattern/branch that put it there is not a hook command an approval covers. sh -c substitutes after parsing and is unaffected
 - Disable hooks: WT_HOOKS_DISABLED=1
-- NO hook runs until approved, wherever it came from — a repo's committed .wt.toml AND your own config file (since wt 0.4.0)
+- NO hook runs until approved, wherever it came from — a repo's committed .wt.toml AND your own config file (since wt 0.4.0). Exactly two things stand in for that approval, both of them yours to set and neither reachable from a repo: a matching [trust] rule (config file only) and WT_HOOKS_APPROVE_ALL=1. trusted-only is not one — it runs approved hooks without prompting and skips the rest
 - Approve: 'wt trust' (approves every source that applies here), 'wt trust --list', 'wt untrust' (this repo), 'wt untrust --global' (your config file)
 - An approval is pinned to (scope, sha256 of that source's hook commands); scope is the repository for a .wt.toml, "user config" for your config file
 - Editing a hook command re-prompts; editing anything else in the file does not. An identical .wt.toml in another repository is not covered
