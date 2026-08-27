@@ -176,26 +176,40 @@ func gitGlobalConfigPaths() []string {
 // matches, and the placement is what puts the file there.
 //
 // Read from git rather than parsed here: the values are wanted before the files
-// exist, and `git config --global` reports them either way.
+// exist, and `git config --global` reports them either way. With --show-origin,
+// so a relative value can be resolved the way git resolves it — against the
+// directory of the config file that declared it, not against the process's
+// working directory. `path = dotfiles/gitconfig` in ~/.gitconfig is ~/dotfiles,
+// and is as much an armed slot as the absolute spelling of the same thing.
 func gitGlobalIncludePaths() []string {
-	out, err := exec.Command("git", "config", "--global", "--null",
+	out, err := exec.Command("git", "config", "--global", "--show-origin", "--null",
 		"--get-regexp", `^include(if\..*)?\.path$`).Output()
 	if err != nil {
 		return nil
 	}
+	// --show-origin --null emits the origin and the key/value as two separate
+	// NUL-terminated fields, so they are read in pairs.
+	fields := strings.Split(string(out), "\x00")
 	var paths []string
-	for _, record := range strings.Split(string(out), "\x00") {
-		_, value, hasValue := strings.Cut(record, "\n")
+	for i := 0; i+1 < len(fields); i += 2 {
+		origin, ok := strings.CutPrefix(fields[i], "file:")
+		if !ok {
+			// blob:, command line:, standard input: — none of which name a
+			// directory to resolve a relative include against.
+			continue
+		}
+		_, value, hasValue := strings.Cut(fields[i+1], "\n")
 		if !hasValue {
 			continue
 		}
-		// git resolves "~" here and takes a relative path against the config
-		// file holding it. wt only guards what it can name from here, which is
-		// the absolute ones — a relative include is a different file per config
-		// file, and guessing which would be worse than saying nothing.
-		if expanded := expandTilde(value); filepath.IsAbs(expanded) {
-			paths = append(paths, expanded)
+		path := expandTilde(value)
+		if path == "" {
+			continue
 		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(filepath.Dir(origin), path)
+		}
+		paths = append(paths, path)
 	}
 	return paths
 }
@@ -223,10 +237,36 @@ func warnRelativeGitConfigGlobal(value string) {
 	})
 }
 
-// gitHookDirIsWhatRuns explains a placement onto the repository's own git
-// directory. Phrased to read after "which is", like the rest of the owned table.
-const gitHookDirIsWhatRuns = "inside this repository's own git directory, where git keeps the hooks " +
-	"it runs for it — a worktree there is the repository writing its own .git"
+// gitHookDirIsWhatRuns explains a placement onto a git directory. Phrased to
+// read after "which is", like the rest of the owned table.
+const gitHookDirIsWhatRuns = "inside a git directory, where git keeps the hooks it runs for that " +
+	"repository — a worktree there is one repository writing another's .git"
+
+// pathInsideAGitDir reports whether a worktree at path would land inside some
+// repository's .git.
+//
+// gitRepoOwnedPaths covers the repository wt is standing in, and stops there —
+// but the mechanism does not care whose .git it is. A pattern naming
+// ~/src/victim/.git/hooks reaches an empty directory on any clone made with no
+// init template, `git worktree add` checks out into an empty directory happily,
+// and the next checkout in *victim* runs what was left there. Nothing about that
+// requires the attacker's repository to be the victim.
+//
+// By name rather than by asking git, because the question is about a path that
+// does not exist yet and the repository it belongs to may not either. A ".git"
+// component is not something a worktree path has for any other reason.
+//
+// The limit worth saying out loud: this finds the ordinary layout. A bare
+// repository keeps its hooks at <repo>/hooks with no .git anywhere in the path,
+// and wt cannot enumerate every repository on the machine to find those.
+func pathInsideAGitDir(path string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+		if part == ".git" {
+			return true
+		}
+	}
+	return false
+}
 
 // gitRepoOwnedPaths names the places the repository wt is standing in gets its
 // hooks run from.
@@ -269,9 +309,17 @@ func wtStateAtPath(path string) string {
 	for _, p := range gitRepoOwnedPaths() {
 		owned = append(owned, struct{ path, what string }{p, gitHookDirIsWhatRuns})
 	}
+	// Asked of the path as written and again once resolved: the pattern is what
+	// names a .git, but a symlink is what hides that it does.
+	if pathInsideAGitDir(path) {
+		return gitHookDirIsWhatRuns
+	}
 	path, ok := canonicalExistingPath(path)
 	if !ok {
 		return unfollowableChain
+	}
+	if pathInsideAGitDir(path) {
+		return gitHookDirIsWhatRuns
 	}
 	for _, o := range owned {
 		if o.path == "" || !filepath.IsAbs(o.path) {

@@ -534,6 +534,59 @@ func TestWorktreeMayNotBePlacedInTheRepositorysOwnGitDir(t *testing.T) {
 	}
 }
 
+// TestWorktreeMayNotBePlacedInAnyRepositorysGitDir: the mechanism does not care
+// whose .git it is. A pattern naming ~/src/victim/.git/hooks reaches an empty
+// directory on any clone made with no init template, and the next checkout in
+// victim runs what was left there — with the attacker's repository nowhere near
+// it.
+func TestWorktreeMayNotBePlacedInAnyRepositorysGitDir(t *testing.T) {
+	here := t.TempDir()
+	runGit(t, here, "init", "-q")
+	t.Chdir(here)
+
+	elsewhere := t.TempDir()
+	victim := filepath.Join(elsewhere, "src", "victim")
+	if owned := wtStateAtPath(filepath.Join(victim, ".git", "hooks")); owned == "" {
+		t.Error(`wtStateAtPath(<other repo>/.git/hooks) = "", want a refusal: guarding only the ` +
+			`current repository's .git leaves every other repository on the machine open`)
+	}
+
+	// A bare-looking name is a directory like any other, and refusing every path
+	// with "git" in it would take ordinary worktrees with it.
+	for _, ok := range []string{
+		filepath.Join(victim, "git", "hooks"),
+		filepath.Join(elsewhere, "src", "victim.git"),
+		filepath.Join(elsewhere, "gitconfig-tools"),
+	} {
+		if owned := wtStateAtPath(ok); owned != "" {
+			t.Errorf("wtStateAtPath(%q) = %q, want \"\"", ok, owned)
+		}
+	}
+}
+
+// TestAGitDirReachedThroughASymlinkIsStillAGitDir: the pattern names the .git,
+// but a symlink is what hides that it does.
+func TestAGitDirReachedThroughASymlinkIsStillAGitDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs a privilege we cannot assume on Windows")
+	}
+	here := t.TempDir()
+	runGit(t, here, "init", "-q")
+	t.Chdir(here)
+
+	victim := t.TempDir()
+	runGit(t, victim, "init", "-q")
+	link := filepath.Join(t.TempDir(), "innocent")
+	if err := os.Symlink(filepath.Join(victim, ".git"), link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if owned := wtStateAtPath(filepath.Join(link, "hooks")); owned == "" {
+		t.Error(`wtStateAtPath(<symlink to a .git>/hooks) = "", want a refusal: the name a pattern ` +
+			`uses is not what git runs the hooks out of`)
+	}
+}
+
 // TestCoreHooksPathIsGuardedWhereItPointsElsewhere: core.hooksPath is where git
 // will look instead of .git/hooks, so a value naming a directory that does not
 // exist yet is the same armed slot as an absent [include].
@@ -569,7 +622,11 @@ func TestGitConfigIncludesAreGuarded(t *testing.T) {
 	dotfiles := filepath.Join(home, "dotfiles")
 	config := "[include]\n\tpath = " + filepath.ToSlash(filepath.Join(dotfiles, "gitconfig")) + "\n" +
 		"[includeIf \"gitdir:~/src/acme/\"]\n\tpath = " +
-		filepath.ToSlash(filepath.Join(home, "work", "acme.inc")) + "\n"
+		filepath.ToSlash(filepath.Join(home, "work", "acme.inc")) + "\n" +
+		// Relative, which git resolves against the directory of the file that
+		// declared it — so this names ~/relative/gitconfig, and is exactly as
+		// armed as the absolute spelling above.
+		"[include]\n\tpath = relative/gitconfig\n"
 	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(config), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -581,6 +638,9 @@ func TestGitConfigIncludesAreGuarded(t *testing.T) {
 		// An includeIf is included in whichever repository matches its condition,
 		// which is not a reason to leave the file it names open here.
 		filepath.Join(home, "work", "acme.inc"),
+		// Resolved against ~/.gitconfig's directory, not wt's cwd.
+		filepath.Join(home, "relative", "gitconfig"),
+		filepath.Join(home, "relative"),
 	} {
 		if owned := wtStateAtPath(path); owned == "" {
 			t.Errorf("wtStateAtPath(%q) = \"\", want a refusal: ~/.gitconfig includes it, so a "+
@@ -590,5 +650,37 @@ func TestGitConfigIncludesAreGuarded(t *testing.T) {
 
 	if owned := wtStateAtPath(filepath.Join(home, "src")); owned != "" {
 		t.Errorf("wtStateAtPath(~/src) = %q, want \"\"", owned)
+	}
+}
+
+// TestProcSelfCwdIsNotAnAbsoluteConfigPath: /proc/self/cwd is the working
+// directory wearing an absolute spelling. It passes filepath.IsAbs, and it walks
+// past every containment test, because those look for the repository in the
+// path's parents and its parents are /proc/self and /proc. Stand in a
+// subdirectory of a repository with WT_CONFIG=/proc/self/cwd/config.toml and a
+// committed config.toml is read as yours — [trust] rules and all.
+func TestProcSelfCwdIsNotAnAbsoluteConfigPath(t *testing.T) {
+	for _, path := range []string{
+		"/proc/self/cwd/config.toml",
+		"/proc/self/root/etc/wt.toml",
+		"/proc/thread-self/cwd/config.toml",
+		// Clean() first, so the spelling with a detour is the same path.
+		"/proc/self/../self/cwd/config.toml",
+	} {
+		if !pathIsProcessRelative(path) {
+			t.Errorf("pathIsProcessRelative(%q) = false; it names a different file per process", path)
+		}
+	}
+
+	// A real pid is a fixed directory, and /proc is not a magic prefix.
+	for _, path := range []string{
+		"/proc/1234/cwd/config.toml",
+		"/proc/cpuinfo",
+		"/procession/self/cwd.toml",
+		"/home/you/.config/wt/config.toml",
+	} {
+		if pathIsProcessRelative(path) {
+			t.Errorf("pathIsProcessRelative(%q) = true; that names one file", path)
+		}
 	}
 }

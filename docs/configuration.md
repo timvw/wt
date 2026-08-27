@@ -100,10 +100,13 @@ primary checkout materialises everything that repository had committed, so a
 `link -> ../../../.config` inside it resolves to nothing while the plan is made
 and to your config directory by the time the linked worktrees follow. The files
 checked out there would *become*
-`config.toml` and `trust.toml`, and those are the gate itself — the config file
-is the one layer hooks are not vetted from, and `trust.toml` is the record of
-what you approved. A branch carrying both would not slip a hook past the gate,
-it would supply the gate.
+`config.toml` and `trust.toml`, and those two are the gate itself. Hooks in your
+config file are vetted like any others — but `hooks_policy` and `[trust]` are
+read from that file and nowhere else, so it is where the answer to *whether you
+are asked at all* comes from; and `trust.toml` is the record of what you have
+already said yes to. A branch carrying both arrives with a `[trust]` rule
+covering itself, or an approval it computed for its own commands. It would not
+slip a hook past the gate, it would supply the gate.
 
 The second is git's own global configuration: `~/.gitconfig`,
 `$XDG_CONFIG_HOME/git` (`~/.config/git` by default), and whatever
@@ -119,17 +122,27 @@ The files that configuration pulls in count as part of it. git ignores an
 a `path = ~/dotfiles/gitconfig` on a machine where you have not cloned your
 dotfiles yet is an armed slot, not a broken setting — a pattern rendering onto
 `~/dotfiles` fills it, and every git command afterwards reads what the repository
-committed. `wt` guards the files those rules name, without evaluating an
-`includeIf`'s condition: whether the file is read *here* is not the question, it
-is read in whichever repository matches, and the placement is what puts it there.
+committed. `wt` guards the files those rules name, resolving a relative one the
+way git does — against the directory of the config file that declared it, so
+`path = dotfiles/gitconfig` in `~/.gitconfig` is `~/dotfiles` — and without
+evaluating an `includeIf`'s condition: whether the file is read *here* is not the
+question, it is read in whichever repository matches, and the placement is what
+puts it there.
 
-The third is the repository's own git directory, and `core.hooksPath` where that
-points somewhere else. `git worktree add` will check out into an existing
-directory as long as it is empty, and `.git/hooks` is empty on any clone made
-with no init template — so a branch whose tree is one executable `post-checkout`
-file, placed there, is run by the very next `git worktree add`, `wt`'s own
-included. That is the shortest path from a committed `pattern` to arbitrary code,
-and it never touches the approval gate at all.
+The third is any repository's git directory, and `core.hooksPath` where this
+repository's points somewhere else. `git worktree add` will check out into an
+existing directory as long as it is empty, and `.git/hooks` is empty on any clone
+made with no init template — so a branch whose tree is one executable
+`post-checkout` file, placed there, is run by the very next `git worktree add`,
+`wt`'s own included. That is the shortest path from a committed `pattern` to
+arbitrary code, and it never touches the approval gate at all.
+
+*Any* repository's, not just the one you are in: the mechanism does not care
+whose `.git` it is, and `~/src/victim/.git/hooks` is as reachable from a pattern
+as your own. A path with a `.git` component is refused, whether the pattern spells
+it out or reaches it through a symlink. What that does not find is a bare
+repository, which keeps its hooks at `<repo>/hooks` with no `.git` in the path —
+`wt` cannot enumerate every repository on the machine.
 
 One thing `wt` cannot guard: a **relative** `GIT_CONFIG_GLOBAL`. git resolves it
 against the working directory, so it names a different file in every repository —

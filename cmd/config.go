@@ -674,6 +674,27 @@ func configFileInRepo(configPath, repoRoot string) bool {
 // Every other working tree of the same repository counts too — each holds the
 // repository's files at its own path, and a config file is refused for what
 // supplies it, not for which directory wt happens to have been run from.
+// pathIsProcessRelative reports whether an absolute path names a different file
+// depending on the process reading it.
+//
+// /proc/self and /proc/thread-self are the kernel's names for "whoever is
+// asking", and cwd and root beneath them are that process's working directory
+// and filesystem root. /proc/self/cwd/config.toml is therefore ./config.toml
+// wearing an absolute spelling — it passes IsAbs, and it walks past a
+// containment test looking for a repository in its parents, because its parents
+// are /proc/self and /proc.
+//
+// Linux only in effect, and checked everywhere: /proc/self is not a path anyone
+// writes by accident on a machine where it means nothing.
+func pathIsProcessRelative(path string) bool {
+	rest, ok := strings.CutPrefix(filepath.ToSlash(filepath.Clean(path)), "/proc/")
+	if !ok {
+		return false
+	}
+	who, _, _ := strings.Cut(rest, "/")
+	return who == "self" || who == "thread-self"
+}
+
 func configFileSuppliedByRepo(configPath, repoRoot string) bool {
 	if configPath == "" {
 		return false
@@ -858,6 +879,20 @@ func loadWorktreeConfig() {
 	// whatever is checked out there. There is no legitimate version of this: a
 	// config file lives at one path. Say so before asking where that path is.
 	case configFilePath != "" && !filepath.IsAbs(configFilePath):
+		warnConfigPathNotAbsolute(configFilePath)
+
+	// Absolute and relative anyway. /proc/self/cwd is the working directory
+	// under a name that survives every containment test, because those walk the
+	// path's lexical parents and /proc has none of the repository in it: enter a
+	// subdirectory of a repository and a committed config.toml is read as yours,
+	// [trust] rules and all. The same goes for /proc/self/root.
+	//
+	// Named rather than resolved, deliberately. Resolving would also catch the
+	// config file people legitimately symlink out of a dotfiles repo they are
+	// standing in, which is the one symlink wt allows — see the case below.
+	// What is wrong here is not where the path leads, it is that where it leads
+	// depends on when you ask.
+	case configFilePath != "" && pathIsProcessRelative(configFilePath):
 		warnConfigPathNotAbsolute(configFilePath)
 
 	// The same thing spelled absolutely, which is usually a mistake rather than
