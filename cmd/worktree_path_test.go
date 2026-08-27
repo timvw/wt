@@ -872,6 +872,45 @@ func TestProcessRelativeXdgConfigHomeIsNotAConfigDir(t *testing.T) {
 	}
 }
 
+// TestAProcessRelativeHomeIsNotAConfigDir: the override refused and the default
+// walking in behind it. XDG_CONFIG_HOME and APPDATA are asked whether they name
+// one directory; HOME is what is left when they do not, and it is reached by the
+// same environment. A repository can then commit .config/wt/trust.toml carrying
+// its own scope and the hash of its own .wt.toml, and be approved before it is
+// ever looked at — the config FILE being refused does not help, because the
+// trust store is a separate file read by the same broken answer.
+func TestAProcessRelativeHomeIsNotAConfigDir(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	// Cleared, not set: on Windows this is what configDir reaches for before
+	// HOME, and leaving it would answer with the runner's real one instead of
+	// exercising the fallback.
+	t.Setenv("APPDATA", "")
+	const procHome = "/proc/self/cwd"
+	t.Setenv("HOME", procHome)
+	t.Setenv("USERPROFILE", procHome)
+
+	if got := configDir(); got != "" {
+		t.Errorf("configDir() = %q, want \"\": HOME=%s is absolute and still means the working "+
+			"directory, so the trust store — and the approvals in it — would come from whatever "+
+			"repository wt is standing in", got, procHome)
+	}
+}
+
+// TestATrustRuleAnchoredOnAProcessRelativeHomeNamesNothing: the same home, one
+// layer down. A "~/trees/*" whitelist entry is meant to name the user's own
+// trees; under this home it names the repository. Reachable even with configDir
+// refusing that home, because --config and WT_CONFIG name the file directly.
+func TestATrustRuleAnchoredOnAProcessRelativeHomeNamesNothing(t *testing.T) {
+	const procHome = "/proc/self/cwd"
+	t.Setenv("HOME", procHome)
+	t.Setenv("USERPROFILE", procHome)
+
+	if got := expandTilde("~/trees/*"); got != "" {
+		t.Errorf("expandTilde(\"~/trees/*\") = %q, want \"\": a whitelist rule that resolves against "+
+			"the working directory whitelists whatever is checked out there", got)
+	}
+}
+
 // TestProcessRelativeGitConfigGlobalIsReportedNotGuarded:
 // GIT_CONFIG_GLOBAL=/proc/self/cwd/.gitconfig is the repository's own file
 // wearing an absolute spelling. Guarding it would mean refusing to place a

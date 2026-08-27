@@ -196,6 +196,13 @@ configuration. An `XDG_CONFIG_HOME` of `/proc/self/cwd/.config` would otherwise
 have `wt` read its record of what you have approved out of whatever repository
 you happen to be standing in.
 
+`HOME` gets the same question, and it is the one that matters most: it is what
+`wt` falls back to when `XDG_CONFIG_HOME` and `%AppData%` are refused, so asking
+it of the overrides alone would refuse the front door and leave the back one
+open. A `~/...` path in a `[trust]` rule is anchored the same way, since
+`--config` and `WT_CONFIG` name a file directly and so survive a home the config
+directory would have rejected.
+
 That is where the guard stops, and it stops on purpose: it covers `wt`'s
 configuration and the configuration of the program `wt` drives. An absolute
 pattern may still render anywhere else in your home directory, which is the

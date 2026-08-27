@@ -742,8 +742,12 @@ func expandTilde(path string) string {
 	if path != "~" && !strings.HasPrefix(path, "~/") && !strings.HasPrefix(path, `~\`) {
 		return path
 	}
+	// namesOneDirectory, not IsAbs: a "~/trees/*" rule under HOME=/proc/self/cwd
+	// is a whitelist entry that matches whatever repository wt is standing in.
+	// Reachable with --config or WT_CONFIG, which name the file directly and so
+	// survive configDir() refusing that same home.
 	home, err := os.UserHomeDir()
-	if err != nil || !filepath.IsAbs(home) {
+	if err != nil || !namesOneDirectory(home) {
 		return ""
 	}
 	return filepath.Join(home, path[1:])

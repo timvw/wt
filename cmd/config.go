@@ -606,8 +606,14 @@ func configDir() string {
 			warnConfigHomeNotAbsolute("APPDATA", d)
 		}
 	}
+	// And the same test on the fallback, which is the half of this that the two
+	// checks above would otherwise leave open: HOME=/proc/self/cwd is absolute,
+	// so IsAbs said yes and the trust store came out of the repository — the
+	// override refused, the default walked in behind it. A guard that asks the
+	// question of the overrides and not of the answer they fall back to is not
+	// asking the question.
 	home, err := os.UserHomeDir()
-	if err != nil || !filepath.IsAbs(home) {
+	if err != nil || !namesOneDirectory(home) {
 		return ""
 	}
 	return filepath.Join(home, ".config", "wt")
