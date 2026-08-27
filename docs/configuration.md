@@ -968,6 +968,14 @@ rule for `github.com/acme`, and arrive already approved. That migration is
 skipped with a reason instead. Moving it there yourself still works, because then
 the path is your choice rather than the URL's.
 
+The same goes for an approval already waiting at that path. Records are pinned to
+`(scope, sha256 of the commands)` and nothing prunes one when a checkout is
+deleted, so `~/src/acme/tool` can still carry the approval you gave the
+`acme/tool` you used to have. A repository named to land there, shipping a
+command you were likely to have approved somewhere — `make setup` — would arrive
+pre-approved. `wt migrate` declines that move too, and says which path to run
+`wt untrust` in.
+
 ### Requiring approval for every hook
 
 ```toml

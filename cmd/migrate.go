@@ -201,25 +201,18 @@ func buildMigratePlan(entries []parsedWorktree, force bool) ([]migrateItem, erro
 					to, owned)
 			}
 
-			// A [trust] rule says "repositories I keep here run their hooks
-			// unasked" — a statement about a tree the user fills themselves.
-			// Where this repository would land is not their choice: the target
-			// is ~/src/{owner}/{name} built from the origin URL, and the host is
-			// not part of it, so a clone of https://evil.example/acme/pwn lands
-			// in the same ~/src/acme a rule was written for github.com/acme.
-			// Since the destination is what would carry the approval, the move
-			// is where it has to be declined.
-			if trustWhitelistAllows(to) && !trustWhitelistAllows(from) {
+			reason, err := migrateTrustGain(from, to)
+			if err != nil {
+				return nil, err
+			}
+			if reason != "" {
 				plan = append(plan, migrateItem{
 					Branch:  branchLabel,
 					From:    from,
 					To:      to,
 					Primary: true,
 					Action:  migrateActionSkip,
-					Reason: fmt.Sprintf(
-						"%s is covered by a [trust] rule, so moving it there would run its hooks unasked — "+
-							"and that path comes from the origin URL, not from you. Move it yourself if you meant to",
-						to),
+					Reason:  reason,
 				})
 				continue
 			}
@@ -545,6 +538,73 @@ func resolvePrimaryCheckoutTarget(info repoInfo) string {
 	}
 
 	return filepath.Join(srcRoot, filepath.FromSlash(owner), info.Name)
+}
+
+// migrateTrustGain reports why moving a primary checkout would hand it trust it
+// does not already have, or "" when it would not.
+//
+// Trust is pinned to where the primary sits: a [trust] rule matches its path,
+// and a stored approval is keyed on its .git. Neither is normally the
+// repository's to choose — except here. The destination is ~/src/{owner}/{name}
+// built from the origin URL with the host dropped, so a clone of
+// https://evil.example/acme/tool asks to be put exactly where github.com/acme/tool
+// would go. Two different things can be waiting at that path:
+//
+//   - a [trust] rule, written for the tree the user keeps their own repositories
+//     in; and
+//   - an approval left behind by a repository that used to sit there. Nothing
+//     prunes a record when a checkout is deleted, and a record is pinned to
+//     (scope, sha256 of the commands) — so an attacker who names their repository
+//     after one the user once had, and copies a command they are likely to have
+//     approved somewhere ("make setup"), arrives pre-approved.
+//
+// Only a gain counts. A repository already sitting inside a whitelisted tree, or
+// already carrying an approval, loses nothing by being tidied within it.
+func migrateTrustGain(from, to string) (string, error) {
+	if trustWhitelistAllows(to) && !trustWhitelistAllows(from) {
+		return fmt.Sprintf(
+			"%s is covered by a [trust] rule, so moving it there would run its hooks unasked — "+
+				"and that path comes from the origin URL, not from you. Move it yourself if you meant to",
+			to), nil
+	}
+
+	store, err := loadTrustStore()
+	if err != nil {
+		// Not knowing what is approved decides whether a repository is moved
+		// somewhere it would be pre-approved, so it stops the migration rather
+		// than being read as "nothing is".
+		return "", err
+	}
+	if approvalWaitingAt(store, to) && !approvalWaitingAt(store, from) {
+		return fmt.Sprintf(
+			"%s still carries a hook approval from a repository that used to be there, so moving it there "+
+				"would run this repository's hooks unasked if the commands match — and that path comes from "+
+				"the origin URL, not from you. Run 'wt untrust' there first, or move it yourself if you meant to",
+			to), nil
+	}
+	return "", nil
+}
+
+// approvalWaitingAt reports whether the store holds an approval that a primary
+// checkout at path would answer to, whether or not anything is there now.
+func approvalWaitingAt(store trustStore, path string) bool {
+	want, ok := canonicalExistingPath(filepath.Join(path, ".git"))
+	if !ok {
+		// An unresolved path compares equal to nothing, which here would be the
+		// guard passing rather than holding.
+		return true
+	}
+	for _, rec := range store.Trusted {
+		if rec.Scope == "" || rec.Scope == trustScopeUser {
+			continue
+		}
+		// A record wt cannot resolve is not evidence about this destination —
+		// and it is the attacker who needs a record to match, never to hide.
+		if got, ok := canonicalExistingPath(rec.Scope); ok && got == want {
+			return true
+		}
+	}
+	return false
 }
 
 // refuseMoveOntoWtState asks what a destination is at the moment of the move,

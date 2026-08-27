@@ -397,6 +397,62 @@ func TestMigrateWillNotMoveARepositoryIntoAWhitelistedTree(t *testing.T) {
 	}
 }
 
+// TestMigrateWillNotMoveARepositoryOntoAStaleApproval: an approval outlives the
+// repository it was given to — nothing prunes a record when a checkout is
+// deleted — and it is pinned to (scope, sha256 of the commands) rather than to a
+// repository. Migrate builds the destination from the origin URL with the host
+// dropped, so a repository can ask to be put exactly where one the user used to
+// have was, and inherit what it left behind.
+func TestMigrateWillNotMoveARepositoryOntoAStaleApproval(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping migrate integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	homeDir := filepath.Join(tmpDir, "home")
+	worktreeRoot := filepath.Join(homeDir, "dev", "worktrees")
+	const hooks = "[hooks]\npost_create = [\"echo owned\"]\n"
+
+	// The repository the user really had, approved once and then deleted. Its
+	// record stays behind, pinned to the path rather than to the repository.
+	oldPath := filepath.Join(homeDir, "src", "acme", "tool")
+	if err := os.MkdirAll(oldPath, 0o755); err != nil {
+		t.Fatalf("Failed to create the original checkout: %v", err)
+	}
+	setupTestRepo(t, oldPath)
+	if err := os.WriteFile(filepath.Join(oldPath, ".wt.toml"), []byte(hooks), 0o644); err != nil {
+		t.Fatalf("Failed to write .wt.toml: %v", err)
+	}
+	runWtIn(t, tmpDir, oldPath, homeDir, worktreeRoot, "trust")
+	if err := os.RemoveAll(oldPath); err != nil {
+		t.Fatalf("Failed to remove the original checkout: %v", err)
+	}
+	store, err := os.ReadFile(filepath.Join(homeDir, ".config", "wt", "trust.toml"))
+	if err != nil || !strings.Contains(string(store), filepath.ToSlash(oldPath)) {
+		t.Fatalf("test setup: no approval recorded for %s (err = %v)\n%s", oldPath, err, store)
+	}
+
+	// A different repository, same owner and name, asking to be put there.
+	primaryPath := filepath.Join(worktreeRoot, "tool")
+	if err := os.MkdirAll(primaryPath, 0o755); err != nil {
+		t.Fatalf("Failed to create primary checkout path: %v", err)
+	}
+	setupTestRepo(t, primaryPath)
+	if err := os.WriteFile(filepath.Join(primaryPath, ".wt.toml"), []byte(hooks), 0o644); err != nil {
+		t.Fatalf("Failed to write .wt.toml: %v", err)
+	}
+	runGitCommand(t, primaryPath, "remote", "add", "origin", "https://evil.example/acme/tool.git")
+
+	out := runMigrate(t, tmpDir, primaryPath, homeDir, worktreeRoot)
+
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("primary checkout was moved onto the stale approval at %s (stat err = %v)\nOutput: %s", oldPath, err, out)
+	}
+	if !strings.Contains(out, "still carries a hook approval") {
+		t.Errorf("migrate did not say why it declined:\n%s", out)
+	}
+}
+
 // TestMigrateRechecksTheDestinationAtMoveTime covers the gap between drawing the
 // plan and carrying it out.
 //
@@ -472,6 +528,26 @@ func TestMigrateRechecksTheDestinationAtMoveTime(t *testing.T) {
 // output. The exit status is deliberately not asserted on: refusing a move
 // counts as a failed item and exits non-zero, which is the outcome these tests
 // want rather than a reason to stop.
+// runWtIn runs a wt subcommand in dir with the fixture's environment.
+func runWtIn(t *testing.T, tmpDir, dir, homeDir, worktreeRoot string, args ...string) string {
+	t.Helper()
+
+	cmd := exec.Command(buildWtBinary(t, tmpDir), args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"HOME="+homeDir,
+		"USERPROFILE="+homeDir,
+		"XDG_CONFIG_HOME="+filepath.Join(homeDir, ".config"),
+		"WORKTREE_ROOT="+worktreeRoot,
+	)
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if err != nil && !errors.As(err, &exit) {
+		t.Fatalf("could not run wt %v: %v\nOutput: %s", args, err, out)
+	}
+	return string(out)
+}
+
 func runMigrate(t *testing.T, tmpDir, dir, homeDir, worktreeRoot string) string {
 	t.Helper()
 
