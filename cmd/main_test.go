@@ -1350,7 +1350,7 @@ func TestBuildHookEnv(t *testing.T) {
 }
 
 func TestRunHooksEmpty(t *testing.T) {
-	withUserOwnedHooks(t)
+	withPreApprovedHooks(t)
 	err := runHooks("pre_create", nil, nil)
 	if err != nil {
 		t.Errorf("runHooks() with nil commands returned error: %v", err)
@@ -1363,7 +1363,7 @@ func TestRunHooksEmpty(t *testing.T) {
 }
 
 func TestRunHooksDisabled(t *testing.T) {
-	withUserOwnedHooks(t)
+	withPreApprovedHooks(t)
 	t.Setenv("WT_HOOKS_DISABLED", "1")
 
 	// Even with a command that would fail, hooks should be skipped
@@ -1374,7 +1374,7 @@ func TestRunHooksDisabled(t *testing.T) {
 }
 
 func TestRunHooksSuccess(t *testing.T) {
-	withUserOwnedHooks(t)
+	withPreApprovedHooks(t)
 	if testing.Short() {
 		t.Skip("skipping in short mode")
 	}
@@ -1386,7 +1386,7 @@ func TestRunHooksSuccess(t *testing.T) {
 }
 
 func TestRunHooksPreAborts(t *testing.T) {
-	withUserOwnedHooks(t)
+	withPreApprovedHooks(t)
 	if testing.Short() {
 		t.Skip("skipping in short mode")
 	}
@@ -1398,7 +1398,7 @@ func TestRunHooksPreAborts(t *testing.T) {
 }
 
 func TestRunHooksPostWarnsOnly(t *testing.T) {
-	withUserOwnedHooks(t)
+	withPreApprovedHooks(t)
 	if testing.Short() {
 		t.Skip("skipping in short mode")
 	}
@@ -1410,7 +1410,7 @@ func TestRunHooksPostWarnsOnly(t *testing.T) {
 }
 
 func TestRunHooksPreStopsOnFirstFailure(t *testing.T) {
-	withUserOwnedHooks(t)
+	withPreApprovedHooks(t)
 	if testing.Short() {
 		t.Skip("skipping in short mode")
 	}
@@ -1436,7 +1436,7 @@ func TestRunHooksPreStopsOnFirstFailure(t *testing.T) {
 }
 
 func TestRunHooksEnvVarsAvailable(t *testing.T) {
-	withUserOwnedHooks(t)
+	withPreApprovedHooks(t)
 	if testing.Short() {
 		t.Skip("skipping in short mode")
 	}
@@ -1537,7 +1537,7 @@ func TestMatchRemoteBranchEmptyOutput(t *testing.T) {
 }
 
 func TestRunHooksMultiplePostContinueOnFailure(t *testing.T) {
-	withUserOwnedHooks(t)
+	withPreApprovedHooks(t)
 	if testing.Short() {
 		t.Skip("skipping in short mode")
 	}

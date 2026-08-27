@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/BurntSushi/toml"
 )
@@ -22,6 +23,7 @@ type Config struct {
 	HooksPolicy string `toml:"hooks_policy"`
 	RepoPattern string `toml:"repo_pattern"`
 	Files       Files  `toml:"files"`
+	Trust       Trust  `toml:"trust"`
 
 	// Context holds path-matched rules supplying environment variables to
 	// pattern rendering. Decoded from the user's config file only — see
@@ -43,6 +45,22 @@ type Files struct {
 	Link        []string `toml:"link"`
 	Exclude     []string `toml:"exclude"`
 	CopyIgnored bool     `toml:"copy_ignored"`
+}
+
+// Trust names trees whose repository hooks may run without being approved
+// first — the escape hatch for people who would otherwise reach for
+// WT_HOOKS_APPROVE_ALL=1 and disable the gate everywhere, including for the
+// repository they cloned this morning.
+//
+// Readable from the user's config file ONLY. Not from a repo's .wt.toml and not
+// from git config: it decides whether commands run, so a repository able to add
+// itself to it would put the lock on the inside of the door. Same reasoning as
+// hooks_policy — see resolveHooksPolicy.
+type Trust struct {
+	// Prefix matches a tree and everything under it, component-wise.
+	Prefix []string `toml:"prefix"`
+	// Exact matches one repository.
+	Exact []string `toml:"exact"`
 }
 
 // Hooks holds pre/post command hook commands.
@@ -95,9 +113,10 @@ var configRepoFound bool
 // is reliably available.
 var configRepoKey string
 
-// configRepoSHA is the sha256 of the repo-level .wt.toml bytes that were
-// actually decoded, and is what hook approvals are pinned to.
-var configRepoSHA string
+// configRepoVerified records whether git confirmed that this working tree is a
+// worktree of the repository configRepoKey names, resolved alongside it. Only a
+// confirmed identity may be matched against a [trust] rule: see repoIdentity.
+var configRepoVerified bool
 
 // configSources tracks the origin of each resolved value.
 var configSources configSource
@@ -105,15 +124,27 @@ var configSources configSource
 // worktreeHooks holds the effective (merged) hook configuration.
 var worktreeHooks Hooks
 
-// repoConfigHooks holds the hooks the repo-level .wt.toml supplied, kept
-// separate so they can be shown for approval before anything runs.
-var repoConfigHooks Hooks
-
 // hookSources records which config layer supplied each hook event's commands.
 // The merge below replaces a whole event at a time, so one source per event is
-// exact — and it is what tells runHooks whether it is looking at commands the
-// user wrote or commands a repository shipped.
+// exact — which is what decides how widely one approval of it reaches.
 var hookSources = map[string]string{}
+
+// declaredHooks holds what each source asked for, before merging.
+//
+// This, rather than the merged result, is what an approval is pinned to. The two
+// differ only for the config file, and only where a repo's .wt.toml overrode one
+// of its events — but reading the merged result there would make the identity of
+// *your* hooks depend on which repository you happened to be standing in, so a
+// single .wt.toml overriding post_checkout would re-ask for your whole config
+// file and record a second approval under the same scope.
+var declaredHooks = map[string]Hooks{}
+
+// trustPrefixes and trustExact are the [trust] whitelist, loaded from the user's
+// config file only. See Trust and trustWhitelistAllows.
+var (
+	trustPrefixes []string
+	trustExact    []string
+)
 
 // hooksPolicy is the configured hook approval policy (see hookPolicy* in
 // hooks.go). Deliberately loaded from the user's config file only.
@@ -260,19 +291,19 @@ func gitConfigValues(entries []gitConfigEntry) map[string]string {
 // The dividing line is not scalar versus list — it is that git config carries
 // settings, never commands, nor the policy that gates commands:
 //
-//   - [hooks] is never read from git config, at any scope. Not because a
+//   - [hooks] is not read from git config today, at any scope. Not because a
 //     multi-valued key could not carry the commands, and not because the merge
 //     is undecided (loadWorktreeConfig resolves each event on its own, the
-//     highest layer naming an event supplying that event's whole list). It is
-//     because approveHooks fails OPEN: it gates on the source label, prompting
-//     only when hookSources says hookSourceRepoConfig, and returns true for
-//     everything else. A hook arriving under any new label would therefore run
-//     unprompted — and .git/config is not reliably the reader's own file, since
-//     a repo handed over as a directory rather than a clone brings its
-//     .git/config along (see the trust store rationale in trust.go). Adding a
-//     source here means teaching approveHooks about it first.
-//   - hooks_policy is never read from git config either, for the reason in
-//     resolveHooksPolicy: it is the gate on that execution, and a repository
+//     highest layer naming an event supplying that event's whole list). What is
+//     missing is the other half: a source needs a scope in hookSetTrust before
+//     an approval for it can mean anything, and .git/config is not reliably the
+//     reader's own file — a repo handed over as a directory rather than a clone
+//     brings its .git/config along (see the trust store rationale in trust.go),
+//     so --local and --global would not deserve the same scope. Adding the
+//     source without that is safe but useless: approveHooks reaches its default
+//     branch, and every run asks again with nothing able to remember the answer.
+//   - hooks_policy and [trust] are never read from git config, for the reason in
+//     resolveHooksPolicy: they are the gate on that execution, and a repository
 //     choosing how closely wt scrutinises its own hooks defeats the mechanism.
 //   - [files] copy/link/exclude may come in, because they are declarative data
 //     bounded by invariants F1-F7 rather than commands. The copy universe is
@@ -520,13 +551,16 @@ const defaultConfigTemplate = `# wt configuration file
 # Pre-hooks abort on failure; post-hooks warn only.
 # Set WT_HOOKS_DISABLED=1 to skip all hooks.
 #
-# Hooks from a repository's committed .wt.toml are not run until you approve
-# them ('wt trust'). Hooks from THIS file are yours, so they run as-is unless
-# you ask for more:
-#   prompt-untrusted  (default) approve hooks that came from a repo's .wt.toml
-#   prompt-all        confirm every hook batch, whatever supplied it
-#   trusted-only      never prompt; skip anything not already approved
+# No hook runs until you approve it ('wt trust'), including the ones you write
+# in this file — an approval is what says a command is yours, and a file is not
+# evidence of that on its own. Approving is once per set of commands; editing a
+# command asks again.
+#   prompt-untrusted  (default) show anything not yet approved, and ask
+#   prompt-all        ask every time, even for hooks already approved
+#   trusted-only      never ask; skip anything not already approved (CI)
 #   off               run no hooks at all
+# To approve a whole tree ahead of time instead, see [trust] in
+# docs/configuration.md.
 # hooks_policy = "prompt-untrusted"
 # NOTE: Always quote path variables ("$WT_PATH") to handle spaces in paths.
 #
@@ -537,18 +571,280 @@ const defaultConfigTemplate = `# wt configuration file
 # post_clone = ["cd \"$WT_PATH\" && git status"]
 `
 
-// configDir returns the directory where wt config files are stored.
+// configDir returns the directory where wt config files are stored, or "" when
+// no absolute location can be determined.
+//
+// The result is always absolute or empty. Per the XDG Base Directory spec a
+// relative XDG_CONFIG_HOME is invalid and must be ignored, and an unset HOME
+// leaves nothing to fall back to. Resolving either against the working directory
+// would place wt's config — and, worse, its trust store — inside whatever
+// repository the user happens to be standing in, which would let a cloned repo
+// ship approvals for its own hooks. Returning "" instead fails closed: no config
+// file is found and nothing is trusted.
+//
+// filepath.IsAbs is the test rather than "starts with a separator", because on
+// Windows a rooted path with no volume ("\config") is resolved against the
+// current drive and is not a location wt can be sure of either.
 func configDir() string {
-	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
-		return filepath.Join(d, "wt")
+	// namesOneDirectory, not IsAbs: this is where the trust store comes from, so
+	// XDG_CONFIG_HOME=/proc/self/cwd/.config would have wt read its record of
+	// what you have approved out of whatever repository you are standing in. A
+	// repository committing .config/wt/trust.toml with its own scope and hash
+	// then arrives pre-approved. Refusing the config FILE and not the directory
+	// beneath it would have closed the smaller half of that.
+	if d := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); d != "" {
+		if namesOneDirectory(d) {
+			return filepath.Join(filepath.Clean(d), "wt")
+		}
+		warnConfigHomeNotAbsolute("XDG_CONFIG_HOME", d)
 	}
 	if runtime.GOOS == "windows" {
-		if d := os.Getenv("APPDATA"); d != "" {
-			return filepath.Join(d, "wt")
+		if d := strings.TrimSpace(os.Getenv("APPDATA")); d != "" {
+			if namesOneDirectory(d) {
+				return filepath.Join(filepath.Clean(d), "wt")
+			}
+			warnConfigHomeNotAbsolute("APPDATA", d)
 		}
 	}
-	home, _ := os.UserHomeDir()
+	// And the same test on the fallback, which is the half of this that the two
+	// checks above would otherwise leave open: HOME=/proc/self/cwd is absolute,
+	// so IsAbs said yes and the trust store came out of the repository — the
+	// override refused, the default walked in behind it. A guard that asks the
+	// question of the overrides and not of the answer they fall back to is not
+	// asking the question.
+	home, err := os.UserHomeDir()
+	if err != nil || !namesOneDirectory(home) {
+		return ""
+	}
 	return filepath.Join(home, ".config", "wt")
+}
+
+// configHomeWarnings keeps the notice to once per variable per process:
+// configDir is consulted by the config loader and again by every hook event.
+var configHomeWarnings sync.Map
+
+// warnConfigHomeNotAbsolute reports an ignored override. Saying nothing would
+// leave the user reading a config file they did not write, or re-approving hooks
+// they already approved, with no way to tell why.
+func warnConfigHomeNotAbsolute(name, value string) {
+	if _, seen := configHomeWarnings.LoadOrStore(name, true); seen {
+		return
+	}
+	// Two reasons, because "not absolute" would be a lie about /proc/self/cwd,
+	// and a warning the user can see is wrong is one they learn to skip.
+	why := "is not an absolute path"
+	if filepath.IsAbs(value) {
+		why = "names a different directory depending on which process asks"
+	}
+	fmt.Fprintf(os.Stderr,
+		"⚠ %s is set to %q, which %s, so it is being ignored.\n"+
+			"  wt is falling back to your home directory.\n\n",
+		name, value, why)
+}
+
+// configFileInRepo reports whether the config file wt is about to read lives
+// inside the repository it is about to gate.
+//
+// Compared lexically, on the path as written rather than the path resolved: a
+// config file kept in a dotfiles repository and symlinked to ~/.config/wt is the
+// ordinary setup, and it must keep working while you are standing in that
+// repository. What must not work is a path that names a file inside this
+// repository, because the repository chose its contents — and the file reached
+// via a relative WT_CONFIG always does.
+//
+// Case-folded, because os.Open is: on macOS and Windows an absolute path that
+// spells the repository's own directory in a different case opens the very same
+// committed file, and a byte comparison would call it yours. Nor is sameFile a
+// backstop here — it only knows about .wt.toml, and this is about the file a
+// repository named something else.
+func configFileInRepo(configPath, repoRoot string) bool {
+	if configPath == "" || repoRoot == "" {
+		return false
+	}
+	abs, err := filepath.Abs(configPath)
+	if err != nil {
+		// Unresolvable means unknowable, and this decides whether a repository
+		// gets to supply the gate's own settings.
+		return true
+	}
+	root, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return true
+	}
+	if hasPathPrefixFold(filepath.Clean(abs), filepath.Clean(root)) {
+		return true
+	}
+	// A name is not the only way to spell a directory. macOS firmlinks give the
+	// repository a second absolute path (/System/Volumes/Data/Users/alice/src/x
+	// is /Users/alice/src/x), a Linux bind mount does the same, and os.Open
+	// honours either — so the containment has to be settled by identity too.
+	//
+	// Deliberately the directories the file sits in, not the file: a config
+	// symlinked out to a dotfiles repository is the ordinary setup this stays
+	// lexical for, and following the link would be what refuses it.
+	return dirWithin(filepath.Dir(abs), root)
+}
+
+// configFileSuppliedByRepo reports whether the config file wt is about to read
+// is one the repository it is about to gate gets to write.
+//
+// repoRoot is the working tree wt is standing in, or "" when it is not in one.
+// Every other working tree of the same repository counts too — each holds the
+// repository's files at its own path, and a config file is refused for what
+// supplies it, not for which directory wt happens to have been run from.
+// pathIsProcessRelative reports whether an absolute path names a different file
+// depending on the process reading it.
+//
+// /proc/self and /proc/thread-self are the kernel's names for "whoever is
+// asking", and cwd and root beneath them are that process's working directory
+// and filesystem root. /proc/self/cwd/config.toml is therefore ./config.toml
+// wearing an absolute spelling — it passes IsAbs, and it walks past a
+// containment test looking for a repository in its parents, because its parents
+// are /proc/self and /proc.
+//
+// Linux only in effect, and checked everywhere: /proc/self is not a path anyone
+// writes by accident on a machine where it means nothing.
+// namesOneDirectory reports whether a path means the same place wherever wt is
+// run from — which is what every "is it absolute?" test in wt was really asking.
+//
+// filepath.IsAbs answers a question about spelling. /proc/self/cwd is spelled
+// absolutely and means the working directory, so it passes that test and fails
+// the one that matters. Anywhere wt accepts a path BECAUSE it is absolute — the
+// config file, the config directory that holds the trust store, git's global
+// config — it wants this instead.
+func namesOneDirectory(path string) bool {
+	return filepath.IsAbs(path) && !pathIsProcessRelative(path)
+}
+
+func pathIsProcessRelative(path string) bool {
+	rest, ok := strings.CutPrefix(filepath.ToSlash(filepath.Clean(path)), "/proc/")
+	if !ok {
+		return false
+	}
+	who, _, _ := strings.Cut(rest, "/")
+	if who == "self" || who == "thread-self" {
+		return true
+	}
+	// A numeric pid is the same trick aimed at another process. /proc/<shell
+	// pid>/cwd follows the shell around, which is inside the repository just as
+	// surely as wt's own working directory is, and nothing about "self" was what
+	// made the first spelling wrong.
+	return who != "" && strings.IndexFunc(who, func(r rune) bool { return r < '0' || r > '9' }) < 0
+}
+
+func configFileSuppliedByRepo(configPath, repoRoot string) bool {
+	if configPath == "" {
+		return false
+	}
+	for _, root := range repoWorkingTrees(repoRoot) {
+		if configFileInRepo(configPath, root) {
+			return true
+		}
+		if sameFile(configPath, filepath.Join(root, ".wt.toml")) {
+			return true
+		}
+	}
+	return false
+}
+
+// repoWorkingTrees returns the directories whose contents the repository wt is
+// standing in gets to choose.
+//
+// The working tree wt is in comes first and is always included, so a git that
+// cannot list anything leaves the guard no weaker than it was. The main
+// checkout is derived from the common git directory rather than listed, so it
+// is covered even then — it is the one a WT_CONFIG typed once and left in a
+// shell profile is most likely to name.
+func repoWorkingTrees(repoRoot string) []string {
+	var roots []string
+	if repoRoot != "" {
+		roots = append(roots, repoRoot)
+	}
+	commonDir, err := gitCommonDir()
+	if err != nil || commonDir == "" {
+		return roots
+	}
+	roots = append(roots, commonDir, filepath.Dir(commonDir))
+	roots = append(roots, gitWorktreePaths(commonDir)...)
+	return append(roots, superprojectWorkingTrees()...)
+}
+
+// superprojectWorkingTrees names the working trees of the repositories this one
+// is a submodule of, outermost last.
+//
+// A submodule is a repository, and the superproject holding it is not the user —
+// it is more committed content, chosen by whoever chose the submodule. So
+// `WT_CONFIG=../../wt-user.toml` reaching a file the superproject committed is
+// the repo-config layer read as the user config file, the same finding as the
+// linked-worktree one, one level out. Such a file could whitelist the tree it
+// sits in, and the submodule's own verified scope beneath <super>/.git/modules
+// would then match the rule.
+//
+// Walked rather than asked once, because submodules nest.
+func superprojectWorkingTrees() []string {
+	var roots []string
+	dir := ""
+	for range 32 {
+		cmd := exec.Command("git", "rev-parse", "--show-superproject-working-tree")
+		if dir != "" {
+			cmd.Dir = dir
+		}
+		out, err := cmd.Output()
+		if err != nil {
+			return roots
+		}
+		super := gitOutputPath(out)
+		if super == "" || !filepath.IsAbs(super) {
+			return roots
+		}
+		roots = append(roots, super)
+		dir = super
+	}
+	return roots
+}
+
+// sameFile reports whether two paths name the same file on disk.
+//
+// Compared by identity rather than by name: a config path can be given relative
+// to the working directory, reached through a symlink, or spelled in a different
+// case on a case-insensitive filesystem, and each is the same file under a name
+// that does not compare equal.
+func sameFile(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	infoA, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	infoB, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(infoA, infoB)
+}
+
+// warnRepoConfigIsNotYourConfig explains why a --config or WT_CONFIG pointing at
+// the repository's own .wt.toml was not read as the config file. Said out loud
+// because the alternative is settings that appear to be ignored at random: the
+// same WT_CONFIG works in a directory that is not a repository.
+func warnRepoConfigIsNotYourConfig(path string) {
+	fmt.Fprintf(os.Stderr,
+		"⚠ %s is a file in this repository, so it is not being read as your config file.\n"+
+			"  A repository read as your config file could exempt itself from hook approval.\n"+
+			"  Its settings still apply as a repository's, and its hooks still need 'wt trust'.\n\n",
+		path)
+}
+
+// warnConfigPathNotAbsolute reports a --config or WT_CONFIG that names a
+// different file depending on where wt was run.
+func warnConfigPathNotAbsolute(path string) {
+	fmt.Fprintf(os.Stderr,
+		"⚠ %s is not an absolute path, so it is not being read as your config file.\n"+
+			"  A relative config path names a different file in every directory wt runs in,\n"+
+			"  which lets whatever is checked out there supply one — and a config file can\n"+
+			"  exempt hooks from approval. Give the full path instead.\n\n",
+		path)
 }
 
 // resolveConfigPath determines which config file to use.
@@ -560,7 +856,14 @@ func resolveConfigPath(flagValue string) string {
 	if envPath := os.Getenv("WT_CONFIG"); envPath != "" {
 		return envPath
 	}
-	return filepath.Join(configDir(), "config.toml")
+	// "" rather than a bare "config.toml": with no absolute directory to join
+	// onto, a relative name would be read from the current working directory —
+	// that is, from inside whatever repository wt was run in.
+	dir := configDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "config.toml")
 }
 
 // loadWorktreeConfig loads configuration from git config, files and environment
@@ -597,9 +900,11 @@ func loadWorktreeConfig() {
 
 	// Reset hooks
 	worktreeHooks = Hooks{}
-	repoConfigHooks = Hooks{}
 	hookSources = map[string]string{}
+	declaredHooks = map[string]Hooks{}
 	hooksPolicy = ""
+	trustPrefixes = nil
+	trustExact = nil
 	contextRules = nil
 
 	// Reset [files]
@@ -623,63 +928,138 @@ func loadWorktreeConfig() {
 	configFilePath = resolveConfigPath(configFlag)
 	configFileFound = false
 
-	if _, err := os.Stat(configFilePath); err == nil {
-		configFileFound = true
-		var cfg Config
-		if md, err := toml.DecodeFile(configFilePath, &cfg); err == nil {
-			if cfg.Root != "" {
-				worktreeRoot = expandHome(cfg.Root)
-				configSources.Root = "config file"
-			}
-			if cfg.RepoRoot != "" {
-				reposRoot = expandHome(cfg.RepoRoot)
-				configSources.RepoRoot = "config file"
-			}
-			if cfg.Strategy != "" {
-				worktreeStrategy = strings.ToLower(strings.TrimSpace(cfg.Strategy))
-				configSources.Strategy = "config file"
-			}
-			if cfg.Pattern != "" {
-				worktreePattern = strings.TrimSpace(cfg.Pattern)
-				configSources.Pattern = "config file"
-			}
-			if cfg.Separator != "" {
-				worktreeSeparator = cfg.Separator
-				configSources.Separator = "config file"
-			}
-			if cfg.RepoPattern != "" {
-				repoPattern = strings.TrimSpace(cfg.RepoPattern)
-				configSources.RepoPattern = "config file"
-			}
-			worktreeHooks = cfg.Hooks
-			for _, event := range hookEvents {
-				if len(hooksOf(cfg.Hooks, event)) > 0 {
-					hookSources[event] = hookSourceConfigFile
-				}
-			}
-			if cfg.HooksPolicy != "" {
-				hooksPolicy = strings.ToLower(strings.TrimSpace(cfg.HooksPolicy))
-				configSources.HooksPolicy = "config file"
-			}
-			// Appended after the git config rules rather than replacing them,
-			// so the two sources compose the way rules within one source
-			// already do: every matching rule applies, later definitions win
-			// per variable. Because these come last, the config file wins
-			// wherever both sources set the same variable for the same path —
-			// which is the documented precedence — while a git config rule for
-			// some unrelated tree keeps working instead of silently vanishing
-			// the moment a [[context]] block is added to this file.
-			contextRules = append(contextRules, cfg.Context...)
+	// The repository, located once and used twice: to load its .wt.toml as the
+	// repo layer in step 4, and — first — to be sure the repository is not also
+	// about to be read as the user's config file.
+	repoRoot, repoRootErr := gitRepoRootFn()
+	repoConfigPath := ""
+	if repoRootErr == nil {
+		repoConfigPath = filepath.Join(repoRoot, ".wt.toml")
+	}
 
-			filesCopy = accumulateFilePatterns(filesCopy, cfg.Files.Copy, "config file")
-			filesLink = accumulateFilePatterns(filesLink, cfg.Files.Link, "config file")
-			filesExclude = accumulateFilePatterns(filesExclude, cfg.Files.Exclude, "config file")
-			// IsDefined rather than a non-zero check: copy_ignored is a bool,
-			// so "written as false" and "not written" are the same value and
-			// only the metadata can tell them apart.
-			if md.IsDefined("files", "copy_ignored") {
-				filesCopyIgnored = cfg.Files.CopyIgnored
-				configSources.CopyIgnored = "config file"
+	switch {
+	// Two layers, one file, and the outer one is not gated: [trust] and
+	// hooks_policy are honoured from the config file precisely because it is
+	// yours, so a repository read as your config file can whitelist its own path
+	// and run its own hooks unasked.
+	//
+	// A relative path is the way in, and it does not have to name a file in the
+	// repository to get there. "../wt-user.toml" is outside the current
+	// repository by every containment test — and inside the superproject that
+	// vendored it, which is where a submodule's hooks would be exempted from.
+	// One setting, a different file in every directory wt is run from, chosen by
+	// whatever is checked out there. There is no legitimate version of this: a
+	// config file lives at one path. Say so before asking where that path is.
+	case configFilePath != "" && !filepath.IsAbs(configFilePath):
+		warnConfigPathNotAbsolute(configFilePath)
+
+	// Absolute and relative anyway. /proc/self/cwd is the working directory
+	// under a name that survives every containment test, because those walk the
+	// path's lexical parents and /proc has none of the repository in it: enter a
+	// subdirectory of a repository and a committed config.toml is read as yours,
+	// [trust] rules and all. The same goes for /proc/self/root.
+	//
+	// Named rather than resolved, deliberately. Resolving would also catch the
+	// config file people legitimately symlink out of a dotfiles repo they are
+	// standing in, which is the one symlink wt allows — see the case below.
+	// What is wrong here is not where the path leads, it is that where it leads
+	// depends on when you ask.
+	case configFilePath != "" && filepath.IsAbs(configFilePath) && !namesOneDirectory(configFilePath):
+		warnConfigPathNotAbsolute(configFilePath)
+
+	// The same thing spelled absolutely, which is usually a mistake rather than
+	// an attack — WT_CONFIG=$PWD/.wt.toml — but reads the repository's file as
+	// yours just the same. The name is not the point: WT_CONFIG=wt-user.toml is
+	// a file a repository can commit as easily as .wt.toml.
+	//
+	// Asked of every working tree of the repository rather than only the one wt
+	// is standing in. A repository supplies the file in all of them, and wt's
+	// whole job is moving you between them: a WT_CONFIG naming the main
+	// checkout's .wt.toml would be refused there and then quietly honoured after
+	// 'wt checkout', which is the direction that runs the commands.
+	//
+	// The second test is the same file reached from outside the repository — a
+	// config symlinked to a checked-in .wt.toml — which no comparison of names
+	// would catch. That one is about scope rather than about an attacker:
+	// .wt.toml is the file a repository configures wt with by convention, so
+	// reading it as your config too would hand a repo-owned file the user-config
+	// scope, where an approval covers every repository at once and hooks_policy
+	// is honoured.
+	//
+	// Deliberately only .wt.toml, and deliberately not every file a symlink might
+	// resolve into. A config kept in a dotfiles repository and symlinked into
+	// ~/.config/wt is the ordinary setup: refusing it while you stand in that
+	// repository would take your root and pattern with it and put the worktree
+	// somewhere else. Nothing is given away by allowing it, either — that file is
+	// your config in every other repository already, so a commit that turns it
+	// hostile has you regardless of what wt does inside the one it lives in.
+	case configFileSuppliedByRepo(configFilePath, repoRoot):
+		warnRepoConfigIsNotYourConfig(configFilePath)
+
+	default:
+		if _, err := os.Stat(configFilePath); err == nil {
+			configFileFound = true
+			var cfg Config
+			if md, err := toml.DecodeFile(configFilePath, &cfg); err == nil {
+				if cfg.Root != "" {
+					worktreeRoot = expandHome(cfg.Root)
+					configSources.Root = "config file"
+				}
+				if cfg.RepoRoot != "" {
+					reposRoot = expandHome(cfg.RepoRoot)
+					configSources.RepoRoot = "config file"
+				}
+				if cfg.Strategy != "" {
+					worktreeStrategy = strings.ToLower(strings.TrimSpace(cfg.Strategy))
+					configSources.Strategy = "config file"
+				}
+				if cfg.Pattern != "" {
+					worktreePattern = strings.TrimSpace(cfg.Pattern)
+					configSources.Pattern = "config file"
+				}
+				if cfg.Separator != "" {
+					worktreeSeparator = cfg.Separator
+					configSources.Separator = "config file"
+				}
+				if cfg.RepoPattern != "" {
+					repoPattern = strings.TrimSpace(cfg.RepoPattern)
+					configSources.RepoPattern = "config file"
+				}
+				worktreeHooks = cfg.Hooks
+				declaredHooks[hookSourceConfigFile] = cfg.Hooks
+				for _, event := range hookEvents {
+					if len(hooksOf(cfg.Hooks, event)) > 0 {
+						hookSources[event] = hookSourceConfigFile
+					}
+				}
+				if cfg.HooksPolicy != "" {
+					hooksPolicy = strings.ToLower(strings.TrimSpace(cfg.HooksPolicy))
+					configSources.HooksPolicy = "config file"
+				}
+				// Only from here. Loading [trust] anywhere else would let the thing
+				// being gated name itself as exempt.
+				trustPrefixes = cfg.Trust.Prefix
+				trustExact = cfg.Trust.Exact
+				// Appended after the git config rules rather than replacing them,
+				// so the two sources compose the way rules within one source
+				// already do: every matching rule applies, later definitions win
+				// per variable. Because these come last, the config file wins
+				// wherever both sources set the same variable for the same path —
+				// which is the documented precedence — while a git config rule for
+				// some unrelated tree keeps working instead of silently vanishing
+				// the moment a [[context]] block is added to this file.
+				contextRules = append(contextRules, cfg.Context...)
+
+				filesCopy = accumulateFilePatterns(filesCopy, cfg.Files.Copy, "config file")
+				filesLink = accumulateFilePatterns(filesLink, cfg.Files.Link, "config file")
+				filesExclude = accumulateFilePatterns(filesExclude, cfg.Files.Exclude, "config file")
+				// IsDefined rather than a non-zero check: copy_ignored is a bool,
+				// so "written as false" and "not written" are the same value and
+				// only the metadata can tell them apart.
+				if md.IsDefined("files", "copy_ignored") {
+					filesCopyIgnored = cfg.Files.CopyIgnored
+					configSources.CopyIgnored = "config file"
+				}
 			}
 		}
 	}
@@ -690,22 +1070,19 @@ func loadWorktreeConfig() {
 	//    .wt.toml redirect the destination or run clone hooks would be wrong.
 	configRepoPath = ""
 	configRepoFound = false
-	configRepoSHA = ""
 	configRepoKey = ""
+	configRepoVerified = false
 
-	if repoRoot, err := gitRepoRootFn(); err == nil {
-		repoConfigPath := filepath.Join(repoRoot, ".wt.toml")
+	if repoRootErr == nil {
 		configRepoPath = repoConfigPath
-		// Read once and hash those exact bytes, rather than hashing the path
-		// again when the hooks are about to run. Approval has to be pinned to
-		// the commands actually decoded here: re-reading later would leave a
-		// window in which the file is swapped, and wt would check one file's
-		// hash while running another file's commands.
+		// Read once, and let the approval be pinned to what this read decoded
+		// rather than to a fresh read when the hooks are about to run: re-reading
+		// later would leave a window in which the file is swapped, and wt would
+		// check one file's contents while running another file's commands.
 		if data, err := os.ReadFile(repoConfigPath); err == nil {
 			configRepoFound = true
-			configRepoSHA = hashBytes(data)
-			if key, err := repoTrustKeyFn(); err == nil {
-				configRepoKey = key
+			if id, err := repoTrustKeyFn(); err == nil {
+				configRepoKey, configRepoVerified = id.key, id.verified
 			}
 			var repoCfg Config
 			if md, err := toml.Decode(string(data), &repoCfg); err == nil {
@@ -728,16 +1105,19 @@ func loadWorktreeConfig() {
 				// repository's hooks would defeat the point.
 
 				// Merge hooks: repo hooks override per-hook type, unset hooks keep
-				// global values. Which layer won is recorded in hookSources, because
-				// commands that arrived here from a committed file need the user's
-				// approval before they run (see approveHooks).
-				repoConfigHooks = repoCfg.Hooks
+				// global values. Which layer won is recorded in hookSources, which
+				// is how an approval for these commands stays pinned to this
+				// repository rather than following the user everywhere (see
+				// hookSetTrust). [trust] is deliberately not read here for the
+				// same reason.
+				repoHooks := repoCfg.Hooks
 				// pre_clone/post_clone are deliberately not merged from repo
 				// config: clone targets a different repository than this one.
-				repoConfigHooks.PreClone = nil
-				repoConfigHooks.PostClone = nil
+				repoHooks.PreClone = nil
+				repoHooks.PostClone = nil
+				declaredHooks[hookSourceRepoConfig] = repoHooks
 				for _, event := range hookEvents {
-					cmds := hooksOf(repoConfigHooks, event)
+					cmds := hooksOf(repoHooks, event)
 					if len(cmds) == 0 {
 						continue
 					}

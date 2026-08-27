@@ -113,17 +113,26 @@ Hook environment variables: `WT_PATH`, `WT_BRANCH`, `WT_MAIN`, `WT_REPO_NAME`, `
 
 ### Hook trust
 
-`.wt.toml` is committed, so its hooks come from the repository rather than from the user. wt does not run them until they are approved:
+wt runs no hook until it has been approved — a repository's committed `.wt.toml` and the user's own `config.toml` alike (since wt 0.4.0):
 
 ```bash
-wt trust          # approve this repository's .wt.toml hooks
-wt trust --list   # show every approval on this machine
-wt untrust        # revoke this repository's approval
+wt trust             # approve every hook source that applies here
+wt trust --list      # show every approval on this machine
+wt untrust           # revoke this repository's approval
+wt untrust --global  # revoke the config file's approval
 ```
 
-The approval is pinned to (repository, contents of `.wt.toml`), so editing the file — or pulling a commit that adds a hook — asks again. Non-interactive runs (scripts, CI, `--format json`) decline and warn on stderr, unless `WT_HOOKS_APPROVE_ALL=1` is set. Hooks from the user's own `config.toml` are not gated.
+An approval is pinned to (scope, sha256 of that source's hook commands) — scope being the repository for a `.wt.toml`, `user config` for `config.toml`. Editing a hook command, or pulling a commit that adds one, asks again; editing anything else in the file does not. Approving `config.toml` once covers every repository; approving a `.wt.toml` covers that repository only. Non-interactive runs (scripts, CI, `--format json`) decline and warn on stderr, unless `WT_HOOKS_APPROVE_ALL=1` is set.
 
-Set `hooks_policy` in `config.toml` (or `WT_HOOKS_POLICY`) to `prompt-untrusted` (default), `prompt-all` (confirm every hook, including the user's own), `trusted-only` (never prompt, skip anything unapproved), or `off`. It is never read from `.wt.toml`.
+To skip the prompt for trees the user owns, whitelist paths in `config.toml` — hooks under them run unasked and unrecorded:
+
+```toml
+[trust]
+prefix = ["~/src/mine"]      # this directory and everything below it
+exact  = ["~/src/acme/api"]  # this repository only
+```
+
+Set `hooks_policy` in `config.toml` (or `WT_HOOKS_POLICY`) to `prompt-untrusted` (default), `prompt-all` (confirm every hook every time, overriding approvals and `[trust]`), `trusted-only` (never prompt, skip anything unapproved — the CI choice), or `off`. Neither `hooks_policy` nor `[trust]` is ever read from `.wt.toml`.
 
 ### Common Hook Recipes
 

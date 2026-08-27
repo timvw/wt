@@ -148,6 +148,19 @@ func buildMigratePlan(entries []parsedWorktree, force bool) ([]migrateItem, erro
 		}
 
 		if wt.Main {
+			if primaryTarget == "" {
+				// Skipped rather than fatal: the other worktrees still have
+				// somewhere to go, and this one has nowhere wt is willing to
+				// name. See resolvePrimaryCheckoutTarget.
+				plan = append(plan, migrateItem{
+					Branch:  branchLabel,
+					From:    from,
+					Primary: true,
+					Action:  migrateActionSkip,
+					Reason:  "origin URL does not resolve to a path under ~/src",
+				})
+				continue
+			}
 			if !isPathWithinRoot(from, absWorktreeRoot) {
 				plan = append(plan, migrateItem{
 					Branch:  branchLabel,
@@ -168,6 +181,38 @@ func buildMigratePlan(entries []parsedWorktree, force bool) ([]migrateItem, erro
 					Primary: true,
 					Action:  migrateActionSkip,
 					Reason:  "primary checkout already at target path",
+				})
+				continue
+			}
+
+			// The primary checkout's destination does not come from the pattern,
+			// so renderWorktreePath never sees it — but it is still built from
+			// the repository: resolvePrimaryCheckoutTarget joins the owner and
+			// name parsed out of the origin URL, and filepath.Join cleans, so an
+			// owner of "x/../../.config" reaches ~/.config/wt from ~/src. Moving
+			// a checkout onto wt's own state is the same hole as creating a
+			// worktree there, and gets the same answer.
+			if owned := wtStateAtPath(to); owned != "" {
+				return nil, fmt.Errorf(
+					"the primary checkout would be moved to %s, which is %s.\n"+
+						"That path comes from this repository's origin URL, and the files moved there\n"+
+						"would become wt's own config file and approval store, which is what decides\n"+
+						"whether this repository's hooks run",
+					to, owned)
+			}
+
+			reason, err := migrateTrustGain(from, to)
+			if err != nil {
+				return nil, err
+			}
+			if reason != "" {
+				plan = append(plan, migrateItem{
+					Branch:  branchLabel,
+					From:    from,
+					To:      to,
+					Primary: true,
+					Action:  migrateActionSkip,
+					Reason:  reason,
 				})
 				continue
 			}
@@ -349,6 +394,14 @@ func applyMigratePlan(cmd *cobra.Command, plan []migrateItem) error {
 			record(item, "skipped", item.Reason)
 		case migrateActionMove, migrateActionMoveForce:
 			force := item.Action == migrateActionMoveForce
+			if err := refuseMoveOntoWtState(item.To); err != nil {
+				if !jsonMode {
+					fmt.Printf("Failed primary checkout: %v\n", err)
+				}
+				failCount++
+				record(item, "failed", err.Error())
+				continue
+			}
 			if err := movePrimaryCheckout(item.From, item.To, force); err != nil {
 				if !jsonMode {
 					fmt.Printf("Failed primary checkout: %v\n", err)
@@ -376,6 +429,14 @@ func applyMigratePlan(cmd *cobra.Command, plan []migrateItem) error {
 			continue
 		case migrateActionMove, migrateActionMoveForce:
 			force := item.Action == migrateActionMoveForce
+			if err := refuseMoveOntoWtState(item.To); err != nil {
+				if !jsonMode {
+					fmt.Printf("Failed %s: %v\n", item.Branch, err)
+				}
+				failCount++
+				record(item, "failed", err.Error())
+				continue
+			}
 			if err := prepareMigrateTarget(item.To, force); err != nil {
 				if !jsonMode {
 					fmt.Printf("Failed %s: %v\n", item.Branch, err)
@@ -450,14 +511,28 @@ func movePrimaryCheckout(from, to string, force bool) error {
 	return nil
 }
 
+// resolvePrimaryCheckoutTarget returns where the primary checkout belongs, or ""
+// when the origin URL does not name a path that stays under ~/src.
+//
+// Owner and Name are parsed out of the origin remote, which is a URL somebody
+// handed the user, and filepath.Join cleans as it joins: an owner of
+// "x/../../.config" with a name of "wt" resolves to ~/.config/wt rather than to
+// anything under ~/src. That is a directory whose contents decide whether this
+// repository's hooks run, and the move puts the repository's committed files
+// there. wt clone refuses the same fields for the same reason — see
+// repoPlacementPath — and migrate reads them from a repository already on disk.
 func resolvePrimaryCheckoutTarget(info repoInfo) string {
+	owner := strings.Trim(info.Owner, "/")
+	if hasDotDotSegment(owner) || hasDotDotSegment(info.Name) {
+		return ""
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return filepath.Join("src", info.Name)
 	}
 
 	srcRoot := filepath.Join(home, "src")
-	owner := strings.Trim(info.Owner, "/")
 	if owner == "" {
 		return filepath.Join(srcRoot, info.Name)
 	}
@@ -465,9 +540,155 @@ func resolvePrimaryCheckoutTarget(info repoInfo) string {
 	return filepath.Join(srcRoot, filepath.FromSlash(owner), info.Name)
 }
 
+// migrateTrustGain reports why moving a primary checkout would hand it trust it
+// does not already have, or "" when it would not.
+//
+// Trust is pinned to where the primary sits: a [trust] rule matches its path,
+// and a stored approval is keyed on its .git. Neither is normally the
+// repository's to choose — except here. The destination is ~/src/{owner}/{name}
+// built from the origin URL with the host dropped, so a clone of
+// https://evil.example/acme/tool asks to be put exactly where github.com/acme/tool
+// would go. Two different things can be waiting at that path:
+//
+//   - a [trust] rule, written for the tree the user keeps their own repositories
+//     in; and
+//   - an approval left behind by a repository that used to sit there. Nothing
+//     prunes a record when a checkout is deleted, and a record is pinned to
+//     (scope, sha256 of the commands) — so an attacker who names their repository
+//     after one the user once had, and copies a command they are likely to have
+//     approved somewhere ("make setup"), arrives pre-approved.
+//
+// Only a gain counts. A repository already sitting inside a whitelisted tree, or
+// already carrying an approval, loses nothing by being tidied within it.
+// Each side is asked the question it is allowed to get wrong. The destination
+// does not exist yet, so nothing has settled its case and Win32 has not yet
+// dropped the trailing dot from a name like "tool." — an origin URL ending
+// "tool..git" renders a destination that compares equal to no rule and no
+// record, and is then created as the "tool" both of them name. So the
+// destination is asked loosely and the source strictly: a destination that only
+// might be covered is worth a skip, a source that only might be covered is not
+// worth waiving one. See samePath.
+func migrateTrustGain(from, to string) (string, error) {
+	covered, ok := trustWhitelistCovers(to)
+	if !ok {
+		return cannotTellReason(to), nil
+	}
+	if covered && !trustWhitelistAllows(from) {
+		return fmt.Sprintf(
+			"%s is covered by a [trust] rule, so moving it there would run its hooks unasked — "+
+				"and that path comes from the origin URL, not from you. Move it yourself if you meant to",
+			to), nil
+	}
+
+	store, err := loadTrustStore()
+	if err != nil {
+		// Not knowing what is approved decides whether a repository is moved
+		// somewhere it would be pre-approved, so it stops the migration rather
+		// than being read as "nothing is".
+		return "", err
+	}
+	// Compared as sets of command hashes rather than as "is anything approved
+	// here". A path can hold several approvals — worktrees of one repository sit
+	// on branches whose .wt.toml differ, and each is kept — and asking only
+	// whether the source has one lets an approval the user gave to an earlier
+	// version of these hooks stand in for a different set waiting at the
+	// destination. What counts is a set the destination answers to and the
+	// current path does not.
+	waiting, ok := approvedHashesAt(store, to, mayBeScopedUnder)
+	if !ok {
+		return cannotTellReason(to), nil
+	}
+	held, ok := approvedHashesAt(store, from, scopedUnder)
+	if !ok {
+		return cannotTellReason(from), nil
+	}
+	for sha := range waiting {
+		if !held[sha] {
+			return fmt.Sprintf(
+				"%s still carries a hook approval from a repository that used to be there, so moving it "+
+					"there would run this repository's hooks unasked if the commands match — and that path "+
+					"comes from the origin URL, not from you. Run 'wt untrust' there first, or move it "+
+					"yourself if you meant to",
+				to), nil
+		}
+	}
+	return "", nil
+}
+
+// cannotTellReason is the skip for a path wt could not settle. Not knowing what
+// a path names is not the same as knowing nothing is approved at it.
+func cannotTellReason(path string) string {
+	return fmt.Sprintf(
+		"%s is reached through symlinks wt cannot follow to an end, so it cannot tell which approvals "+
+			"already cover it. Move it yourself if you meant to",
+		path)
+}
+
+// approvedHashesAt returns the command sets a primary checkout at path would
+// already be approved for, whether or not anything is there now — its own, and
+// those of the submodules scoped beneath its .git. under decides which records
+// belong to a repository there; callers pick it to suit which way their answer
+// is safe to be wrong. The second result is false when wt could not settle what
+// the path names, which is not the same answer as an empty set.
+func approvedHashesAt(store trustStore, path string, under func(scope, root string) bool) (map[string]bool, bool) {
+	want, ok := canonicalExistingPath(filepath.Join(path, ".git"))
+	if !ok {
+		return nil, false
+	}
+	// The working tree root as well as its .git, because not every scope is a
+	// git directory: where git would not confirm which repository a working tree
+	// belongs to, defaultRepoTrustKey pins the approval to the directory's own
+	// path instead. Such a record answers for commands that run at a checkout
+	// here, and asking only beneath .git never sees it — <path> is not under
+	// <path>/.git. Resolved separately rather than assumed to nest, since a .git
+	// may be a symlink pointing somewhere else entirely.
+	root, ok := canonicalExistingPath(path)
+	if !ok {
+		return nil, false
+	}
+	found := map[string]bool{}
+	for _, rec := range store.Trusted {
+		if rec.Scope == "" || rec.Scope == trustScopeUser {
+			continue
+		}
+		// A record wt cannot resolve is not evidence about this path — and it is
+		// the attacker who needs a record to match, never to hide.
+		if got, ok := canonicalExistingPath(rec.Scope); ok && (under(got, want) || under(got, root)) {
+			found[rec.SHA256] = true
+		}
+	}
+	return found, true
+}
+
+// refuseMoveOntoWtState asks what a destination is at the moment of the move,
+// rather than trusting the answer from when the plan was drawn.
+//
+// The plan is built against the filesystem as it stands, and then the moves
+// change it. The primary goes first and materialises everything it had
+// committed, so a `link -> ../../../.config` in that repository is a name that
+// resolves to nothing while the plan is drawn and a live symlink by the time the
+// linked worktrees move. A pattern pointing through it therefore passed a check
+// that was true when it ran and false when it mattered. Ask again, here.
+func refuseMoveOntoWtState(to string) error {
+	owned := wtStateAtPath(to)
+	if owned == "" {
+		return nil
+	}
+	return fmt.Errorf(
+		"refusing to move onto %s, which is %s.\n"+
+			"  The files moved there would become wt's own config file and approval store,\n"+
+			"  which is what decides whether this repository's hooks run",
+		to, owned)
+}
+
 func isPathWithinRoot(path, root string) bool {
-	cleanPath := canonicalExistingPath(path)
-	cleanRoot := canonicalExistingPath(root)
+	cleanPath, pathOK := canonicalExistingPath(path)
+	cleanRoot, rootOK := canonicalExistingPath(root)
+	if !pathOK || !rootOK {
+		// The one caller skips the worktree when this is false, which is the
+		// side to be on when what the path names could not be settled.
+		return false
+	}
 
 	rel, err := filepath.Rel(cleanRoot, cleanPath)
 	if err != nil {
@@ -481,17 +702,67 @@ func isPathWithinRoot(path, root string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }
 
-func canonicalExistingPath(path string) string {
-	abs := path
+// canonicalExistingPath resolves the symlinks in the part of path that exists
+// and keeps the rest as written.
+//
+// filepath.EvalSymlinks gives up on the whole path when any component is
+// missing, and both callers routinely hand it one that is: a migration target
+// has not been created yet, and wtStateAtPath guards a config directory that on
+// a fresh machine is not there either. Resolving nothing in that case would let
+// a ~/.config symlinked into a dotfiles repo compare unequal to the path the
+// files actually arrive at.
+//
+// A symlink whose target does not exist is followed by hand, because backing
+// off past it treats its name as an ordinary missing directory. It is not one:
+// the name stands for the target, and creating the target is exactly what makes
+// the link live. A ~/.config/wt pointing into a dotfiles repo that has not been
+// cloned yet is the ordinary way to have one, and a repository that names the
+// target as its worktree pattern would populate wt's config directory while
+// comparing equal to nothing.
+//
+// Bounded, because two dangling links can name each other. Running out of hops
+// reports failure rather than the path as it stands: a real chain is nowhere
+// near this long, so exhausting the budget means wt has not established which
+// directory the path names. Both callers guard something, and an unresolved path
+// compares equal to nothing — which is the guard passing, not holding.
+func canonicalExistingPath(path string) (string, bool) {
 	if absolute, err := filepath.Abs(path); err == nil {
-		abs = absolute
+		path = absolute
 	}
+	path = filepath.Clean(path)
 
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		return filepath.Clean(resolved)
+	for hops := 0; hops < 32; hops++ {
+		resolved, rest, dangling := splitAtResolvable(path)
+		if dangling == "" {
+			return filepath.Join(resolved, rest), true
+		}
+		path = filepath.Clean(filepath.Join(dangling, rest))
 	}
+	return "", false
+}
 
-	return filepath.Clean(abs)
+// splitAtResolvable walks path upwards until EvalSymlinks accepts a prefix, and
+// returns that resolved prefix with the components below it. If the walk steps
+// onto a symlink whose target is missing, it returns the target instead, for
+// canonicalExistingPath to carry on from.
+func splitAtResolvable(path string) (resolved, rest, dangling string) {
+	for {
+		if r, err := filepath.EvalSymlinks(path); err == nil {
+			return r, rest, ""
+		}
+		if target, err := os.Readlink(path); err == nil {
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(path), target)
+			}
+			return "", rest, target
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return path, rest, ""
+		}
+		rest = filepath.Join(filepath.Base(path), rest)
+		path = parent
+	}
 }
 
 func prepareMigrateTarget(target string, force bool) error {

@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -182,6 +185,195 @@ func TestRepoPlacementPathRejectsTraversal(t *testing.T) {
 	// A ".." inside a segment is a legitimate host and must still resolve.
 	if _, err := repoPlacementPath(repoInfo{Host: "a..b", Owner: "o", Name: "r"}, "main"); err != nil {
 		t.Errorf("host %q should be allowed: %v", "a..b", err)
+	}
+}
+
+// TestRepoPlacementPathRejectsExpansion covers the other half of the traversal
+// problem: expandHome runs on the rendered path, so a value the URL supplied is
+// still expanded after "{.repo.Owner}" has been substituted into it. "$HOME" is
+// not a directory of that name, and neither the ".." check nor the repo_root
+// anchoring is looking at what it turns into.
+func TestRepoPlacementPathRejectsExpansion(t *testing.T) {
+	clean := repoInfo{Host: "github.com", Owner: "timvw", Name: "wt"}
+
+	// Deliberately somewhere the wtStateAtPath backstop will not recognise: the
+	// two guards catch the real exploit independently, and this one has to fail
+	// when the refusal below is removed, not shrug because the other caught it.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), ".config"))
+
+	refused := []struct {
+		what string
+		info repoInfo
+	}{
+		{"$ in the owner", repoInfo{Host: "github.com", Owner: "$HOME/.config", Name: "wt"}},
+		{"$ in the host", repoInfo{Host: "${HOME}", Owner: "o", Name: "r"}},
+		{"$ in the name", repoInfo{Host: "github.com", Owner: "o", Name: "$HOME"}},
+		{"% in the owner", repoInfo{Host: "github.com", Owner: "%APPDATA%", Name: "wt"}},
+		{"a leading ~ in the owner", repoInfo{Host: "github.com", Owner: "~/.config", Name: "wt"}},
+	}
+	for _, tt := range refused {
+		t.Run(tt.what, func(t *testing.T) {
+			// The pattern that makes it reachable: without {.repoRoot} the
+			// rendered path is relative, and an expansion to an absolute one
+			// then walks past the anchoring too.
+			withCloneConfig(t, "{.repo.Owner}/{.repo.Name}")
+			if path, err := repoPlacementPath(tt.info, "main"); err == nil {
+				t.Fatalf("repoPlacementPath() = %q, want an error: the URL chose where that expands to", path)
+			}
+		})
+	}
+
+	t.Run("the branch too", func(t *testing.T) {
+		withCloneConfig(t, defaultRepoPattern)
+		if _, err := repoPlacementPath(clean, "$HOME"); err == nil {
+			t.Error("expected an error for a default branch containing \"$\", got nil")
+		}
+	})
+
+	t.Run("a ~ that is not leading is a directory name", func(t *testing.T) {
+		// Only a leading ~ expands, so refusing every one of them would refuse
+		// paths that are merely oddly named.
+		root := withCloneConfig(t, defaultRepoPattern)
+		got, err := repoPlacementPath(repoInfo{Host: "github.com", Owner: "a/~/b", Name: "wt"}, "main")
+		if err != nil {
+			t.Fatalf("repoPlacementPath() error = %v, want a path", err)
+		}
+		if want := filepath.Join(root, "github.com", "a", "~", "b", "wt", "main"); got != want {
+			t.Errorf("repoPlacementPath() = %q, want %q", got, want)
+		}
+	})
+}
+
+// A clone writes a whole repository at once, so a destination on wt's own state
+// is the substitution renderWorktreePath refuses — the cloned config.toml and
+// trust.toml become the ones wt reads. Refused here whatever route reached it,
+// not only via the expansion above.
+func TestClonePlacementIsNeverOnWtsOwnState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	cfgDir := configDir()
+
+	origConfigFilePath, origSources := configFilePath, configSources
+	t.Cleanup(func() { configFilePath, configSources = origConfigFilePath, origSources })
+	configFilePath = filepath.Join(cfgDir, "config.toml")
+	// Deliberately not a phrase that appears anywhere else in the refusal: the
+	// description of the config directory already contains "config file", so a
+	// label of that would pass whether or not it reached the message.
+	configSources.RepoPattern = "the layer under test"
+
+	withCloneConfig(t, "{.repoRoot}/{.repo.Name}")
+	reposRoot = cfgDir
+
+	path, err := repoPlacementPath(repoInfo{Host: "github.com", Owner: "evil", Name: "payload"}, "main")
+	if err == nil {
+		t.Fatalf("repoPlacementPath() = %q, want an error: the clone lands inside wt's config directory", path)
+	}
+	// repo_pattern is never read from a repository, so the refusal names the
+	// layer the user can go and change.
+	if !strings.Contains(err.Error(), "the layer under test") {
+		t.Errorf("error does not say where the pattern came from:\n%v", err)
+	}
+}
+
+// TestCloneRefusesAnExplicitDestinationOnWtsOwnState: the pattern refusal offers
+// an explicit destination as the way out, and the way out is a different path —
+// not permission to name this one. A repository cloned into wt's config
+// directory supplies the config file and the approval store, and a committed
+// trust.toml would cover every repository on the machine.
+func TestCloneRefusesAnExplicitDestinationOnWtsOwnState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	origConfigFilePath := configFilePath
+	t.Cleanup(func() { configFilePath = origConfigFilePath })
+	configFilePath = filepath.Join(configDir(), "config.toml")
+
+	// A real repository, so that without the refusal the clone succeeds and the
+	// two files below land as wt's own — rather than failing for its own reasons
+	// and letting the test pass without proving anything.
+	payload := filepath.Join(home, "payload")
+	if err := os.MkdirAll(payload, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setupTestRepo(t, payload)
+	for _, name := range []string{"config.toml", "trust.toml"} {
+		if err := os.WriteFile(filepath.Join(payload, name), []byte("version = 2\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGitCommand(t, payload, "add", "-A")
+	runGitCommand(t, payload, "commit", "-qm", "payload")
+
+	err := runClone(cloneCmd, []string{payload, configDir()})
+	if err == nil {
+		t.Fatal("runClone() = nil, want a refusal: the clone lands on wt's config directory")
+	}
+	if !strings.Contains(err.Error(), "approval store") {
+		t.Errorf("error does not say what the clone would become:\n%v", err)
+	}
+	if _, statErr := os.Stat(configDir()); !os.IsNotExist(statErr) {
+		t.Errorf("something was created at %s (stat err = %v)", configDir(), statErr)
+	}
+}
+
+// TestCloneDiscardsAnApprovalLeftAtTheDestination: an approval is pinned to
+// (scope, sha256 of the commands), and nothing prunes one when a checkout is
+// deleted — so a record outlives the repository it was given to. The
+// destination being empty is exactly what says that repository is gone, and a
+// different one cloned into its place must not inherit the approval by
+// declaring a command the user is likely to have approved there once.
+func TestCloneDiscardsAnApprovalLeftAtTheDestination(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	source := filepath.Join(home, "source")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setupTestRepo(t, source)
+	if err := os.WriteFile(filepath.Join(source, ".wt.toml"),
+		[]byte("[hooks]\npost_create = [\"echo owned\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, source, "add", "-A")
+	runGitCommand(t, source, "commit", "-qm", "hooks")
+
+	// Four approvals: two left at the path being cloned into, and two that have
+	// nothing to do with it. Removing the lot would be its own bug.
+	//
+	// The second stale one is a submodule's. A submodule is its own repository
+	// with its own hooks, and its scope sits beneath the superproject's .git
+	// rather than at it — so an approval pinned there survives an exact-match
+	// prune, and a new repository shipping a submodule of the same name inherits
+	// it as soon as the submodule is initialised.
+	dest := filepath.Join(home, "src", "acme", "tool")
+	elsewhere := filepath.Join(home, "src", "acme", "other")
+	if err := saveTrustStore(trustStore{Trusted: []trustRecord{
+		{Scope: filepath.Join(dest, ".git"), Source: hookSourceRepoConfig, SHA256: "stale"},
+		{Scope: filepath.Join(dest, ".git", "modules", "dep"), Source: hookSourceRepoConfig, SHA256: "stale-submodule"},
+		{Scope: filepath.Join(elsewhere, ".git"), Source: hookSourceRepoConfig, SHA256: "unrelated"},
+		{Scope: trustScopeUser, Source: hookSourceConfigFile, SHA256: "mine"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runClone(cloneCmd, []string{source, dest}); err != nil {
+		t.Fatalf("runClone() = %v, want the clone to succeed", err)
+	}
+
+	store, err := loadTrustStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	left := make([]string, 0, len(store.Trusted))
+	for _, rec := range store.Trusted {
+		left = append(left, rec.SHA256)
+	}
+	slices.Sort(left)
+	if want := []string{"mine", "unrelated"}; !slices.Equal(left, want) {
+		t.Errorf("approvals after the clone = %v, want %v: the record left at %s should go, and only that one",
+			left, want, dest)
 	}
 }
 

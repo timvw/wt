@@ -17,6 +17,30 @@ wt config path          # Print the config file path
 2. `WT_CONFIG` environment variable
 3. Default: `~/.config/wt/config.toml` (respects `$XDG_CONFIG_HOME`; `%AppData%\wt\config.toml` on Windows)
 
+Give an absolute path. A relative `--config` or `WT_CONFIG` names a different
+file in every directory `wt` runs in, so whatever is checked out there supplies
+one; `wt` says so and reads none. Nor does it help for the path to point out of
+the repository — `../wt-user.toml` is outside the submodule you are standing in
+and inside the superproject that vendored it.
+
+An absolute path inside the repository you are standing in is refused for the
+same reason, usually as a mistake rather than a trick. The name is not the point:
+`WT_CONFIG=wt-user.toml` is as easy for a repository to commit as `.wt.toml`.
+[`hooks_policy`](#requiring-approval-for-every-hook) and
+[`[trust]`](#trusting-paths-ahead-of-time) are honoured from your config file
+because it is yours, so a repository read as your config file could exempt itself
+from hook approval. Its settings still apply as a repository's, and its hooks
+still need `wt trust`.
+
+The path is judged as written, not as it resolves. A config file kept in a
+dotfiles repository and symlinked into `~/.config/wt` keeps working, including
+while you are standing in that repository — refusing it there would take your
+`root` and `pattern` with it and put the worktree somewhere else, and that file
+is already your config in every other repository anyway. The one symlink `wt`
+does refuse is one whose target is the current repository's own `.wt.toml`: that
+file has a repository-side job, and reading it as your config as well would give
+it the wider scope, where one approval covers every repository at once.
+
 **Example config file** (`~/.config/wt/config.toml`):
 
 ```toml
@@ -55,6 +79,151 @@ Two differences from the global config file:
 - Hooks are merged **per hook**: a hook the repo config does not set keeps the
   value from the global config file.
 
+`pattern` **is** read from `.wt.toml`, and one that renders to an absolute path
+is not anchored in your `root` at all. That is deliberate — a project may have a
+layout in mind — but it means the repository chooses the directory
+`git worktree add` writes into. There are three it may not choose: `wt`
+refuses a pattern landing on its own config directory, on a directory that
+contains it, or on your config file — compared with symlinks resolved as far as
+each path exists, without regard to case, since `~/.config/WT` is that same
+directory on macOS and Windows, and by asking the filesystem which directory
+each path really is, since `/System/Volumes/Data/Users/you` is your home
+directory under a name that resolves to nothing. A symlink whose target does not
+exist yet is followed rather than read as an ordinary missing directory: a
+`~/.config/wt` pointing into a dotfiles repo you have not cloned is the usual way
+to have one, and writing the target is exactly what makes the link live. On
+Windows the comparison also drops the trailing dots and spaces Win32 drops from
+every path component, so a pattern ending `wt.` is the directory it reaches
+rather than a name of its own. `wt migrate` asks the same question again at the
+moment it moves each worktree, not only when it draws up the plan: moving the
+primary checkout materialises everything that repository had committed, so a
+`link -> ../../../.config` inside it resolves to nothing while the plan is made
+and to your config directory by the time the linked worktrees follow. The files
+checked out there would *become*
+`config.toml` and `trust.toml`, and those two are the gate itself. Hooks in your
+config file are vetted like any others — but `hooks_policy` and `[trust]` are
+read from that file and nowhere else, so it is where the answer to *whether you
+are asked at all* comes from; and `trust.toml` is the record of what you have
+already said yes to. A branch carrying both arrives with a `[trust]` rule
+covering itself, or an approval it computed for its own commands. It would not
+slip a hook past the gate, it would supply the gate.
+
+A repository that *contains* this one counts as the repository too. A submodule
+is its own repository, and the superproject holding it is not you — it is more
+committed content, chosen by whoever chose the submodule. So a `WT_CONFIG`
+reaching a file the superproject committed is refused for the same reason a
+`--config ../main/.wt.toml` from a linked worktree is.
+
+The second is git's own global configuration: `~/.gitconfig`,
+`$XDG_CONFIG_HOME/git` (`~/.config/git` by default) and the `config` file in it,
+and whatever `GIT_CONFIG_GLOBAL` or `GIT_CONFIG_SYSTEM` names. The file as well
+as the directory, because guarding a directory says nothing about where a
+symlink inside it points, and `~/.config/git/config` is as often a link into a
+dotfiles repository as `trust.toml` is. `core.hooksPath` is a hook command under another
+name — a branch checked out over `~/.config/git` supplies git's config and a
+`hooks` directory beside it, and the next `git worktree add`, `wt`'s own
+included, runs what is in it. Nothing was approved and nothing was prompted for,
+and like `trust.toml` it applies in every repository afterwards rather than only
+in that one.
+
+The files that configuration pulls in count as part of it, however deep. git
+ignores an `[include]` or `[includeIf]` whose file is not there rather than
+complaining, so
+a `path = ~/dotfiles/gitconfig` on a machine where you have not cloned your
+dotfiles yet is an armed slot, not a broken setting — a pattern rendering onto
+`~/dotfiles` fills it, and every git command afterwards reads what the repository
+committed. `wt` guards the files those rules name — including the ones an
+included file names in turn, which git only reports when asked — resolving a
+relative one the way git does — against the directory of the config file that declared it, so
+`path = dotfiles/gitconfig` in `~/.gitconfig` is `~/dotfiles` — and without
+evaluating an `includeIf`'s condition: whether the file is read *here* is not the
+question, it is read in whichever repository matches, and the placement is what
+puts it there.
+
+The third is any repository's git directory, along with the settings that name
+somewhere else git will run something from: `core.hooksPath`, `init.templateDir`
+(and `GIT_TEMPLATE_DIR`), and `core.fsmonitor`. `git worktree add` will check out into an
+existing directory as long as it is empty, and `.git/hooks` is empty on any clone
+made with no init template — so a branch whose tree is one executable
+`post-checkout` file, placed there, is run by the very next `git worktree add`,
+`wt`'s own included. That is the shortest path from a committed `pattern` to
+arbitrary code, and it never touches the approval gate at all.
+
+*Any* repository's, not just the one you are in: the mechanism does not care
+whose `.git` it is, and `~/src/victim/.git/hooks` is as reachable from a pattern
+as your own. A path with a `.git` component is refused, whether the pattern spells
+it out or reaches it through a symlink. Spelling is not a way out either: the
+check folds case, because on a case-insensitive volume `.GIT/hooks` *is*
+`.git/hooks`.
+
+A bare repository has no `.git` in its path at all — `git init --bare
+/srv/git/project` keeps its hooks at `/srv/git/project/hooks` — so the name is
+not asked. git is: every existing directory above the destination is put to
+`git rev-parse --resolve-git-dir`, and a placement inside one that answers is
+refused. That matters because an empty `hooks/` is the ordinary state of a
+server-side repository, and empty is the only thing `git worktree add` requires;
+the committed `post-receive` left there runs on the next push.
+
+The other three settings are the same shape as `core.hooksPath` — a path git
+consults, which git does not mind being absent, so a value naming a directory
+that is not there yet is an armed slot rather than a broken setting.
+`init.templateDir` is the widest of them: git copies that directory's `hooks/`
+into every repository it creates afterwards, so filling it arms every future
+clone rather than one repository. `core.fsmonitor` names a program git runs on
+any command that reads the index, which is nearly all of them. A `~user/...`
+value is expanded the way git expands it, since a value `wt` read as relative
+would be one it silently declined to guard — and a *relative* value is resolved
+against the top of the working tree and guarded there rather than dropped,
+because `core.hooksPath = ../shared-hooks` leaves the repository from there.
+
+That list is not a claim to be exhaustive about every git setting naming a
+program. Most name a binary you already have (`core.pager`, `gpg.program`)
+rather than a directory waiting to be created, and chasing them one key at a
+time has a floor — the bounded fix is anchoring a repository-supplied absolute
+pattern inside your own tree, which is [issue #154](https://github.com/timvw/wt/issues/154).
+
+One thing `wt` cannot guard: a **relative** `GIT_CONFIG_GLOBAL` or
+`XDG_CONFIG_HOME`. git resolves either against the working directory, so it names
+a different file in every repository — including one a repository committed,
+holding `core.hooksPath`. That file is read the moment any git command runs
+there, whatever `wt` does; there is no placement to refuse, because nothing needs
+placing. `XDG_CONFIG_HOME` is the quieter of the two, since `wt` ignores a
+non-absolute value for its own config directory while git honours it for git's.
+`wt` says so on stderr and otherwise guards the default locations. Set them to
+absolute paths.
+
+Absolute is not quite the test, though. `/proc/self/cwd` is spelled absolutely
+and means the working directory, so it passes an `IsAbs` check and fails the one
+that matters — and `/proc/<pid>/cwd` is the same thing aimed at the shell `wt`
+was launched from. Anywhere `wt` accepts a path *because* it is absolute it asks
+instead whether the path means the same place wherever `wt` runs: your config
+file, the config directory the trust store lives in, and git's global
+configuration. An `XDG_CONFIG_HOME` of `/proc/self/cwd/.config` would otherwise
+have `wt` read its record of what you have approved out of whatever repository
+you happen to be standing in.
+
+`HOME` gets the same question, and it is the one that matters most: it is what
+`wt` falls back to when `XDG_CONFIG_HOME` and `%AppData%` are refused, so asking
+it of the overrides alone would refuse the front door and leave the back one
+open. Refusing it is still only half: git goes on reading `$HOME/.gitconfig`,
+which under such a home is the repository's own file — `core.hooksPath` and all
+— so `wt` says so on stderr the way it does for a `GIT_CONFIG_GLOBAL` it cannot
+guard. A `~/...` path in a `[trust]` rule is anchored the same way, since
+`--config` and `WT_CONFIG` name a file directly and so survive a home the config
+directory would have rejected.
+
+That is where the guard stops, and it stops on purpose: it covers `wt`'s
+configuration and the configuration of the program `wt` drives. An absolute
+pattern may still render anywhere else in your home directory, which is the
+price of `pattern` being a project's to set — `git worktree add` will not write
+into a directory that already has anything in it, so what it reaches are paths
+nothing has created yet. If that trade is not one you want, set the pattern
+somewhere a repository cannot outrank: `git config wt.pattern` in the
+repository's own `.git/config`, which is read after `.wt.toml` and is not a file
+a clone can ship, or `WORKTREE_PATTERN` in your environment, which is read after
+everything. The config file will not do it — `.wt.toml` overrides it, which is
+the point of `.wt.toml`.
+
 ## Git config
 
 `wt` also reads its settings from `git config`, which is useful for **personal,
@@ -91,8 +260,9 @@ anyway. `wt.context.*` is the one key that keeps a section: `<name>` is a git
 
 Notes:
 
-- **Hooks are not read from git config**, at any scope, and neither is
-  `hooks_policy`. That is a security boundary rather than an omission — see
+- **Hooks are not read from git config**, at any scope, and neither are
+  `hooks_policy` and `[trust]`. That is a security boundary rather than an
+  omission — see
   [Why hooks are not readable from git config](#why-hooks-are-not-readable-from-git-config).
 - **`wt.copy`, `wt.link` and `wt.exclude` are multi-valued.** Use `--add` once
   per pattern:
@@ -178,6 +348,11 @@ An empty list reads as "not set" rather than "cleared", so `post_checkout = []`
 in `.wt.toml` does not suppress an inherited `post_checkout`; use
 `WT_HOOKS_DISABLED=1` or `hooks_policy = "off"` to stop hooks running. See
 [Hooks](#hooks).
+
+`hooks_policy` and `[trust]` have no layers at all: both are read from your own
+config file and nowhere else, since a repository deciding how closely `wt`
+scrutinises that repository's hooks would defeat the point. See
+[Hook trust](#hook-trust).
 
 Run `wt config show` to see the effective value and source of each setting:
 
@@ -304,6 +479,19 @@ Both settings are also settable via environment variables — `WT_REPO_ROOT` and
 repo-level `.wt.toml`: `wt clone` targets a repository other than the one you
 are standing in, so letting that repo's config redirect the destination (or run
 clone hooks) would be wrong.
+
+The pattern is yours, but the values substituted into it come from the URL you
+pasted, so `wt clone` refuses one that tries to choose the destination itself.
+A `..` segment in the host, owner, repository name or default branch is
+rejected — `https://host/../../tmp/pwn.git` parses to owner `../../tmp`, and an
+scp-like `../escape:owner/repo.git` puts it in the host. So is a `$` or `%`
+anywhere in those four, or a leading `~`: the rendered path is expanded, so
+`https://evil.example/$HOME/.config/wt.git` is not a directory called `$HOME`
+but wt's own config directory, and a repository cloned there would supply the
+`config.toml` and `trust.toml` that decide whether hooks run. As a backstop the
+final destination is refused if it lands on that directory or your config file
+however it got there. All of these say to pass an explicit destination, which
+is you choosing the path rather than the URL.
 
 ### Grouping clones ("categories")
 
@@ -695,7 +883,7 @@ worktree survives. You do not lose a worktree over a missing `.env`.
 
 ### Why `[files]` needs no trust prompt
 
-`[hooks]` from a committed `.wt.toml` needs [approval](#hook-trust) because it is
+`[hooks]` needs [approval](#hook-trust) wherever it came from, because it is
 arbitrary command execution. `[files]` is declarative data with a much smaller
 blast radius, and it is held there by invariants that are individually tested:
 
@@ -749,30 +937,35 @@ Checkout hooks (`pre_checkout` / `post_checkout`) run both when a new worktree i
 - **Pre-hooks** abort the operation if any command exits non-zero
 - **Post-hooks** print a warning on failure but do not fail the `wt` command
 - Each hook is a list of shell commands. `wt` spawns the shell itself, so the shell you are sitting in does not decide what runs them — see [Which shell runs a hook](#which-shell-runs-a-hook)
-- Hooks that came from a repository's committed `.wt.toml` need your approval before they run — see [Hook trust](#hook-trust)
+- Every hook needs your approval before it runs — your own config file's as well as a repository's committed `.wt.toml` — see [Hook trust](#hook-trust)
 - Set `WT_HOOKS_DISABLED=1` to skip all hooks (useful for scripting or CI)
 
 ## Hook trust
 
-`.wt.toml` lives in the working tree, so it is normally committed and travels
-with the repository. That makes its `[hooks]` table something the *repository*
-supplies rather than something you wrote: without a gate, cloning an untrusted
-repo and running `wt create` in it would execute whatever commands that repo
-asked for.
+**`wt` runs no hook you have not approved.** Not the ones a repository ships in
+its committed `.wt.toml`, and not the ones in your own config file either.
 
-So `wt` does not run them until you approve them:
+`.wt.toml` lives in the working tree, so it is normally committed and travels
+with the repository — its `[hooks]` table is something the *repository* supplies
+rather than something you wrote. Your own config file is something you wrote, but
+"you wrote it" is a claim about a file on disk, and a file on disk is not
+self-evidently yours: `~/.config/wt/config.toml` is as writable as anything else
+in `$HOME`. Approving it once costs one prompt and removes the guess.
 
 ```console
 $ wt create feat/x
 
 ⚠ These commands come from /home/you/src/acme/.wt.toml (not trusted):
 
-    [post_create] cd "$WT_PATH" && npm install
+  → [post_create] cd "$WT_PATH" && npm install
+    [pre_remove] docker compose down
+
+  → runs now; approving covers the rest too.
 
 ? Run these hooks?
   ▸ Skip these commands
     Run once
-    Run, and trust this .wt.toml until it changes
+    Run, and remember this until the commands change
 ```
 
 With no terminal to ask on — scripts, CI, `--format json` — the answer is
@@ -782,23 +975,162 @@ than failing the command.
 Approve ahead of time, or review what is approved:
 
 ```bash
-wt trust          # approve this repository's .wt.toml
-wt trust --list   # every approval on this machine
-wt untrust        # revoke this repository's approval
+wt trust             # approve everything that applies here
+wt trust --list      # every approval on this machine
+wt untrust           # revoke this repository's approval
+wt untrust --global  # revoke your config file's approval
 ```
 
-An approval is pinned to the file's contents and to the repository. Editing
-`.wt.toml` — including a `git pull` that adds a hook, or checking out a branch
-whose `.wt.toml` differs — invalidates it and `wt` asks again. An identical
-`.wt.toml` in a *different* repository is not covered either: `make setup` is
-only as safe as the Makefile next to it.
+`wt trust` approves both sources that apply where you are standing — your config
+file's hooks and, if the repository has a `.wt.toml`, that repository's — and
+prints the commands first, because approving without reading is the failure this
+whole mechanism exists to prevent. The two are recorded separately: approving
+here does not widen the repository's reach, and does not pin your own hooks to
+this checkout.
+
+### What an approval covers
+
+An approval is pinned to **the commands, and to the source that supplied them**:
+
+- Your config file's hooks are approved once and run in every repository. That is
+  what a *user* config is for.
+- A repository's `.wt.toml` is approved for that repository only. An identical
+  `.wt.toml` in a different repository is not covered: `make setup` is only as
+  safe as the Makefile next to it.
+
+Changing a hook command invalidates the approval and `wt` asks again — including
+a `git pull` that adds a hook, or checking out a branch whose `.wt.toml` differs.
+Changing anything *else* in the file does not: editing `pattern` or a `[files]`
+entry is not a change to what would execute, so it does not cost you a prompt.
 
 Approvals are stored in `~/.config/wt/trust.toml` (`$XDG_CONFIG_HOME/wt/` or
 `%APPDATA%\wt\` if set). Deleting that file revokes everything.
 
-Hooks from your **own** config file are not gated — you wrote them.
+That location is always an absolute path. A non-absolute `$XDG_CONFIG_HOME` (or
+`%APPDATA%` on Windows) is invalid per the XDG Base Directory spec and is ignored
+with a warning. If none of them yields an absolute directory and there is no home
+directory either — an unset `HOME`, as happens in some CI and container images —
+wt records nothing and treats every hook as unapproved. Resolving a relative path
+against the working directory would put `trust.toml` *inside* whichever
+repository is being gated, where a cloned repo could ship approvals for its own
+hooks. If you hit this in CI, set `HOME` or an absolute `XDG_CONFIG_HOME`; to run
+hooks there deliberately, see [Requiring approval for every
+hook](#requiring-approval-for-every-hook) for `WT_HOOKS_APPROVE_ALL`.
 
-**Requiring approval for every hook:**
+An absolute setting is taken as given, including one that happens to point inside
+a working tree — `XDG_CONFIG_HOME=/srv/repo/.config` keeps approvals in
+`/srv/repo/.config/wt/trust.toml`. That is the same directory in every repository
+you enter, so no repository can arrive at it by being cloned or entered; where
+your own approvals live is your call. Worth knowing if your home directory is
+itself a tracked repository: `trust.toml` is a local record, not something to
+commit.
+
+### Trusting paths ahead of time
+
+If everything under a directory is yours, say so once instead of approving each
+repository as you clone it:
+
+```toml
+[trust]
+prefix = ["~/src/mine"]      # this directory and everything below it
+exact  = ["~/src/acme/api"]  # this repository only
+```
+
+Hooks in a repository covered by a `[trust]` rule run without asking, and without
+being recorded — there is nothing to invalidate, so a rule keeps applying as the
+repository's hooks change. That is the trade: `prefix` is an assertion about a
+directory you control, not about the commands under it. Point it at a tree you
+clone other people's code into and you have turned the gate off for that tree.
+
+`[trust]` is read from your config file only, never from a `.wt.toml` — a
+repository that could whitelist itself would not be gated at all. Prefix matching
+is on whole path segments, so `~/src/mine` does not cover
+`~/src/mine-from-the-internet`. `wt untrust` cannot revoke a rule; edit the config
+file (`wt untrust` says so when a rule still covers the repository).
+
+A rule names its directory literally. `~` is expanded; environment variables are
+not, and a rule containing `$` or `%` is ignored and reported. This is the one
+place wt refuses to expand them, because an expansion that fails shortens a rule
+instead of failing it: an unset `SRC` turns `$SRC/repos` into `/repos`, and
+`$SRC/Users` into `/Users` — an existing directory holding every repository on
+the machine. Rules naming a filesystem root are rejected for the same reason, as
+are relative ones — a rule has to name one directory, not a different one
+depending on where you ran `wt` from. `/proc/self/cwd` is refused on those same
+grounds despite being absolute: it is where you ran `wt` from, spelled as though
+it were not. Nothing else is adjusted either: an entry
+that is only whitespace is skipped as the blank line it is, but a trailing space
+inside a rule is part of the directory's name: `/srv/team` with a space on the
+end is a different directory, and trimming it back would hand the rule a wider
+tree than it names. On Windows the rule reaches
+`C:\srv\team` regardless, because Windows itself strips trailing spaces from a
+path component — as with case-insensitivity there, a rule covers the one
+directory its path names on that machine. `wt trust --list` shows each rule next
+to what it resolves to, or marks it ignored.
+
+Symlinks are followed, including the ones above a directory that is not there
+yet: you can write a rule for a tree you have not filled in. Both sides of every
+comparison are resolved the same way, because otherwise they would never meet —
+if `~/src` is a link to another volume, a rule for `~/src/mine` resolves through
+it, and `wt migrate`'s destination `~/src/mine/tool`, which nothing has created,
+would not. That mismatch is not a rule quietly failing to apply; it is `migrate`
+deciding a path is *outside* your whitelisted tree and moving a repository into
+it. A rule `wt` cannot follow to an end names no directory in particular and is
+ignored with a warning, and a destination it cannot follow is left where it is.
+
+A rule is matched against the repository a working tree belongs to, and only
+when git confirmed which repository that is. `wt` asks git to list the
+repository's registered worktrees and looks for the one it is standing in; if it
+is not there, the approval is pinned to the directory's own path instead — still
+a working key, but not one a rule may act on. A rule is a statement about
+repositories kept in a tree, whereas an unconfirmed identity is only a statement
+about where a directory sits, and every directory under a whitelisted tree sits
+there. That lookup reads `git worktree list --porcelain -z`: a worktree path may
+contain a newline, which the line-based format prints raw, so one entry arrives
+as two lines and neither of them is the path — a repository could pick such a
+path for its own worktree and be unfindable on purpose. `-z` needs git 2.36;
+older git gets the line-based read, and anything it cannot confirm simply does
+not reach a rule.
+
+A rule covers a tree you fill yourself, so `wt migrate` will not move a
+repository into one it is not already in. The primary checkout's destination is
+`~/src/{owner}/{name}` read off the origin URL, and the host is not part of it —
+a clone of `https://evil.example/acme/pwn` would land in the same `~/src/acme`
+you wrote a rule for `github.com/acme`, and arrive already approved. That
+migration is skipped with a reason instead. Moving it there yourself still
+works, because then the path is your choice rather than the URL's.
+
+The same goes for an approval already waiting at that path. Records are pinned to
+`(scope, sha256 of the commands)` and nothing prunes one when a checkout is
+deleted, so `~/src/acme/tool` can still carry the approval you gave the
+`acme/tool` you used to have. A repository named to land there, shipping a
+command you were likely to have approved somewhere — `make setup` — would arrive
+pre-approved. `wt migrate` declines that move too, and says which path to run
+`wt untrust` in. Compared as command sets, not as "is anything approved here":
+a repository you approved once holds a record for the commands it had then, and
+asking only whether its current path has *an* approval would let that one wave
+through a move onto a different set waiting at the destination.
+
+Those two checks ask about a directory that does not exist yet, so the
+filesystem has not settled which one the name reaches. The destination is
+therefore matched loosely — case folded, and on Windows without the trailing
+dots and spaces Win32 drops from every path component, so an origin URL ending
+`tool..git` cannot render a `tool.` that matches no rule and no record and is
+then created as the `tool` both of them name. The repository the move starts
+from is matched exactly, because crediting *it* with an approval is what waives
+the refusal. Granting stays exact everywhere: on a case-sensitive filesystem
+`~/src/Mine` and `~/src/mine` are two directories, and a rule for one is not a
+rule for the other.
+
+`wt clone` meets the same records from the other side, and answers differently
+because you named the source. Its destination has to be empty, and an empty path
+is what says the repository those records were given to is gone — so they are
+discarded before the new one lands, and the clone says how many went. Without
+that, someone who takes over an abandoned namespace, or a `repo_pattern` that
+happens to render onto a path an old checkout occupied, would arrive holding an
+approval you gave to something else. You are asked about the new repository's
+hooks the first time they run, as with any other clone.
+
+### Requiring approval for every hook
 
 ```toml
 hooks_policy = "prompt-untrusted"   # default
@@ -806,24 +1138,42 @@ hooks_policy = "prompt-untrusted"   # default
 
 | Value | Behaviour |
 | --- | --- |
-| `prompt-untrusted` | Your own hooks run; hooks from a repo's `.wt.toml` need approval |
-| `prompt-all` | Every hook batch is shown and confirmed, whatever supplied it |
-| `trusted-only` | Never prompts: already-trusted and own hooks run, anything else is skipped |
+| `prompt-untrusted` | Anything not yet approved is shown and confirmed; approved hooks run |
+| `prompt-all` | Every hook batch is shown and confirmed, however it was approved |
+| `trusted-only` | Never prompts: approved hooks run, anything else is skipped |
 | `off` | No hooks run at all (same as `WT_HOOKS_DISABLED=1`) |
 
-`prompt-all` covers what trust alone does not: your own
+`prompt-all` covers what a one-time approval does not: your own
 `post_checkout = ["cd $WT_PATH && npm install"]` runs whatever lifecycle
 scripts are in the `package.json` of whichever repository you happen to be
-standing in.
+standing in, and that changes without your config file changing. It overrides
+`[trust]` rules too — "ask me every time" has to mean every time.
+
+`trusted-only` is the one to reach for in CI: it never blocks on a prompt, and it
+never runs anything you did not approve on that machine.
 
 Override per invocation with `WT_HOOKS_POLICY`. `hooks_policy` is read from
 your config file only — never from a repo-level `.wt.toml`, since a repository
 choosing how closely `wt` scrutinises that same repository's hooks would defeat
 the point.
 
-For automation you control, `WT_HOOKS_APPROVE_ALL=1` approves every batch
-without asking. It bypasses the untrusted-repo check too, so do not export it
-in your shell rc.
+For automation you control, `WT_HOOKS_APPROVE_ALL=1` approves every batch without
+asking: it skips the approval check, including the trust store, so do not export
+it in your shell rc. It does not turn hooks *on* — `hooks_policy = "off"` and
+`WT_HOOKS_DISABLED=1` still run nothing, since those say "no hooks" rather than
+"ask me about hooks".
+
+### Upgrading from wt 0.3 and earlier
+
+Before 0.4, hooks from your own config file ran unprompted and only a repo's
+`.wt.toml` was gated. Approvals from those versions pinned the *bytes of a file*
+rather than a set of commands, so they cannot be translated into the new records
+and are not carried over — `wt` drops them, says so on stderr, and asks once more
+for each set of hooks you use. Answer "Run, and remember this until the commands
+change", or run `wt trust` where you use them.
+
+If you would rather not be asked at all for trees you own, `[trust]` above is the
+escape hatch.
 
 ### Why hooks are not readable from git config
 
@@ -832,14 +1182,15 @@ any scope, and neither can `hooks_policy`. The dividing line is not scalar
 versus list, or file format: **git config carries settings, never commands, nor
 the policy that gates commands.**
 
-For `[hooks]` the reason is mechanical. Approval is decided by where a hook came
-from — `wt` prompts when the source is a repo's `.wt.toml` and runs everything
-else unprompted, because everything else is by construction something you wrote.
-A hook arriving from a new source would land on the permissive side of that
-test and run without a prompt. And `.git/config` is not reliably something you
-wrote: it comes along with a directory somebody hands you, an archive you
-unpack, or a restored backup. It is not covered by the trust store either, whose
-approvals are pinned to the sha256 of `.wt.toml`.
+For `[hooks]` the reason is mechanical. Nothing runs unprompted, so a new source
+cannot land on a permissive side — but approvals are recorded per source, and a
+source `wt` does not recognise has no scope to record one under. Hooks from
+`.git/config` would therefore prompt on every single command, forever, which is
+not a usable feature; and they are not the kind of thing worth making usable.
+`.git/config` is not reliably something you wrote: it comes along with a
+directory somebody hands you, an archive you unpack, or a restored backup. A
+repository that arrives as a directory rather than as a clone brings its own
+`.git/config` with it.
 
 For `hooks_policy` the reason is the same one that keeps it out of a repo-level
 `.wt.toml`: a repository choosing how closely `wt` scrutinises that
@@ -869,6 +1220,14 @@ The examples below — and everything in [examples.md](examples.md) — are POSI
 # PowerShell / cmd on Windows: cmd syntax, %VAR% expansion
 post_create = ["cd /d %WT_PATH% && npm install"]
 ```
+
+Under `cmd /c`, `wt` skips the hooks for a worktree whose path, branch or repository
+name contains `& | < > ^ "` or a line break, and says which one. `cmd` expands
+`%WT_PATH%` *while* it parses, so those characters would be read as syntax and the
+line above would run as two commands — and since none of them is a hook command,
+an approval would not have covered the change. A `sh -c` hook is unaffected: the
+shell substitutes `$WT_PATH` after parsing and never re-reads the result. If you
+hit this, the usual cause is a branch name or a repository's `pattern`; rename it.
 
 Copying files is the one case you no longer need a hook for: [`[files]`](#files)
 does it natively, in one shell-independent form that works on Windows too.

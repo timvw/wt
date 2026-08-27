@@ -8,11 +8,43 @@ scenarios:
     skip_shells: [powershell, pwsh]  # hook body and steps use POSIX shell syntax
     skip_shellenv: true
     steps:
-      # Write a config file with a post_create hook, then create worktree
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_create = ["touch $WT_PATH/.hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" $WT_BIN create hook-test
+      # Write a config file with a post_create hook and approve it. Hooks from
+      # the user's own config file need approval too (issue #152), so every
+      # scenario below that expects a hook to *run* has to trust it first.
+      # XDG_CONFIG_HOME keeps the trust store out of the developer's real one.
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_create = ["touch $WT_PATH/.hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN trust
+        expect:
+          exit_code: 0
+          output_contains: "Trusted"
+      - run: WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN create hook-test
         expect:
           exit_code: 0
       - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/hook-test/.hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
+        expect:
+          output_contains: "HOOK_RAN"
+
+  - name: config_file_hooks_are_not_trusted_by_default
+    description: Hooks from the user's config file do not run until approved (issue #152)
+    skip_shells: [powershell, pwsh]  # hook body and steps use POSIX shell syntax
+    skip_shellenv: true
+    steps:
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_create = ["touch $WT_PATH/.hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN create unapproved-hook-branch
+        expect:
+          exit_code: 0
+          output_contains: "not trusted"
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/unapproved-hook-branch/.hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
+        expect:
+          output_contains: "HOOK_MISSING"
+
+  - name: config_file_hooks_run_with_approve_all_env
+    description: WT_HOOKS_APPROVE_ALL=1 is the non-interactive escape hatch (issue #152)
+    skip_shells: [powershell, pwsh]  # hook body and steps use POSIX shell syntax
+    skip_shellenv: true
+    steps:
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_create = ["touch $WT_PATH/.hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" WT_HOOKS_APPROVE_ALL=1 $WT_BIN create approve-all-branch
+        expect:
+          exit_code: 0
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/approve-all-branch/.hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
         expect:
           output_contains: "HOOK_RAN"
 
@@ -21,7 +53,10 @@ scenarios:
     skip_shellenv: true
     skip_shells: [powershell, pwsh]  # steps use POSIX shell syntax
     steps:
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_create = ["false"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" $WT_BIN create blocked-branch
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_create = ["false"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN trust
+        expect:
+          exit_code: 0
+      - run: WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN create blocked-branch
         expect:
           exit_code: 1
       - run: $WT_BIN list
@@ -33,7 +68,12 @@ scenarios:
     skip_shells: [powershell, pwsh]  # steps use POSIX shell syntax
     skip_shellenv: true
     steps:
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_create = ["false"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" WT_HOOKS_DISABLED=1 $WT_BIN create should-succeed
+      # Trust first, so the scenario proves WT_HOOKS_DISABLED skipped the hook
+      # rather than the approval gate doing it (both would exit 0).
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_create = ["false"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN trust
+        expect:
+          exit_code: 0
+      - run: WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" WT_HOOKS_DISABLED=1 $WT_BIN create should-succeed
         expect:
           exit_code: 0
 
@@ -44,7 +84,10 @@ scenarios:
     setup:
       - create_branch: hook-co-branch
     steps:
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_checkout = ["touch $WT_PATH/.checkout-hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" $WT_BIN checkout hook-co-branch
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_checkout = ["touch $WT_PATH/.checkout-hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN trust
+        expect:
+          exit_code: 0
+      - run: WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN checkout hook-co-branch
         expect:
           exit_code: 0
       - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/hook-co-branch/.checkout-hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
@@ -64,7 +107,10 @@ scenarios:
           exit_code: 0
       - cd: $REPO_DIR
       # Second checkout with hooks configured — hooks should still run
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_checkout = ["touch $WT_PATH/.existing-hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" $WT_BIN checkout existing-co-branch
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_checkout = ["touch $WT_PATH/.existing-hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN trust
+        expect:
+          exit_code: 0
+      - run: WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN checkout existing-co-branch
         expect:
           exit_code: 0
           output_contains: "already exists"
@@ -85,7 +131,10 @@ scenarios:
           exit_code: 0
       - cd: $REPO_DIR
       # Second checkout with failing pre_checkout hook — should abort
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_checkout = ["false"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" $WT_BIN checkout abort-co-branch
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_checkout = ["false"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN trust
+        expect:
+          exit_code: 0
+      - run: WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN checkout abort-co-branch
         expect:
           exit_code: 1
 
@@ -100,7 +149,12 @@ scenarios:
         expect:
           exit_code: 0
       - cd: $REPO_DIR
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_remove = ["echo HOOK_PRE_REMOVE"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" $WT_BIN remove rm-hook-branch
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_remove = ["echo HOOK_PRE_REMOVE"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN trust
+        expect:
+          exit_code: 0
+      # The hook's own output, not the skip message: a skipped hook prints its
+      # command too, so this assertion only means anything once trusted.
+      - run: WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN remove rm-hook-branch
         expect:
           exit_code: 0
           output_contains: "HOOK_PRE_REMOVE"
@@ -116,7 +170,10 @@ scenarios:
       - git_add: .env
       - git_commit: "add .env file"
     steps:
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_create = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" $WT_BIN create env-branch
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_create = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN trust
+        expect:
+          exit_code: 0
+      - run: WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN create env-branch
         expect:
           exit_code: 0
       - run: cat "$WORKTREE_ROOT_POSIX/test-repo/env-branch/.env"
@@ -128,7 +185,12 @@ scenarios:
     skip_shells: [powershell, pwsh]  # hook body and steps use POSIX shell syntax
     skip_shellenv: true
     steps:
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_create = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" $WT_BIN create no-env-branch
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_create = ["test -f $WT_MAIN/.env && cp $WT_MAIN/.env $WT_PATH/.env || true"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN trust
+        expect:
+          exit_code: 0
+      # Trusted, so an absent .env is what leaves the worktree without one —
+      # not the approval gate skipping the hook.
+      - run: WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN create no-env-branch
         expect:
           exit_code: 0
       - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/no-env-branch/.env" && echo "ENV_EXISTS" || echo "ENV_MISSING"
@@ -140,8 +202,11 @@ scenarios:
     skip_os: [windows]
     skip_shellenv: true
     steps:
-      # Clone the test repo locally with a post_clone hook.
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_clone = ["touch $WT_PATH/.clone-hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN clone "$REPO_DIR" "$TEST_DIR/clone-dest"
+      # Clone the test repo locally with a post_clone hook, approved first.
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_clone = ["touch $WT_PATH/.clone-hook-ran"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR/xdg" $WT_BIN trust
+        expect:
+          exit_code: 0
+      - run: WT_CONFIG="$TEST_DIR/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR/xdg" $WT_BIN clone "$REPO_DIR" "$TEST_DIR/clone-dest"
         expect:
           exit_code: 0
       - run: test -f "$TEST_DIR/clone-dest/.clone-hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
@@ -157,7 +222,10 @@ scenarios:
       # only records whether WT_BRANCH is populated. "x$WT_BRANCH != x" rather
       # than "test -n": an unquoted empty expansion would leave test -n a single
       # argument, which is true, and the assertion would pass vacuously.
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_clone = ["test x$WT_BRANCH != x && touch $WT_PATH/.branch-set"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN clone "$REPO_DIR" "$TEST_DIR/branch-dest"
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npost_clone = ["test x$WT_BRANCH != x && touch $WT_PATH/.branch-set"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR/xdg" $WT_BIN trust
+        expect:
+          exit_code: 0
+      - run: WT_CONFIG="$TEST_DIR/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR/xdg" $WT_BIN clone "$REPO_DIR" "$TEST_DIR/branch-dest"
         expect:
           exit_code: 0
       - run: test -f "$TEST_DIR/branch-dest/.branch-set" && echo "BRANCH_SET" || echo "BRANCH_EMPTY"
@@ -169,7 +237,10 @@ scenarios:
     skip_os: [windows]
     skip_shellenv: true
     steps:
-      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_clone = ["false"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" $WT_BIN clone "$REPO_DIR" "$TEST_DIR/blocked-clone"
+      - run: mkdir -p "$TEST_DIR/config" && printf '[hooks]\npre_clone = ["false"]\n' > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR/xdg" $WT_BIN trust
+        expect:
+          exit_code: 0
+      - run: WT_CONFIG="$TEST_DIR/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR/xdg" $WT_BIN clone "$REPO_DIR" "$TEST_DIR/blocked-clone"
         expect:
           exit_code: 1
       - run: test -d "$TEST_DIR/blocked-clone" && echo "EXISTS" || echo "ABSENT"
@@ -196,6 +267,29 @@ scenarios:
         expect:
           output_contains: "HOOK_MISSING"
 
+  - name: trust_whitelist_runs_repo_hooks_unasked
+    description: A [trust] prefix rule covers a repo's .wt.toml without an approval (issue #152)
+    skip_shells: [powershell, pwsh]  # hook body and steps use POSIX shell syntax
+    skip_shellenv: true
+    setup:
+      - create_file:
+          path: .wt.toml
+          content: "[hooks]\npost_create = [\"touch $WT_PATH/.repo-hook-ran\"]\n"
+      - git_add: .wt.toml
+      - git_commit: "add .wt.toml with a hook"
+    steps:
+      # The rule names the directory the test repo lives in. %s rather than an
+      # expansion inside the format string: the hook body must stay literal.
+      # \047 is a single quote, making this a TOML *literal* string — on Windows
+      # TEST_DIR_NATIVE is a backslash path and "C:\Users\..." is not a valid
+      # basic string, since TOML reads \U and \t as escapes.
+      - run: mkdir -p "$TEST_DIR/config" && printf '[trust]\nprefix = [\047%s\047]\n' "$TEST_DIR_NATIVE" > "$TEST_DIR/config/config.toml" && WT_CONFIG="$TEST_DIR_NATIVE/config/config.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN create whitelisted-hook-branch
+        expect:
+          exit_code: 0
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/whitelisted-hook-branch/.repo-hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
+        expect:
+          output_contains: "HOOK_RAN"
+
   - name: repo_wt_toml_hooks_run_after_wt_trust
     description: wt trust approves the repo's .wt.toml so its hooks run
     skip_shells: [powershell, pwsh]  # hook body and steps use POSIX shell syntax
@@ -217,3 +311,37 @@ scenarios:
       - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/trusted-hook-branch/.repo-hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
         expect:
           output_contains: "HOOK_RAN"
+  - name: repo_config_is_never_your_config_file
+    description: WT_CONFIG naming the repo's own .wt.toml does not let it whitelist itself (issue #152)
+    skip_shells: [powershell, pwsh]  # steps use POSIX shell syntax
+    skip_shellenv: true
+    steps:
+      # Written here rather than in setup because the [trust] rule has to name
+      # this repository, whose path is only known at run time. \047 is a single
+      # quote, making it a TOML literal string — REPO_DIR_NATIVE is a backslash
+      # path on Windows, where a basic string would read \U and \t as escapes.
+      # The hook body stays literal: $WT_PATH is expanded by the hook, not here.
+      - run: printf '[trust]\nexact = [\047%s\047]\n\n[hooks]\npost_create = ["touch $WT_PATH/.repo-hook-ran"]\n' "$REPO_DIR_NATIVE" > .wt.toml
+        expect:
+          exit_code: 0
+      # Read as the user's config file, that [trust] would exempt this repository
+      # from the gate. It is refused as the config file for exactly that reason,
+      # and still applies as what it is: a repository's hooks, unapproved.
+      # Spelled absolutely, so it is the containment check being exercised and
+      # not the separate refusal of relative paths.
+      - run: WT_CONFIG="$REPO_DIR_NATIVE/.wt.toml" XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN create self-trusting-branch
+        expect:
+          exit_code: 0
+          output_contains: "not trusted"
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/self-trusting-branch/.repo-hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
+        expect:
+          output_contains: "HOOK_MISSING"
+      # And the relative spelling, which names whatever is checked out wherever
+      # wt is run and so is refused before anyone asks where it points.
+      - run: WT_CONFIG=.wt.toml XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN create relative-config-branch
+        expect:
+          exit_code: 0
+          output_contains: "not an absolute path"
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/relative-config-branch/.repo-hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
+        expect:
+          output_contains: "HOOK_MISSING"

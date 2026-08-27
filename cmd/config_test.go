@@ -22,11 +22,33 @@ func TestConfigDir(t *testing.T) {
 	})
 
 	t.Run("uses XDG_CONFIG_HOME when set", func(t *testing.T) {
-		os.Setenv("XDG_CONFIG_HOME", "/custom/config")
+		// configDir requires an absolute path, and on Windows that means a
+		// volume: "/custom/config" is rooted but drive-relative there.
+		custom := "/custom/config"
+		if runtime.GOOS == "windows" {
+			custom = `C:\custom\config`
+		}
+		os.Setenv("XDG_CONFIG_HOME", custom)
 		got := configDir()
-		want := filepath.Join("/custom/config", "wt")
+		want := filepath.Join(custom, "wt")
 		if got != want {
 			t.Errorf("configDir() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("ignores a non-absolute XDG_CONFIG_HOME", func(t *testing.T) {
+		os.Setenv("XDG_CONFIG_HOME", ".config")
+		configHomeWarnings.Delete("XDG_CONFIG_HOME")
+
+		stderr := captureStderr(t)
+		dir := configDir()
+		out := stderr()
+
+		if dir != "" && !filepath.IsAbs(dir) {
+			t.Errorf("configDir() = %q, want an absolute path or \"\"", dir)
+		}
+		if !strings.Contains(out, "XDG_CONFIG_HOME") {
+			t.Errorf("ignored XDG_CONFIG_HOME without saying so, got:\n%s", out)
 		}
 	})
 
@@ -1606,5 +1628,43 @@ func TestConfigShowPatternParityBetweenTextAndJSON_Config(t *testing.T) {
 				t.Fatalf("json output pattern should use resolved value: got=%q want=%q", payload.Data.Effective.Pattern.Value, expectedPattern)
 			}
 		})
+	}
+}
+
+// TestASuperprojectCannotSupplyTheUserConfig: a submodule is a repository, and
+// the superproject holding it is not the user — it is more committed content,
+// chosen by whoever chose the submodule. A WT_CONFIG reaching a file the
+// superproject committed is the repo-config layer read as the user config file,
+// which is the linked-worktree finding one level out. Such a file could whitelist
+// the tree it sits in, and the submodule's own verified scope beneath
+// <super>/.git/modules would then match the rule.
+func TestASuperprojectCannotSupplyTheUserConfig(t *testing.T) {
+	super := t.TempDir()
+	runGit(t, super, "init", "-q")
+	runGit(t, super, "config", "user.email", "t@example.com")
+	runGit(t, super, "config", "user.name", "t")
+	runGit(t, super, "commit", "-q", "--allow-empty", "-m", "root")
+
+	inner := t.TempDir()
+	runGit(t, inner, "init", "-q")
+	runGit(t, inner, "config", "user.email", "t@example.com")
+	runGit(t, inner, "config", "user.name", "t")
+	runGit(t, inner, "commit", "-q", "--allow-empty", "-m", "root")
+
+	runGit(t, super, "-c", "protocol.file.allow=always", "submodule", "--quiet", "add", inner, "dep")
+	sub := filepath.Join(super, "dep")
+	if _, err := os.Stat(sub); err != nil {
+		t.Skipf("this git will not add a local submodule: %v", err)
+	}
+	t.Chdir(sub)
+
+	planted := filepath.Join(super, "wt-user.toml")
+	if err := os.WriteFile(planted, []byte("[trust]\nprefix = [\"/\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !configFileSuppliedByRepo(planted, sub) {
+		t.Errorf("configFileSuppliedByRepo(%q) = false; that file is committed content of the "+
+			"repository containing this one, and a [trust] rule in it would cover this submodule",
+			planted)
 	}
 }
