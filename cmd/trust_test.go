@@ -462,9 +462,13 @@ func TestApproveAllEscapeHatch(t *testing.T) {
 	withIsolatedTrustStore(t)
 	withPolicy(t, hookPolicyPromptUntrusted)
 	repoDir, _ := repoWithHooks(t, "[hooks]\npost_create = [\"true\"]\n")
+	// Declare the command the test actually runs. A batch that does not match
+	// its source drops the trust and takes the mismatch path, which would leave
+	// this passing for the wrong reason — approve-all is what is under test.
+	marker := filepath.Join(repoDir, "ran")
+	writeRepoConfig(t, repoDir, "[hooks]\npost_create = ['touch "+marker+"']\n")
 	t.Setenv("WT_HOOKS_APPROVE_ALL", "1")
 
-	marker := filepath.Join(repoDir, "ran")
 	if err := runHooks("post_create", []string{"touch " + marker}, map[string]string{}); err != nil {
 		t.Fatal(err)
 	}
