@@ -509,8 +509,13 @@ func resolvePrimaryCheckoutTarget(info repoInfo) string {
 }
 
 func isPathWithinRoot(path, root string) bool {
-	cleanPath := canonicalExistingPath(path)
-	cleanRoot := canonicalExistingPath(root)
+	cleanPath, pathOK := canonicalExistingPath(path)
+	cleanRoot, rootOK := canonicalExistingPath(root)
+	if !pathOK || !rootOK {
+		// The one caller skips the worktree when this is false, which is the
+		// side to be on when what the path names could not be settled.
+		return false
+	}
 
 	rel, err := filepath.Rel(cleanRoot, cleanPath)
 	if err != nil {
@@ -542,8 +547,12 @@ func isPathWithinRoot(path, root string) bool {
 // target as its worktree pattern would populate wt's config directory while
 // comparing equal to nothing.
 //
-// Bounded, because two dangling links can name each other.
-func canonicalExistingPath(path string) string {
+// Bounded, because two dangling links can name each other. Running out of hops
+// reports failure rather than the path as it stands: a real chain is nowhere
+// near this long, so exhausting the budget means wt has not established which
+// directory the path names. Both callers guard something, and an unresolved path
+// compares equal to nothing — which is the guard passing, not holding.
+func canonicalExistingPath(path string) (string, bool) {
 	if absolute, err := filepath.Abs(path); err == nil {
 		path = absolute
 	}
@@ -552,11 +561,11 @@ func canonicalExistingPath(path string) string {
 	for hops := 0; hops < 32; hops++ {
 		resolved, rest, dangling := splitAtResolvable(path)
 		if dangling == "" {
-			return filepath.Join(resolved, rest)
+			return filepath.Join(resolved, rest), true
 		}
 		path = filepath.Clean(filepath.Join(dangling, rest))
 	}
-	return path
+	return "", false
 }
 
 // splitAtResolvable walks path upwards until EvalSymlinks accepts a prefix, and

@@ -106,17 +106,31 @@ func renderWorktreePath(info repoInfo, branch string) (string, error) {
 // wt/config.toml just as well. git will not write into a non-empty directory, so
 // in practice this needs the target not to exist yet — a fresh machine, which is
 // exactly when nothing has been approved and the store is easiest to author.
+// The answer when a path's symlinks cannot be followed to an end. Phrased to
+// read after "which is", like the entries in the owned table: the callers all
+// refuse on any non-empty answer, and "wt could not tell" has to be one of them.
+const unfollowableChain = "reached through symlinks wt cannot follow to an end, " +
+	"so it cannot tell whether that is its own config directory"
+
 func wtStateAtPath(path string) string {
 	owned := []struct{ path, what string }{
 		{configDir(), "where wt keeps its config file and its record of approved hooks"},
 		{configFilePath, "your config file"},
 	}
-	path = canonicalExistingPath(path)
+	path, ok := canonicalExistingPath(path)
+	if !ok {
+		return unfollowableChain
+	}
 	for _, o := range owned {
 		if o.path == "" || !filepath.IsAbs(o.path) {
 			continue
 		}
-		against := canonicalExistingPath(o.path)
+		against, ok := canonicalExistingPath(o.path)
+		if !ok {
+			// wt's own directory is the unfollowable one. There is then nothing
+			// to compare against, so there is no answer but "cannot tell".
+			return unfollowableChain
+		}
 		switch {
 		case samePathTree(path, against) && foldPath(path) == foldPath(against):
 			return o.what

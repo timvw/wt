@@ -1365,7 +1365,7 @@ exact = ["`+filepath.ToSlash(repoDir)+`"]
 	// opens all the same. A Linux bind mount does this too; there is no way to
 	// make one in a test, so this stands in for the whole class.
 	if runtime.GOOS == "darwin" {
-		alias := filepath.Join("/System/Volumes/Data", canonicalExistingPath(repoDir))
+		alias := filepath.Join("/System/Volumes/Data", mustCanonical(t, repoDir))
 		if sameDirectory(t, alias, repoDir) {
 			spellings = append(spellings, filepath.Join(alias, "wt-user.toml"))
 		}

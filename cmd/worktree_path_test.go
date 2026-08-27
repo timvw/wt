@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -171,8 +172,8 @@ func TestWorktreeIsNeverPlacedOnWtsOwnState(t *testing.T) {
 		// Checked against the home directory rather than the config directory:
 		// neither ~/.config nor ~/.config/wt has been created here, which is the
 		// fresh machine the attack wants anyway.
-		alias := filepath.Join("/System/Volumes/Data", canonicalExistingPath(cfgDir))
-		if !sameDirectory(t, filepath.Join("/System/Volumes/Data", canonicalExistingPath(home)), home) {
+		alias := filepath.Join("/System/Volumes/Data", mustCanonical(t, cfgDir))
+		if !sameDirectory(t, filepath.Join("/System/Volumes/Data", mustCanonical(t, home)), home) {
 			t.Skipf("%s does not alias the home directory on this machine", alias)
 		}
 
@@ -333,8 +334,8 @@ func TestCanonicalExistingPath(t *testing.T) {
 		// machine, the config directory is there yet. EvalSymlinks refuses the
 		// whole path for that; this must not.
 		missing := filepath.Join(real, "not", "here")
-		want := filepath.Join(canonicalExistingPath(real), "not", "here")
-		if got := canonicalExistingPath(missing); got != want {
+		want := filepath.Join(mustCanonical(t, real), "not", "here")
+		if got := mustCanonical(t, missing); got != want {
 			t.Errorf("canonicalExistingPath(%q) = %q, want %q — the resolved parent with the missing tail kept", missing, got, want)
 		}
 	})
@@ -347,8 +348,8 @@ func TestCanonicalExistingPath(t *testing.T) {
 		if err := os.Symlink(real, link); err != nil {
 			t.Fatal(err)
 		}
-		got := canonicalExistingPath(filepath.Join(link, "missing"))
-		want := filepath.Join(canonicalExistingPath(real), "missing")
+		got := mustCanonical(t, filepath.Join(link, "missing"))
+		want := filepath.Join(mustCanonical(t, real), "missing")
 		if got != want {
 			t.Errorf("canonicalExistingPath() = %q, want %q", got, want)
 		}
@@ -366,14 +367,15 @@ func TestCanonicalExistingPath(t *testing.T) {
 		if err := os.Symlink(target, link); err != nil {
 			t.Fatal(err)
 		}
-		if got, want := canonicalExistingPath(link), canonicalExistingPath(target); got != want {
+		if got, want := mustCanonical(t, link), mustCanonical(t, target); got != want {
 			t.Errorf("canonicalExistingPath(%q) = %q, want %q — the link names its target", link, got, want)
 		}
 	})
 
-	t.Run("gives up on a cycle of dangling symlinks", func(t *testing.T) {
-		// Two links naming each other resolve to nothing; the walk has to stop
-		// rather than follow them forever.
+	t.Run("reports failure on a cycle of dangling symlinks", func(t *testing.T) {
+		// Two links naming each other resolve to nothing. Handing back the path
+		// as it stands would leave the guard comparing a name that matches
+		// nothing, so the walk has to say it got nowhere.
 		if runtime.GOOS == "windows" {
 			t.Skip("symlink creation needs a privilege we cannot assume on Windows")
 		}
@@ -384,16 +386,54 @@ func TestCanonicalExistingPath(t *testing.T) {
 		if err := os.Symlink(a, b); err != nil {
 			t.Fatal(err)
 		}
-		if got := canonicalExistingPath(a); got != a && got != b {
-			t.Errorf("canonicalExistingPath(%q) = %q, want one of the two links back", a, got)
+		if got, ok := canonicalExistingPath(a); ok {
+			t.Errorf("canonicalExistingPath(%q) = %q, true; want ok=false — a cycle names no directory", a, got)
+		}
+	})
+
+	t.Run("reports failure on a chain longer than the budget", func(t *testing.T) {
+		// Acyclic: nothing loops, the chain is simply longer than wt will walk.
+		// Same answer as a cycle, and for the same reason — a path returned here
+		// is one the guard compares and finds equal to nothing.
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink creation needs a privilege we cannot assume on Windows")
+		}
+		chain := t.TempDir()
+		// The far end is never created, so every link dangles and each costs a hop.
+		prev := filepath.Join(chain, "end")
+		for i := 0; i < 33; i++ {
+			link := filepath.Join(chain, fmt.Sprintf("link%d", i))
+			if err := os.Symlink(prev, link); err != nil {
+				t.Fatal(err)
+			}
+			prev = link
+		}
+		if got, ok := canonicalExistingPath(prev); ok {
+			t.Errorf("canonicalExistingPath(%q) = %q, true; want ok=false — the walk ran out of hops", prev, got)
+		}
+		// And the guard built on it refuses, rather than allowing a placement it
+		// was unable to check.
+		if owned := wtStateAtPath(prev); owned == "" {
+			t.Error(`wtStateAtPath() = "", want a refusal: an unfollowable path is not a checked one`)
 		}
 	})
 
 	t.Run("makes a relative path absolute", func(t *testing.T) {
 		// isPathWithinRoot compares its two arguments against each other, so a
 		// path left relative here would answer that question wrongly.
-		if got := canonicalExistingPath("x"); !filepath.IsAbs(got) {
+		if got := mustCanonical(t, "x"); !filepath.IsAbs(got) {
 			t.Errorf("canonicalExistingPath(%q) = %q, want an absolute path", "x", got)
 		}
 	})
+}
+
+// mustCanonical is canonicalExistingPath where the test's premise is that the
+// path resolves; failing there is the test being wrong, not the code.
+func mustCanonical(t *testing.T, path string) string {
+	t.Helper()
+	resolved, ok := canonicalExistingPath(path)
+	if !ok {
+		t.Fatalf("canonicalExistingPath(%q) could not resolve", path)
+	}
+	return resolved
 }
