@@ -222,11 +222,37 @@ func TestCmdUnsafeHookVar(t *testing.T) {
 			wantValue: "fix|whoami",
 		},
 		{
-			name: "redirection, caret and quote",
-			env:  map[string]string{"WT_REPO_NAME": `a>b`},
-			// Any one of them is enough; the point is that none is passed through.
+			name:      "output redirection",
+			env:       map[string]string{"WT_REPO_NAME": `a>b`},
 			wantVar:   "WT_REPO_NAME",
 			wantValue: `a>b`,
+		},
+		{
+			name:      "input redirection",
+			env:       map[string]string{"WT_REPO_NAME": `a<b`},
+			wantVar:   "WT_REPO_NAME",
+			wantValue: `a<b`,
+		},
+		{
+			// cmd's own escape character: it would consume whatever follows.
+			name:      "caret",
+			env:       map[string]string{"WT_REPO_NAME": `a^b`},
+			wantVar:   "WT_REPO_NAME",
+			wantValue: `a^b`,
+		},
+		{
+			// An odd number of quotes leaves the rest of the line inside one.
+			name:      "quote",
+			env:       map[string]string{"WT_REPO_NAME": `a"b`},
+			wantVar:   "WT_REPO_NAME",
+			wantValue: `a"b`,
+		},
+		{
+			// The end of a line ends a command; what follows is the next one.
+			name:      "a line break",
+			env:       map[string]string{"WT_REPO_NAME": "a\r\nwhoami"},
+			wantVar:   "WT_REPO_NAME",
+			wantValue: "a\r\nwhoami",
 		},
 		{
 			name: "an ordinary Windows path is fine",

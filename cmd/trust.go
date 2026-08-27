@@ -640,7 +640,7 @@ func warnTrustRuleIgnored(entry, reason string) {
 	}
 	fmt.Fprintf(os.Stderr,
 		"⚠ ignoring [trust] rule %q in %s: %s.\n"+
-			"  Until then, repositories it was meant to cover are asked about as usual.\n\n",
+			"  Correct the rule there; until then, repositories it was meant to cover are asked about as usual.\n\n",
 		entry, configFilePath, reason)
 }
 

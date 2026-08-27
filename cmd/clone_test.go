@@ -255,7 +255,10 @@ func TestClonePlacementIsNeverOnWtsOwnState(t *testing.T) {
 	origConfigFilePath, origSources := configFilePath, configSources
 	t.Cleanup(func() { configFilePath, configSources = origConfigFilePath, origSources })
 	configFilePath = filepath.Join(cfgDir, "config.toml")
-	configSources.RepoPattern = "config file"
+	// Deliberately not a phrase that appears anywhere else in the refusal: the
+	// description of the config directory already contains "config file", so a
+	// label of that would pass whether or not it reached the message.
+	configSources.RepoPattern = "the layer under test"
 
 	withCloneConfig(t, "{.repoRoot}/{.repo.Name}")
 	reposRoot = cfgDir
@@ -266,7 +269,7 @@ func TestClonePlacementIsNeverOnWtsOwnState(t *testing.T) {
 	}
 	// repo_pattern is never read from a repository, so the refusal names the
 	// layer the user can go and change.
-	if !strings.Contains(err.Error(), "config file") {
+	if !strings.Contains(err.Error(), "the layer under test") {
 		t.Errorf("error does not say where the pattern came from:\n%v", err)
 	}
 }
