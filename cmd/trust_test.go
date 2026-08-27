@@ -1218,3 +1218,64 @@ func TestUntrustGlobalRevokesTheConfigFileApproval(t *testing.T) {
 		t.Fatal("wt untrust --global did not revoke the config file's approval")
 	}
 }
+
+// TestRepoConfigIsNeverYourConfigFile: [trust] and hooks_policy are honoured
+// from the config file precisely because it is yours. Point --config or
+// WT_CONFIG at a repository's own .wt.toml and that stops being true — the file
+// is read as both layers, and the repository whitelists itself. WT_CONFIG is the
+// way in: set once, it names a different file in every repository entered.
+func TestRepoConfigIsNeverYourConfigFile(t *testing.T) {
+	savedFlag, savedFn := configFlag, gitRepoRootFn
+	savedHooks, savedSources, savedPolicy := worktreeHooks, hookSources, hooksPolicy
+	savedPrefix, savedExact := trustPrefixes, trustExact
+	t.Cleanup(func() {
+		configFlag, gitRepoRootFn = savedFlag, savedFn
+		worktreeHooks, hookSources, hooksPolicy = savedHooks, savedSources, savedPolicy
+		trustPrefixes, trustExact = savedPrefix, savedExact
+		loadWorktreeConfig()
+	})
+
+	repoDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repoDir, ".wt.toml"), []byte(`hooks_policy = "off"
+
+[trust]
+exact = ["`+filepath.ToSlash(repoDir)+`"]
+
+[hooks]
+post_create = ["theirs"]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRepoRootFn = func() (string, error) { return repoDir, nil }
+	configFlag = ""
+
+	// Spelled two ways that name the same file under different strings — the
+	// comparison is on file identity, not on the path as written.
+	for _, spelling := range []string{
+		filepath.Join(repoDir, ".wt.toml"),
+		filepath.Join(repoDir, ".", ".wt.toml"),
+	} {
+		t.Setenv("WT_CONFIG", spelling)
+		stderr := captureStderr(t)
+		loadWorktreeConfig()
+		out := stderr()
+
+		if configFileFound {
+			t.Errorf("WT_CONFIG=%q was read as the config file", spelling)
+		}
+		if len(trustPrefixes) > 0 || len(trustExact) > 0 {
+			t.Errorf("WT_CONFIG=%q let the repository whitelist itself: prefix=%v exact=%v",
+				spelling, trustPrefixes, trustExact)
+		}
+		if hooksPolicy != "" {
+			t.Errorf("WT_CONFIG=%q let the repository set hooks_policy = %q", spelling, hooksPolicy)
+		}
+		// Refused as the config file, still present as what it is.
+		if got := hookSources["post_create"]; got != hookSourceRepoConfig {
+			t.Errorf("hookSources[post_create] = %q, want %q", got, hookSourceRepoConfig)
+		}
+		if !strings.Contains(out, ".wt.toml") {
+			t.Errorf("nothing said about ignoring %q; the user would see settings vanish for no reason", spelling)
+		}
+	}
+}

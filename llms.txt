@@ -69,6 +69,7 @@ Configuration and hooks
 - hooks_policy (config file or WT_HOOKS_POLICY): prompt-untrusted (default), prompt-all, trusted-only, off
 - prompt-all re-confirms even approved and whitelisted hooks; trusted-only never prompts and is the CI choice
 - hooks_policy is never read from a repo-level .wt.toml; WT_HOOKS_APPROVE_ALL=1 approves everything (automation only)
+- A --config / WT_CONFIG pointing at the repository's own .wt.toml is refused as the config file, with a warning: read as your config it could whitelist itself via [trust]. It still applies as the repo layer
 - Non-interactive runs (scripts, CI, --format json) decline and report on stderr rather than failing the command
 
 Untracked file materialisation ([files])

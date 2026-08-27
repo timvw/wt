@@ -619,6 +619,39 @@ func warnConfigHomeNotAbsolute(name, value string) {
 		name, value)
 }
 
+// sameFile reports whether two paths name the same file on disk.
+//
+// Compared by identity rather than by name: a config path can be given relative
+// to the working directory, reached through a symlink, or spelled in a different
+// case on a case-insensitive filesystem, and each is the same file under a name
+// that does not compare equal.
+func sameFile(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	infoA, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	infoB, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(infoA, infoB)
+}
+
+// warnRepoConfigIsNotYourConfig explains why a --config or WT_CONFIG pointing at
+// the repository's own .wt.toml was not read as the config file. Said out loud
+// because the alternative is settings that appear to be ignored at random: the
+// same WT_CONFIG works in a directory that is not a repository.
+func warnRepoConfigIsNotYourConfig(path string) {
+	fmt.Fprintf(os.Stderr,
+		"⚠ %s is this repository's own .wt.toml, so it is not being read as your config file.\n"+
+			"  A repository read as your config file could exempt itself from hook approval.\n"+
+			"  Its [hooks] and settings still apply as a repository's, and still need 'wt trust'.\n\n",
+		path)
+}
+
 // resolveConfigPath determines which config file to use.
 // Priority: --config flag > WT_CONFIG env var > default location.
 func resolveConfigPath(flagValue string) string {
@@ -700,68 +733,88 @@ func loadWorktreeConfig() {
 	configFilePath = resolveConfigPath(configFlag)
 	configFileFound = false
 
-	if _, err := os.Stat(configFilePath); err == nil {
-		configFileFound = true
-		var cfg Config
-		if md, err := toml.DecodeFile(configFilePath, &cfg); err == nil {
-			if cfg.Root != "" {
-				worktreeRoot = expandHome(cfg.Root)
-				configSources.Root = "config file"
-			}
-			if cfg.RepoRoot != "" {
-				reposRoot = expandHome(cfg.RepoRoot)
-				configSources.RepoRoot = "config file"
-			}
-			if cfg.Strategy != "" {
-				worktreeStrategy = strings.ToLower(strings.TrimSpace(cfg.Strategy))
-				configSources.Strategy = "config file"
-			}
-			if cfg.Pattern != "" {
-				worktreePattern = strings.TrimSpace(cfg.Pattern)
-				configSources.Pattern = "config file"
-			}
-			if cfg.Separator != "" {
-				worktreeSeparator = cfg.Separator
-				configSources.Separator = "config file"
-			}
-			if cfg.RepoPattern != "" {
-				repoPattern = strings.TrimSpace(cfg.RepoPattern)
-				configSources.RepoPattern = "config file"
-			}
-			worktreeHooks = cfg.Hooks
-			declaredHooks[hookSourceConfigFile] = cfg.Hooks
-			for _, event := range hookEvents {
-				if len(hooksOf(cfg.Hooks, event)) > 0 {
-					hookSources[event] = hookSourceConfigFile
-				}
-			}
-			if cfg.HooksPolicy != "" {
-				hooksPolicy = strings.ToLower(strings.TrimSpace(cfg.HooksPolicy))
-				configSources.HooksPolicy = "config file"
-			}
-			// Only from here. Loading [trust] anywhere else would let the thing
-			// being gated name itself as exempt.
-			trustPrefixes = cfg.Trust.Prefix
-			trustExact = cfg.Trust.Exact
-			// Appended after the git config rules rather than replacing them,
-			// so the two sources compose the way rules within one source
-			// already do: every matching rule applies, later definitions win
-			// per variable. Because these come last, the config file wins
-			// wherever both sources set the same variable for the same path —
-			// which is the documented precedence — while a git config rule for
-			// some unrelated tree keeps working instead of silently vanishing
-			// the moment a [[context]] block is added to this file.
-			contextRules = append(contextRules, cfg.Context...)
+	// The repository's own .wt.toml, located once and used twice: to load it as
+	// the repo layer in step 4, and — first — to be sure it is not also about to
+	// be read as the user's config file.
+	repoRoot, repoRootErr := gitRepoRootFn()
+	repoConfigPath := ""
+	if repoRootErr == nil {
+		repoConfigPath = filepath.Join(repoRoot, ".wt.toml")
+	}
 
-			filesCopy = accumulateFilePatterns(filesCopy, cfg.Files.Copy, "config file")
-			filesLink = accumulateFilePatterns(filesLink, cfg.Files.Link, "config file")
-			filesExclude = accumulateFilePatterns(filesExclude, cfg.Files.Exclude, "config file")
-			// IsDefined rather than a non-zero check: copy_ignored is a bool,
-			// so "written as false" and "not written" are the same value and
-			// only the metadata can tell them apart.
-			if md.IsDefined("files", "copy_ignored") {
-				filesCopyIgnored = cfg.Files.CopyIgnored
-				configSources.CopyIgnored = "config file"
+	switch {
+	// Two layers, one file, and the outer one is not gated: [trust] and
+	// hooks_policy are honoured from the config file precisely because it is
+	// yours, so a repository read as your config file can whitelist its own path
+	// and run its own hooks unasked. WT_CONFIG=.wt.toml is the way in — set once,
+	// it names a different file in every repository you enter.
+	case repoConfigPath != "" && sameFile(configFilePath, repoConfigPath):
+		warnRepoConfigIsNotYourConfig(configFilePath)
+
+	default:
+		if _, err := os.Stat(configFilePath); err == nil {
+			configFileFound = true
+			var cfg Config
+			if md, err := toml.DecodeFile(configFilePath, &cfg); err == nil {
+				if cfg.Root != "" {
+					worktreeRoot = expandHome(cfg.Root)
+					configSources.Root = "config file"
+				}
+				if cfg.RepoRoot != "" {
+					reposRoot = expandHome(cfg.RepoRoot)
+					configSources.RepoRoot = "config file"
+				}
+				if cfg.Strategy != "" {
+					worktreeStrategy = strings.ToLower(strings.TrimSpace(cfg.Strategy))
+					configSources.Strategy = "config file"
+				}
+				if cfg.Pattern != "" {
+					worktreePattern = strings.TrimSpace(cfg.Pattern)
+					configSources.Pattern = "config file"
+				}
+				if cfg.Separator != "" {
+					worktreeSeparator = cfg.Separator
+					configSources.Separator = "config file"
+				}
+				if cfg.RepoPattern != "" {
+					repoPattern = strings.TrimSpace(cfg.RepoPattern)
+					configSources.RepoPattern = "config file"
+				}
+				worktreeHooks = cfg.Hooks
+				declaredHooks[hookSourceConfigFile] = cfg.Hooks
+				for _, event := range hookEvents {
+					if len(hooksOf(cfg.Hooks, event)) > 0 {
+						hookSources[event] = hookSourceConfigFile
+					}
+				}
+				if cfg.HooksPolicy != "" {
+					hooksPolicy = strings.ToLower(strings.TrimSpace(cfg.HooksPolicy))
+					configSources.HooksPolicy = "config file"
+				}
+				// Only from here. Loading [trust] anywhere else would let the thing
+				// being gated name itself as exempt.
+				trustPrefixes = cfg.Trust.Prefix
+				trustExact = cfg.Trust.Exact
+				// Appended after the git config rules rather than replacing them,
+				// so the two sources compose the way rules within one source
+				// already do: every matching rule applies, later definitions win
+				// per variable. Because these come last, the config file wins
+				// wherever both sources set the same variable for the same path —
+				// which is the documented precedence — while a git config rule for
+				// some unrelated tree keeps working instead of silently vanishing
+				// the moment a [[context]] block is added to this file.
+				contextRules = append(contextRules, cfg.Context...)
+
+				filesCopy = accumulateFilePatterns(filesCopy, cfg.Files.Copy, "config file")
+				filesLink = accumulateFilePatterns(filesLink, cfg.Files.Link, "config file")
+				filesExclude = accumulateFilePatterns(filesExclude, cfg.Files.Exclude, "config file")
+				// IsDefined rather than a non-zero check: copy_ignored is a bool,
+				// so "written as false" and "not written" are the same value and
+				// only the metadata can tell them apart.
+				if md.IsDefined("files", "copy_ignored") {
+					filesCopyIgnored = cfg.Files.CopyIgnored
+					configSources.CopyIgnored = "config file"
+				}
 			}
 		}
 	}
@@ -774,8 +827,7 @@ func loadWorktreeConfig() {
 	configRepoFound = false
 	configRepoKey = ""
 
-	if repoRoot, err := gitRepoRootFn(); err == nil {
-		repoConfigPath := filepath.Join(repoRoot, ".wt.toml")
+	if repoRootErr == nil {
 		configRepoPath = repoConfigPath
 		// Read once, and let the approval be pinned to what this read decoded
 		// rather than to a fresh read when the hooks are about to run: re-reading

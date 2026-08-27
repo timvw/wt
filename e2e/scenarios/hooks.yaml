@@ -311,3 +311,26 @@ scenarios:
       - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/trusted-hook-branch/.repo-hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
         expect:
           output_contains: "HOOK_RAN"
+  - name: repo_config_is_never_your_config_file
+    description: WT_CONFIG naming the repo's own .wt.toml does not let it whitelist itself (issue #152)
+    skip_shells: [powershell, pwsh]  # steps use POSIX shell syntax
+    skip_shellenv: true
+    steps:
+      # Written here rather than in setup because the [trust] rule has to name
+      # this repository, whose path is only known at run time. \047 is a single
+      # quote, making it a TOML literal string — REPO_DIR_NATIVE is a backslash
+      # path on Windows, where a basic string would read \U and \t as escapes.
+      # The hook body stays literal: $WT_PATH is expanded by the hook, not here.
+      - run: printf '[trust]\nexact = [\047%s\047]\n\n[hooks]\npost_create = ["touch $WT_PATH/.repo-hook-ran"]\n' "$REPO_DIR_NATIVE" > .wt.toml
+        expect:
+          exit_code: 0
+      # Read as the user's config file, that [trust] would exempt this repository
+      # from the gate. It is refused as the config file for exactly that reason,
+      # and still applies as what it is: a repository's hooks, unapproved.
+      - run: WT_CONFIG=.wt.toml XDG_CONFIG_HOME="$TEST_DIR_NATIVE/xdg" $WT_BIN create self-trusting-branch
+        expect:
+          exit_code: 0
+          output_contains: "not trusted"
+      - run: test -f "$WORKTREE_ROOT_POSIX/test-repo/self-trusting-branch/.repo-hook-ran" && echo "HOOK_RAN" || echo "HOOK_MISSING"
+        expect:
+          output_contains: "HOOK_MISSING"
