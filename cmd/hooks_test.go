@@ -196,6 +196,78 @@ func TestAdaptHookEnv(t *testing.T) {
 	})
 }
 
+// TestCmdUnsafeHookVar: cmd.exe expands %WT_PATH% while it parses, so a value
+// carrying "&" splits the approved command in two and the tail runs as its own.
+// The value is repository-controlled at one remove — a .wt.toml sets the
+// worktree pattern, and `wt pr` takes the branch name from the pull request —
+// while the approval covers only the commands, so nothing about this asks again.
+func TestCmdUnsafeHookVar(t *testing.T) {
+	tests := []struct {
+		name      string
+		env       map[string]string
+		posix     bool
+		wantVar   string
+		wantValue string
+	}{
+		{
+			name:      "ampersand in a repo-chosen path",
+			env:       map[string]string{"WT_PATH": `C:\wt\repo\feat&calc`, "WT_BRANCH": "feat"},
+			wantVar:   "WT_PATH",
+			wantValue: `C:\wt\repo\feat&calc`,
+		},
+		{
+			name:      "pipe in a branch name from a pull request",
+			env:       map[string]string{"WT_BRANCH": "fix|whoami"},
+			wantVar:   "WT_BRANCH",
+			wantValue: "fix|whoami",
+		},
+		{
+			name: "redirection, caret and quote",
+			env:  map[string]string{"WT_REPO_NAME": `a>b`},
+			// Any one of them is enough; the point is that none is passed through.
+			wantVar:   "WT_REPO_NAME",
+			wantValue: `a>b`,
+		},
+		{
+			name: "an ordinary Windows path is fine",
+			env:  map[string]string{"WT_PATH": `C:\Users\tim\wt\repo\feat\x`, "WT_BRANCH": `feat\x`},
+		},
+		{
+			// cmd does not re-expand what it just substituted, so a percent sign
+			// in a value is only a percent sign.
+			name: "percent is not syntax",
+			env:  map[string]string{"WT_BRANCH": "release-50%"},
+		},
+		{
+			name:  "POSIX shells substitute after parsing, so nothing to check",
+			env:   map[string]string{"WT_PATH": "/wt/repo/feat&calc"},
+			posix: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotVar, gotValue := cmdUnsafeHookVar(tc.env, tc.posix)
+			if gotVar != tc.wantVar || gotValue != tc.wantValue {
+				t.Errorf("cmdUnsafeHookVar() = (%q, %q), want (%q, %q)",
+					gotVar, gotValue, tc.wantVar, tc.wantValue)
+			}
+		})
+	}
+
+	t.Run("reports the same variable every time", func(t *testing.T) {
+		// Map order is randomised, and a message that names WT_PATH on one run
+		// and WT_MAIN on the next reads like two different problems.
+		env := map[string]string{"WT_PATH": `C:\a&b`, "WT_MAIN": `C:\c&d`, "WT_BRANCH": "e&f"}
+		first, _ := cmdUnsafeHookVar(env, false)
+		for range 20 {
+			if got, _ := cmdUnsafeHookVar(env, false); got != first {
+				t.Fatalf("cmdUnsafeHookVar() reported %q then %q for the same env", first, got)
+			}
+		}
+	})
+}
+
 // TestRunHooksUsesPOSIXShell exercises the whole path end to end: a hook body
 // written in POSIX syntax, with the worktree path arriving via $WT_PATH, must
 // actually run. On Unix this is the status quo; the value is that it pins the

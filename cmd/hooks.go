@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"runtime"
@@ -156,6 +157,41 @@ func adaptHookEnv(env map[string]string, goos string, shellIsPOSIX bool) map[str
 		adapted[k] = v
 	}
 	return adapted
+}
+
+// cmdMetaChars are the characters cmd.exe acts on rather than passes through.
+// "%" is not among them: cmd does not expand a value it just substituted, so a
+// percent sign arriving in WT_BRANCH stays a percent sign.
+const cmdMetaChars = "&|<>^\"\r\n"
+
+// cmdUnsafeHookVar returns the first hook variable whose value cmd.exe would
+// read as syntax, or "" when there is none. POSIX shells are never affected.
+//
+// An approval covers the commands, and the commands are all it can cover: a
+// value reaches them at run time. Under `sh -c` that is fine — the shell
+// substitutes $WT_PATH after it has finished parsing, and the result is never
+// re-read as syntax. cmd.exe expands %WT_PATH% *during* parsing, so a "&" in
+// the value becomes a command separator, and the documented
+// `cd /d %WT_PATH% && npm install` turns into two commands.
+//
+// The value is repository-controlled at one remove: a .wt.toml may set the
+// worktree pattern, and a branch name — which `wt pr` takes from the pull
+// request — lands in the path too. Neither is a hook command, so neither
+// invalidates an approval; changing only the pattern would otherwise buy a new
+// command on an old answer. Skipping is the same answer as declining a prompt,
+// for the same reason: the operation itself is fine, only the hooks are not.
+func cmdUnsafeHookVar(env map[string]string, shellIsPOSIX bool) (name, value string) {
+	if shellIsPOSIX {
+		return "", ""
+	}
+	// Sorted, so the same worktree always reports the same variable rather than
+	// whichever the map happened to yield first.
+	for _, k := range slices.Sorted(maps.Keys(env)) {
+		if strings.ContainsAny(env[k], cmdMetaChars) {
+			return k, env[k]
+		}
+	}
+	return "", ""
 }
 
 // toPOSIXPath rewrites a native Windows path into the mixed form that MSYS2,
@@ -526,9 +562,19 @@ func runHooks(hookName string, hookCommands []string, env map[string]string) err
 	isPre := strings.HasPrefix(hookName, "pre_")
 	shell, shellFlag, shellIsPOSIX := hookShell(runtime.GOOS, exec.LookPath)
 
+	hookEnv := adaptHookEnv(env, runtime.GOOS, shellIsPOSIX)
+	if name, value := cmdUnsafeHookVar(hookEnv, shellIsPOSIX); name != "" {
+		fmt.Fprintf(os.Stderr,
+			"⚠ skipping %s hooks: %s contains a character cmd.exe reads as syntax (%s).\n"+
+				"  cmd expands %%%s%% while it parses, so the rest would run as commands.\n"+
+				"  This usually means a branch name or a repository's [worktree] pattern; rename or change it.\n\n",
+			hookName, name, displayText(value), name)
+		return nil
+	}
+
 	// Build environment slice from current env + hook vars
 	environ := os.Environ()
-	for k, v := range adaptHookEnv(env, runtime.GOOS, shellIsPOSIX) {
+	for k, v := range hookEnv {
 		environ = append(environ, fmt.Sprintf("%s=%s", k, v))
 	}
 

@@ -997,6 +997,14 @@ The examples below — and everything in [examples.md](examples.md) — are POSI
 post_create = ["cd /d %WT_PATH% && npm install"]
 ```
 
+Under `cmd /c`, `wt` skips the hooks for a worktree whose path, branch or repository
+name contains `& | < > ^ "` or a line break, and says which one. `cmd` expands
+`%WT_PATH%` *while* it parses, so those characters would be read as syntax and the
+line above would run as two commands — and since none of them is a hook command,
+an approval would not have covered the change. A `sh -c` hook is unaffected: the
+shell substitutes `$WT_PATH` after parsing and never re-reads the result. If you
+hit this, the usual cause is a branch name or a repository's `pattern`; rename it.
+
 Copying files is the one case you no longer need a hook for: [`[files]`](#files)
 does it natively, in one shell-independent form that works on Windows too.
 
