@@ -878,6 +878,38 @@ func TestProcessRelativeXdgConfigHomeIsNotAConfigDir(t *testing.T) {
 	}
 }
 
+// TestAProcessRelativeHomeIsSaidToBeGitsGlobalConfigToo: refusing it for wt's
+// own config directory closes half of it. git still reads $HOME/.gitconfig, and
+// under this home that is the repository's own file — core.hooksPath included,
+// which is a hook command under another name and runs on the next
+// `git worktree add`. There is no placement to refuse, so the answer is the one
+// GIT_CONFIG_GLOBAL and XDG_CONFIG_HOME get: say it out loud.
+func TestAProcessRelativeHomeIsSaidToBeGitsGlobalConfigToo(t *testing.T) {
+	relativeGitEnvWarnings = sync.Map{}
+	t.Cleanup(func() { relativeGitEnvWarnings = sync.Map{} })
+	t.Setenv("GIT_CONFIG_GLOBAL", "")
+	t.Setenv("GIT_CONFIG_SYSTEM", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	const procHome = "/proc/self/cwd"
+	t.Setenv("HOME", procHome)
+	t.Setenv("USERPROFILE", procHome)
+	stderr := captureStderr(t)
+
+	for _, p := range gitGlobalConfigPaths() {
+		if strings.HasPrefix(filepath.ToSlash(p), "/proc/") {
+			t.Errorf("gitGlobalConfigPaths() offered %q: a guard on a path meaning \"here\" guards "+
+				"whatever wt is standing in, which is the repository", p)
+		}
+	}
+	// The variable named differs by platform — os.UserHomeDir reads USERPROFILE
+	// on Windows — so the assertion is on what it tells the user, not on which
+	// name it tells them.
+	if said := stderr(); !strings.Contains(said, "git resolves it per directory") {
+		t.Errorf("gitGlobalConfigPaths() said %q; want it to say git reads the repository's own "+
+			"config under this home", said)
+	}
+}
+
 // TestABareRepositoryIsAGitDirectoryToo: the .git component test sees every
 // repository cloned the ordinary way and no bare one. `git init --bare
 // /srv/git/project` keeps its hooks at /srv/git/project/hooks, with nothing in

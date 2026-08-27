@@ -209,7 +209,7 @@ var configPathCmd = &cobra.Command{
 		if path == "" {
 			// Printing an empty line here would read as "no config file", which
 			// is not the problem: there is nowhere to look for one.
-			return fmt.Errorf("cannot locate a config directory (no HOME set); set HOME or XDG_CONFIG_HOME to an absolute path, or pass --config")
+			return fmt.Errorf("cannot locate a config directory (no HOME naming one directory); set HOME or XDG_CONFIG_HOME to an absolute path that means the same place wherever wt runs, or pass --config")
 		}
 		if isJSONOutput() {
 			return emitJSONSuccess(cmd, map[string]string{"path": path})

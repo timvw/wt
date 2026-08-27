@@ -157,9 +157,18 @@ func gitGlobalConfigPaths() []string {
 	} else if strings.TrimSpace(p) != "" {
 		warnRelativeGitEnv("GIT_CONFIG_SYSTEM", p)
 	}
+	// namesOneDirectory here too, and warned about: HOME=/proc/self/cwd has git
+	// reading the repository's own .gitconfig as your global one — core.hooksPath
+	// and all — while wt guards a ~/.gitconfig that means "here" and so means
+	// nothing. The message wt already prints for having no config directory says
+	// approvals cannot be stored; it does not say git is being configured by the
+	// checkout, and that is the half that runs commands.
 	home, err := os.UserHomeDir()
-	if err == nil && filepath.IsAbs(home) {
+	homeNamesOneDirectory := err == nil && namesOneDirectory(home)
+	if homeNamesOneDirectory {
 		paths = append(paths, filepath.Join(home, ".gitconfig"))
+	} else if err == nil && strings.TrimSpace(home) != "" {
+		warnRelativeGitEnv(homeEnvName(), home)
 	}
 	// The directory, not just the config file in it: a worktree AT
 	// ~/.config/git plants a committed config there just as well, which is the
@@ -181,14 +190,10 @@ func gitGlobalConfigPaths() []string {
 		// a committed .xdg/git/config, core.hooksPath and all. Same answer as
 		// there: no placement to refuse, so say it out loud.
 		//
-		// A relative HOME does the same, and is not warned about here because it
-		// leaves wt with no absolute config dir at all, which it already reports
-		// as treating every hook as unapproved. That is the louder message of
-		// the two.
 		if strings.TrimSpace(xdg) != "" {
 			warnRelativeGitEnv("XDG_CONFIG_HOME", xdg)
 		}
-		if err == nil && filepath.IsAbs(home) {
+		if homeNamesOneDirectory {
 			paths = append(paths, filepath.Join(home, ".config", "git"),
 				filepath.Join(home, ".config", "git", "config"))
 		}
@@ -261,6 +266,19 @@ func gitIncludePathsIn(scope string) []string {
 		paths = append(paths, path)
 	}
 	return paths
+}
+
+// homeEnvName names the variable os.UserHomeDir actually read, so a warning
+// about it names something the user can go and change.
+func homeEnvName() string {
+	switch runtime.GOOS {
+	case "windows":
+		return "USERPROFILE"
+	case "plan9":
+		return "home"
+	default:
+		return "HOME"
+	}
 }
 
 // relativeGitEnvWarnings keeps the notice to once per variable per process.

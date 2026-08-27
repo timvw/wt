@@ -91,8 +91,8 @@ func trustFilePath() string {
 // cannot arrive at it by being entered. Pointing it into a working tree is a
 // choice about where to keep your own approvals.
 var errNoTrustStoreDir = errors.New(
-	"cannot locate a config directory to keep hook approvals in (no HOME set); " +
-		"set HOME or XDG_CONFIG_HOME to an absolute path")
+	"cannot locate a config directory to keep hook approvals in (no HOME naming one directory); " +
+		"set HOME or XDG_CONFIG_HOME to an absolute path that means the same place wherever wt runs")
 
 // loadTrustStore reads the trust store. A missing store is not an error: it
 // simply means nothing has been approved yet. A malformed one *is* an error —

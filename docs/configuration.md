@@ -205,7 +205,10 @@ you happen to be standing in.
 `HOME` gets the same question, and it is the one that matters most: it is what
 `wt` falls back to when `XDG_CONFIG_HOME` and `%AppData%` are refused, so asking
 it of the overrides alone would refuse the front door and leave the back one
-open. A `~/...` path in a `[trust]` rule is anchored the same way, since
+open. Refusing it is still only half: git goes on reading `$HOME/.gitconfig`,
+which under such a home is the repository's own file — `core.hooksPath` and all
+— so `wt` says so on stderr the way it does for a `GIT_CONFIG_GLOBAL` it cannot
+guard. A `~/...` path in a `[trust]` rule is anchored the same way, since
 `--config` and `WT_CONFIG` name a file directly and so survive a home the config
 directory would have rejected.
 
