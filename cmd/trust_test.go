@@ -1111,13 +1111,20 @@ func TestTrustRulesAreLiteralPaths(t *testing.T) {
 	}
 }
 
-// TestTrustStoreNeverLandsInsideTheRepository: wt runs from inside a working
+// TestTrustStoreDoesNotFollowTheWorkingDirectory: wt runs from inside a working
 // tree, so a relative config directory resolves against it and the trust store
 // becomes a committable file — a cloned repo could ship approvals for its own
-// hooks. Per the XDG spec a relative XDG_CONFIG_HOME is invalid and ignored; an
-// unset HOME leaves nowhere to record anything, and the honest answer there is
-// that nothing is approved rather than a path in the repository.
-func TestTrustStoreNeverLandsInsideTheRepository(t *testing.T) {
+// hooks, and the same setting would mean a different file in every repository.
+// Per the XDG spec a relative XDG_CONFIG_HOME is invalid and ignored; an unset
+// HOME leaves nowhere to record anything, and the honest answer there is that
+// nothing is approved rather than a path in the repository.
+//
+// What this does not claim: that an absolute override cannot name a directory
+// inside some repository. XDG_CONFIG_HOME=/srv/repo/.config is a fixed
+// directory the user chose, the same one in every repository they enter, and
+// keeping approvals under a git-tracked home is their business — see
+// docs/configuration.md.
+func TestTrustStoreDoesNotFollowTheWorkingDirectory(t *testing.T) {
 	repo := t.TempDir()
 	t.Chdir(repo)
 

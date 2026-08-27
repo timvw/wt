@@ -842,11 +842,19 @@ That location is always an absolute path. A non-absolute `$XDG_CONFIG_HOME` (or
 with a warning. If none of them yields an absolute directory and there is no home
 directory either — an unset `HOME`, as happens in some CI and container images —
 wt records nothing and treats every hook as unapproved. Resolving a relative path
-against the working directory would put `trust.toml` *inside* the repository
-being gated, where a cloned repo could ship approvals for its own hooks. If you
-hit this in CI, set `HOME` or an absolute `XDG_CONFIG_HOME`; to run hooks there
-deliberately, see [Requiring approval for every
+against the working directory would put `trust.toml` *inside* whichever
+repository is being gated, where a cloned repo could ship approvals for its own
+hooks. If you hit this in CI, set `HOME` or an absolute `XDG_CONFIG_HOME`; to run
+hooks there deliberately, see [Requiring approval for every
 hook](#requiring-approval-for-every-hook) for `WT_HOOKS_APPROVE_ALL`.
+
+An absolute setting is taken as given, including one that happens to point inside
+a working tree — `XDG_CONFIG_HOME=/srv/repo/.config` keeps approvals in
+`/srv/repo/.config/wt/trust.toml`. That is the same directory in every repository
+you enter, so no repository can arrive at it by being cloned or entered; where
+your own approvals live is your call. Worth knowing if your home directory is
+itself a tracked repository: `trust.toml` is a local record, not something to
+commit.
 
 ### Trusting paths ahead of time
 

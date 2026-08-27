@@ -85,6 +85,11 @@ func trustFilePath() string {
 // from inside a repository, so "trust.toml" would resolve into the working tree
 // and a cloned repo could ship approvals for its own hooks. With no home
 // directory to anchor to, the honest answer is that nothing is approved.
+//
+// An absolute one is not checked for landing inside a repository, and does not
+// need to be: it names the same directory wherever wt is run, so a repository
+// cannot arrive at it by being entered. Pointing it into a working tree is a
+// choice about where to keep your own approvals.
 var errNoTrustStoreDir = errors.New(
 	"cannot locate a config directory to keep hook approvals in (no HOME set); " +
 		"set HOME or XDG_CONFIG_HOME to an absolute path")
