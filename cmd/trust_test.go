@@ -656,15 +656,23 @@ func TestDropTrustRecordsAtFollowsTheGitDirectorySeparately(t *testing.T) {
 }
 
 func TestDropTrustRecordsAtKeepsACaseVariant(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("case-only path variants are not distinct on the default Windows filesystem")
-	}
 	withIsolatedTrustStore(t)
 
 	parent := t.TempDir()
 	target := filepath.Join(parent, "Tool")
 	other := filepath.Join(parent, "tool", ".git")
 	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	otherRootInfo, err := os.Stat(filepath.Dir(other))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if targetInfo, err := os.Stat(target); err == nil {
+		if os.SameFile(otherRootInfo, targetInfo) {
+			t.Skip("case-only path variants are not distinct on this filesystem")
+		}
+	} else if !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
 	instance, err := repositoryInstanceID(other)
