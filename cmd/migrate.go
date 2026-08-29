@@ -612,9 +612,9 @@ func migrateTrustGain(from, to string) (string, error) {
 			return fmt.Sprintf(
 				"%s still carries a hook approval from a repository that used to be there, so moving it "+
 					"there would run this repository's hooks unasked if the commands match — and that path "+
-					"comes from the origin URL, not from you. Run 'wt untrust' there first, or move it "+
+					"comes from the origin URL, not from you. Run 'wt untrust --path %s' first, or move it "+
 					"yourself if you meant to",
-				to), nil
+				to, to), nil
 		}
 	}
 	return "", nil

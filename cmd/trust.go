@@ -867,15 +867,23 @@ func mayBeSamePath(a, b string) bool { return foldPath(a) == foldPath(b) }
 // and prevents migrate's deliberately conservative stale-record check from
 // refusing a future placement there.
 func dropTrustRecordsAt(path string) (int, error) {
-	// The whole directory, not just its .git: everything at or under an empty
-	// path belongs to whatever used to be there, including the scopes of its
-	// submodules and of a bare repository kept at the path itself.
-	want, ok := canonicalExistingPath(path)
+	// The whole directory as well as its .git: an unverified repository is
+	// scoped to the former, while a verified repository and its submodules are
+	// scoped to the latter. Resolve them separately because .git may itself be a
+	// symlink to somewhere outside the checkout.
+	root, ok := canonicalExistingPath(path)
 	if !ok {
 		return 0, fmt.Errorf(
 			"%s is reached through symlinks wt cannot follow to an end, so it cannot tell which hook\n"+
 				"approvals already name it — and an approval left behind by a repository that used to be\n"+
-				"there would cover this one. Run 'wt untrust' there first, or pick another path",
+				"there would cover this one. Repair or remove the unresolved symlink, or pick another path",
+			path)
+	}
+	gitRoot, ok := canonicalExistingPath(filepath.Join(path, ".git"))
+	if !ok {
+		return 0, fmt.Errorf(
+			"%s is reached through symlinks wt cannot follow to an end, so it cannot tell which hook approvals name it. "+
+				"Repair or remove the unresolved .git symlink before retrying",
 			path)
 	}
 
@@ -895,7 +903,8 @@ func dropTrustRecordsAt(path string) (int, error) {
 		// A user-config approval is not pinned to a path, so no path can free
 		// it — and a record wt cannot resolve is not evidence about this path.
 		if rec.Scope != "" && rec.Scope != trustScopeUser {
-			if got, ok := canonicalExistingPath(rec.Scope); ok && mayBeScopedUnder(got, want) {
+			if got, ok := canonicalExistingPath(rec.Scope); ok &&
+				(mayBeScopedUnder(got, root) || mayBeScopedUnder(got, gitRoot)) {
 				continue
 			}
 		}
@@ -916,6 +925,7 @@ func dropTrustRecordsAt(path string) (int, error) {
 var (
 	trustList     bool
 	untrustGlobal bool
+	untrustPath   string
 )
 
 var trustCmd = &cobra.Command{
@@ -934,6 +944,7 @@ file in a repo you cloned this morning does not inherit the answer.
   wt trust             approve the hooks that apply here
   wt trust --list      show every approval on this machine
   wt untrust           revoke this repository's approvals
+  wt untrust --path P  revoke stale approvals for a removed repository
   wt untrust --global  revoke the approvals for your own config file`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -947,7 +958,12 @@ file in a repo you cloned this morning does not inherit the answer.
 var untrustCmd = &cobra.Command{
 	Use:   "untrust",
 	Short: "Revoke hook approvals for this repository",
-	Args:  cobra.NoArgs,
+	Long: `Revoke hook approvals for this repository.
+
+Use --path to revoke stale approvals after a repository has been removed. The
+path may be absent; wt resolves its existing parent directories before matching
+the approvals that used to belong below it.`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runUntrust(cmd)
 	},
@@ -956,6 +972,8 @@ var untrustCmd = &cobra.Command{
 func init() {
 	trustCmd.Flags().BoolVar(&trustList, "list", false, "List all approved hooks")
 	untrustCmd.Flags().BoolVar(&untrustGlobal, "global", false, "Revoke the approvals for your own config file instead")
+	untrustCmd.Flags().StringVar(&untrustPath, "path", "", "Revoke stale approvals for a removed repository at this path")
+	untrustCmd.MarkFlagsMutuallyExclusive("global", "path")
 }
 
 // runTrust approves every hook set that applies where the user is standing —
@@ -1035,6 +1053,50 @@ func runTrust(cmd *cobra.Command) error {
 }
 
 func runUntrust(cmd *cobra.Command) error {
+	pathSelected := untrustPath != ""
+	if cmd != nil && cmd.Flags().Changed("path") {
+		pathSelected = true
+	}
+	if pathSelected {
+		if untrustGlobal {
+			return errors.New("--global and --path cannot be used together")
+		}
+		if untrustPath == "" {
+			return errors.New("--path cannot be empty")
+		}
+		path, err := filepath.Abs(untrustPath)
+		if err != nil {
+			return fmt.Errorf("resolve --path %s: %w", untrustPath, err)
+		}
+		path = filepath.Clean(path)
+		state, err := detectTargetState(path)
+		if err != nil {
+			return err
+		}
+		if state != targetMissing && state != targetDirEmpty {
+			return fmt.Errorf(
+				"refusing to revoke approvals by path: %s is not absent or an empty directory; "+
+					"run 'wt untrust' from inside a live repository instead",
+				path)
+		}
+		removed, err := dropTrustRecordsAt(path)
+		if err != nil {
+			return err
+		}
+		if isJSONOutput() {
+			return emitJSONSuccess(cmd, map[string]any{
+				"path":    path,
+				"removed": removed,
+			})
+		}
+		if removed == 0 {
+			fmt.Printf("Nothing to revoke at %s.\n", path)
+		} else {
+			fmt.Printf("Revoked %d approval(s) at %s\n", removed, path)
+		}
+		return nil
+	}
+
 	scope := trustScopeUser
 	whitelisted := false
 	if !untrustGlobal {

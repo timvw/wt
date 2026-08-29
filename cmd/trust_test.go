@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -571,6 +572,160 @@ func TestUntrustRevokes(t *testing.T) {
 	}
 	if after.trusted {
 		t.Fatal("wt untrust did not revoke the approval")
+	}
+}
+
+func TestUntrustPathRevokesApprovalsForARemovedRepository(t *testing.T) {
+	withIsolatedTrustStore(t)
+
+	parent := t.TempDir()
+	removed := filepath.Join(parent, "removed")
+	other := filepath.Join(parent, "other")
+	store := trustStore{Trusted: []trustRecord{
+		{Scope: filepath.Join(removed, ".git"), RepositoryInstance: "old", SHA256: "root"},
+		{Scope: filepath.Join(removed, ".git", "modules", "sub"), RepositoryInstance: "old-sub", SHA256: "sub"},
+		{Scope: filepath.Join(other, ".git"), RepositoryInstance: "other", SHA256: "other"},
+		{Scope: trustScopeUser, SHA256: "user"},
+	}}
+	if err := saveTrustStore(store); err != nil {
+		t.Fatal(err)
+	}
+
+	savedPath, savedGlobal, savedFn := untrustPath, untrustGlobal, repoTrustKeyFn
+	untrustPath, untrustGlobal = removed, false
+	repoTrustKeyFn = func() (repoIdentity, error) {
+		return repoIdentity{}, errors.New("--path must not require a current repository")
+	}
+	t.Cleanup(func() {
+		untrustPath, untrustGlobal, repoTrustKeyFn = savedPath, savedGlobal, savedFn
+	})
+
+	var err error
+	out := captureStdout(t, func() { err = runUntrust(nil) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Revoked 2 approval(s)") || !strings.Contains(out, removed) {
+		t.Errorf("untrust did not report what it removed:\n%s", out)
+	}
+
+	after, err := loadTrustStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Trusted) != 2 {
+		t.Fatalf("untrust --path kept %d records, want the unrelated repository and user config records: %+v", len(after.Trusted), after.Trusted)
+	}
+	if !after.isTrusted(filepath.Join(other, ".git"), "other", "other") ||
+		!after.isTrusted(trustScopeUser, "", "user") {
+		t.Errorf("untrust --path removed an unrelated approval: %+v", after.Trusted)
+	}
+}
+
+func TestDropTrustRecordsAtFollowsTheGitDirectorySeparately(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs a privilege we cannot assume on Windows")
+	}
+	withIsolatedTrustStore(t)
+
+	parent := t.TempDir()
+	repo := filepath.Join(parent, "removed")
+	gitDir := filepath.Join(parent, "gitdirs", "removed.git")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(gitDir, filepath.Join(repo, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveTrustStore(trustStore{Trusted: []trustRecord{{
+		Scope: filepath.Join(gitDir, "modules", "sub"), RepositoryInstance: "old-sub", SHA256: "sub",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := dropTrustRecordsAt(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("dropTrustRecordsAt() removed %d records, want the record beneath the separately resolved .git", removed)
+	}
+}
+
+func TestUntrustPathRefusesANonEmptyTree(t *testing.T) {
+	withIsolatedTrustStore(t)
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "still-here"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveTrustStore(trustStore{Trusted: []trustRecord{{
+		Scope: filepath.Join(root, "repo", ".git"), RepositoryInstance: "repo", SHA256: "hash",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	savedPath, savedGlobal := untrustPath, untrustGlobal
+	untrustPath, untrustGlobal = root, false
+	t.Cleanup(func() { untrustPath, untrustGlobal = savedPath, savedGlobal })
+
+	if err := runUntrust(nil); err == nil || !strings.Contains(err.Error(), "not absent or an empty directory") {
+		t.Fatalf("untrust --path on a non-empty tree returned %v, want a refusal", err)
+	}
+	after, err := loadTrustStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Trusted) != 1 {
+		t.Fatalf("refused untrust changed the trust store: %+v", after.Trusted)
+	}
+}
+
+func TestUntrustRejectsGlobalWithPath(t *testing.T) {
+	savedPath, savedGlobal := untrustPath, untrustGlobal
+	untrustPath, untrustGlobal = filepath.Join(t.TempDir(), "removed"), true
+	t.Cleanup(func() { untrustPath, untrustGlobal = savedPath, savedGlobal })
+
+	if err := runUntrust(nil); err == nil || !strings.Contains(err.Error(), "cannot be used together") {
+		t.Fatalf("runUntrust() with --global and --path returned %v, want a mutual-exclusion error", err)
+	}
+}
+
+func TestUntrustPathJSONReportsTheTarget(t *testing.T) {
+	withIsolatedTrustStore(t)
+	removed := filepath.Join(t.TempDir(), "removed")
+	if err := saveTrustStore(trustStore{Trusted: []trustRecord{{
+		Scope: filepath.Join(removed, ".git"), RepositoryInstance: "old", SHA256: "hash",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	savedPath, savedGlobal, savedFormat := untrustPath, untrustGlobal, outputFormat
+	untrustPath, untrustGlobal, outputFormat = removed, false, formatJSON
+	t.Cleanup(func() {
+		untrustPath, untrustGlobal, outputFormat = savedPath, savedGlobal, savedFormat
+	})
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runUntrust(untrustCmd) })
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	var payload struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Path    string `json:"path"`
+			Removed int    `json:"removed"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("invalid JSON output: %v\n%s", err, out)
+	}
+	if !payload.OK || payload.Data.Path != removed || payload.Data.Removed != 1 {
+		t.Errorf("unexpected JSON result: %+v", payload)
 	}
 }
 

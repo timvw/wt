@@ -456,6 +456,15 @@ func TestMigrateWillNotMoveARepositoryOntoAStaleApproval(t *testing.T) {
 	if !strings.Contains(out, "still carries a hook approval") {
 		t.Errorf("migrate did not say why it declined:\n%s", out)
 	}
+	if want := "wt untrust --path " + oldPath; !strings.Contains(out, want) {
+		t.Errorf("migrate did not provide an actionable stale-approval command %q:\n%s", want, out)
+	}
+
+	runWtIn(t, tmpDir, primaryPath, homeDir, worktreeRoot, "untrust", "--path", oldPath)
+	out = runMigrate(t, tmpDir, primaryPath, homeDir, worktreeRoot)
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("migration did not proceed after the reported cleanup command (stat err = %v)\nOutput: %s", err, out)
+	}
 }
 
 // TestMigrateWillNotMoveARepositoryOntoAPathThatMayCarryAnApproval pins which

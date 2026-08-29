@@ -119,6 +119,7 @@ wt runs no hook until it has been approved — a repository's committed `.wt.tom
 wt trust             # approve every hook source that applies here
 wt trust --list      # show every approval on this machine
 wt untrust           # revoke this repository's approval
+wt untrust --path P  # revoke stale approvals after a repository at P was removed
 wt untrust --global  # revoke the config file's approval
 ```
 
