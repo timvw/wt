@@ -846,8 +846,9 @@ func hasPathPrefix(path, prefix string) bool {
 // that nothing has been created at yet, before it settles which directory the
 // name reaches. Fit only where the looser answer refuses: under-matching lets a
 // name that compares equal to nothing land on a directory something already
-// covers. Revocation uses scopedUnder instead, because over-matching there would
-// delete an approval for a distinct path on a case-sensitive filesystem.
+// covers. Revocation starts with scopedUnder and only accepts a folded match
+// after the recorded filesystem identity proves that approval is stale, so it
+// cannot delete an approval for a live, distinct path.
 func scopedUnder(scope, root string) bool { return hasPathPrefix(scope, root) }
 
 func mayBeScopedUnder(scope, root string) bool { return hasPathPrefixFold(scope, root) }
@@ -903,9 +904,12 @@ func dropTrustRecordsAt(path string) (int, error) {
 		// A user-config approval is not pinned to a path, so no path can free
 		// it — and a record wt cannot resolve is not evidence about this path.
 		if rec.Scope != "" && rec.Scope != trustScopeUser {
-			if got, ok := canonicalExistingPath(rec.Scope); ok &&
-				(scopedUnder(got, root) || scopedUnder(got, gitRoot)) {
-				continue
+			if got, ok := canonicalExistingPath(rec.Scope); ok {
+				exact := scopedUnder(got, root) || scopedUnder(got, gitRoot)
+				folded := mayBeScopedUnder(got, root) || mayBeScopedUnder(got, gitRoot)
+				if exact || (folded && trustRecordIsStale(rec)) {
+					continue
+				}
 			}
 		}
 		kept = append(kept, rec)
@@ -920,6 +924,18 @@ func dropTrustRecordsAt(path string) (int, error) {
 		return 0, err
 	}
 	return removed, nil
+}
+
+// trustRecordIsStale distinguishes a removed repository from a live,
+// case-distinct neighbour when a conservative folded match found the record.
+// An uncertain lookup retains the approval; deleting something is only correct
+// when the recorded filesystem object is gone or has been replaced.
+func trustRecordIsStale(rec trustRecord) bool {
+	instance, err := repositoryInstanceID(rec.Scope)
+	if err != nil {
+		return errors.Is(err, os.ErrNotExist)
+	}
+	return instance != rec.RepositoryInstance
 }
 
 var (

@@ -661,8 +661,26 @@ func TestDropTrustRecordsAtKeepsACaseVariant(t *testing.T) {
 	parent := t.TempDir()
 	target := filepath.Join(parent, "Tool")
 	other := filepath.Join(parent, "tool", ".git")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	otherRootInfo, err := os.Stat(filepath.Dir(other))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if targetInfo, err := os.Stat(target); err == nil {
+		if os.SameFile(otherRootInfo, targetInfo) {
+			t.Skip("case-only path variants are not distinct on this filesystem")
+		}
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	instance, err := repositoryInstanceID(other)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := saveTrustStore(trustStore{Trusted: []trustRecord{{
-		Scope: other, RepositoryInstance: "other", SHA256: "hash",
+		Scope: other, RepositoryInstance: instance, SHA256: "hash",
 	}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -673,6 +691,27 @@ func TestDropTrustRecordsAtKeepsACaseVariant(t *testing.T) {
 	}
 	if removed != 0 {
 		t.Fatalf("dropTrustRecordsAt(%q) removed an approval for distinct path %q", target, other)
+	}
+}
+
+func TestDropTrustRecordsAtRemovesAStaleCaseVariant(t *testing.T) {
+	withIsolatedTrustStore(t)
+
+	parent := t.TempDir()
+	target := filepath.Join(parent, "Tool")
+	stale := filepath.Join(parent, "tool", ".git")
+	if err := saveTrustStore(trustStore{Trusted: []trustRecord{{
+		Scope: stale, RepositoryInstance: "gone", SHA256: "hash",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := dropTrustRecordsAt(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("dropTrustRecordsAt(%q) removed %d records, want the stale case-variant record", target, removed)
 	}
 }
 
