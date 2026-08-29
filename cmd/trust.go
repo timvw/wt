@@ -844,10 +844,10 @@ func hasPathPrefix(path, prefix string) bool {
 // mayBeScopedUnder folds case, and on Windows the trailing dots and spaces
 // Win32 drops from every component — the folds a filesystem applies to a path
 // that nothing has been created at yet, before it settles which directory the
-// name reaches. Fit only where the looser answer refuses or revokes:
-// over-matching there costs an approval the user can give again, while
-// under-matching lets a name that compares equal to nothing land on a directory
-// something already covers.
+// name reaches. Fit only where the looser answer refuses: under-matching lets a
+// name that compares equal to nothing land on a directory something already
+// covers. Revocation uses scopedUnder instead, because over-matching there would
+// delete an approval for a distinct path on a case-sensitive filesystem.
 func scopedUnder(scope, root string) bool { return hasPathPrefix(scope, root) }
 
 func mayBeScopedUnder(scope, root string) bool { return hasPathPrefixFold(scope, root) }
@@ -904,7 +904,7 @@ func dropTrustRecordsAt(path string) (int, error) {
 		// it — and a record wt cannot resolve is not evidence about this path.
 		if rec.Scope != "" && rec.Scope != trustScopeUser {
 			if got, ok := canonicalExistingPath(rec.Scope); ok &&
-				(mayBeScopedUnder(got, root) || mayBeScopedUnder(got, gitRoot)) {
+				(scopedUnder(got, root) || scopedUnder(got, gitRoot)) {
 				continue
 			}
 		}

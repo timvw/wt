@@ -655,6 +655,27 @@ func TestDropTrustRecordsAtFollowsTheGitDirectorySeparately(t *testing.T) {
 	}
 }
 
+func TestDropTrustRecordsAtKeepsACaseVariant(t *testing.T) {
+	withIsolatedTrustStore(t)
+
+	parent := t.TempDir()
+	target := filepath.Join(parent, "Tool")
+	other := filepath.Join(parent, "tool", ".git")
+	if err := saveTrustStore(trustStore{Trusted: []trustRecord{{
+		Scope: other, RepositoryInstance: "other", SHA256: "hash",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := dropTrustRecordsAt(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Fatalf("dropTrustRecordsAt(%q) removed an approval for distinct path %q", target, other)
+	}
+}
+
 func TestUntrustPathRefusesANonEmptyTree(t *testing.T) {
 	withIsolatedTrustStore(t)
 

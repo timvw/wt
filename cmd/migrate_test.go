@@ -456,7 +456,7 @@ func TestMigrateWillNotMoveARepositoryOntoAStaleApproval(t *testing.T) {
 	if !strings.Contains(out, "still carries a hook approval") {
 		t.Errorf("migrate did not say why it declined:\n%s", out)
 	}
-	if want := "wt untrust --path " + oldPath; !strings.Contains(out, want) {
+	if want := "wt untrust --path " + shellQuoteArgument(oldPath); !strings.Contains(out, want) {
 		t.Errorf("migrate did not provide an actionable stale-approval command %q:\n%s", want, out)
 	}
 
@@ -464,6 +464,20 @@ func TestMigrateWillNotMoveARepositoryOntoAStaleApproval(t *testing.T) {
 	out = runMigrate(t, tmpDir, primaryPath, homeDir, worktreeRoot)
 	if _, err := os.Stat(oldPath); err != nil {
 		t.Fatalf("migration did not proceed after the reported cleanup command (stat err = %v)\nOutput: %s", err, out)
+	}
+}
+
+func TestMigrationUntrustCommandQuotesTheDestination(t *testing.T) {
+	path := filepath.Join("parent with spaces", "repo's \"checkout\"")
+	got := shellQuoteArgument(path)
+	var want string
+	if runtime.GOOS == "windows" {
+		want = `'parent with spaces\repo''s "checkout"'`
+	} else {
+		want = `'parent with spaces/repo'"'"'s "checkout"'`
+	}
+	if got != want {
+		t.Errorf("shellQuoteArgument(%q) = %q, want %q", path, got, want)
 	}
 }
 
