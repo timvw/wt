@@ -622,15 +622,25 @@ func migrateTrustGain(from, to string) (string, error) {
 	return "", nil
 }
 
-// shellQuoteArgument renders one copyable argument for the platform's native
-// shell: POSIX-style shells on Unix and PowerShell on Windows. displayText keeps
-// an untrusted repository path from emitting terminal control sequences.
+// shellQuoteArgument renders one argument for the shell wt integrates with:
+// POSIX-style shells on Unix and Git Bash, PowerShell otherwise on Windows.
+// Printable paths are copyable verbatim. displayText keeps an untrusted
+// repository path from emitting terminal control sequences; a path containing
+// those exotic characters is deliberately shown safely rather than literally.
 func shellQuoteArgument(arg string) string {
 	arg = displayText(arg)
-	if runtime.GOOS == "windows" {
-		return "'" + strings.ReplaceAll(arg, "'", "''") + "'"
+	if runtime.GOOS == "windows" && os.Getenv("MSYSTEM") == "" && os.Getenv("SHELL") == "" {
+		return shellQuotePowerShell(arg)
 	}
+	return shellQuotePOSIX(arg)
+}
+
+func shellQuotePOSIX(arg string) string {
 	return "'" + strings.ReplaceAll(arg, "'", "'\"'\"'") + "'"
+}
+
+func shellQuotePowerShell(arg string) string {
+	return "'" + strings.ReplaceAll(arg, "'", "''") + "'"
 }
 
 // cannotTellReason is the skip for a path wt could not settle. Not knowing what

@@ -469,15 +469,13 @@ func TestMigrateWillNotMoveARepositoryOntoAStaleApproval(t *testing.T) {
 
 func TestMigrationUntrustCommandQuotesTheDestination(t *testing.T) {
 	path := filepath.Join("parent with spaces", "repo's \"checkout\"")
-	got := shellQuoteArgument(path)
-	var want string
-	if runtime.GOOS == "windows" {
-		want = `'parent with spaces\repo''s "checkout"'`
-	} else {
-		want = `'parent with spaces/repo'"'"'s "checkout"'`
+	posixPath := filepath.ToSlash(path)
+	if got, want := shellQuotePOSIX(posixPath), `'parent with spaces/repo'"'"'s "checkout"'`; got != want {
+		t.Errorf("shellQuotePOSIX(%q) = %q, want %q", posixPath, got, want)
 	}
-	if got != want {
-		t.Errorf("shellQuoteArgument(%q) = %q, want %q", path, got, want)
+	windowsPath := `C:\parent with spaces\repo's "checkout"`
+	if got, want := shellQuotePowerShell(windowsPath), `'C:\parent with spaces\repo''s "checkout"'`; got != want {
+		t.Errorf("shellQuotePowerShell(%q) = %q, want %q", windowsPath, got, want)
 	}
 }
 
