@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -609,15 +610,27 @@ func migrateTrustGain(from, to string) (string, error) {
 	}
 	for sha := range waiting {
 		if !held[sha] {
+			displayPath := displayText(to)
 			return fmt.Sprintf(
 				"%s still carries a hook approval from a repository that used to be there, so moving it "+
 					"there would run this repository's hooks unasked if the commands match — and that path "+
-					"comes from the origin URL, not from you. Run 'wt untrust --path %s' first, or move it "+
+					"comes from the origin URL, not from you. Run wt untrust --path %s first, or move it "+
 					"yourself if you meant to",
-				to, to), nil
+				displayPath, shellQuoteArgument(to)), nil
 		}
 	}
 	return "", nil
+}
+
+// shellQuoteArgument renders one copyable argument for the platform's native
+// shell: POSIX-style shells on Unix and PowerShell on Windows. displayText keeps
+// an untrusted repository path from emitting terminal control sequences.
+func shellQuoteArgument(arg string) string {
+	arg = displayText(arg)
+	if runtime.GOOS == "windows" {
+		return "'" + strings.ReplaceAll(arg, "'", "''") + "'"
+	}
+	return "'" + strings.ReplaceAll(arg, "'", "'\"'\"'") + "'"
 }
 
 // cannotTellReason is the skip for a path wt could not settle. Not knowing what
