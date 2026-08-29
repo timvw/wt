@@ -113,6 +113,12 @@ var configRepoFound bool
 // is reliably available.
 var configRepoKey string
 
+// configRepoInstance is the filesystem identity of configRepoKey, captured at
+// the same time. A path and command hash are not enough: a repository deleted
+// and cloned again at the same path is a different repository and must be
+// approved again.
+var configRepoInstance string
+
 // configRepoVerified records whether git confirmed that this working tree is a
 // worktree of the repository configRepoKey names, resolved alongside it. Only a
 // confirmed identity may be matched against a [trust] rule: see repoIdentity.
@@ -1071,6 +1077,7 @@ func loadWorktreeConfig() {
 	configRepoPath = ""
 	configRepoFound = false
 	configRepoKey = ""
+	configRepoInstance = ""
 	configRepoVerified = false
 
 	if repoRootErr == nil {
@@ -1082,7 +1089,7 @@ func loadWorktreeConfig() {
 		if data, err := os.ReadFile(repoConfigPath); err == nil {
 			configRepoFound = true
 			if id, err := repoTrustKeyFn(); err == nil {
-				configRepoKey, configRepoVerified = id.key, id.verified
+				configRepoKey, configRepoInstance, configRepoVerified = id.key, id.instance, id.verified
 			}
 			var repoCfg Config
 			if md, err := toml.Decode(string(data), &repoCfg); err == nil {

@@ -69,14 +69,17 @@ func repoWithHooks(t *testing.T, body string) (repoDir, trustKey string) {
 
 	repoDir = t.TempDir()
 	trustKey = filepath.Join(repoDir, ".git")
+	if err := os.Mkdir(trustKey, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	savedPath, savedFound := configRepoPath, configRepoFound
-	savedKey, savedVerified, savedKeyFn := configRepoKey, configRepoVerified, repoTrustKeyFn
+	savedKey, savedInstance, savedVerified, savedKeyFn := configRepoKey, configRepoInstance, configRepoVerified, repoTrustKeyFn
 	savedHooks, savedSources, savedDeclared := worktreeHooks, hookSources, declaredHooks
-	repoTrustKeyFn = func() (repoIdentity, error) { return repoIdentity{key: trustKey, verified: true}, nil }
+	repoTrustKeyFn = func() (repoIdentity, error) { return identifyRepository(trustKey, true) }
 	t.Cleanup(func() {
 		configRepoPath, configRepoFound = savedPath, savedFound
-		configRepoKey, configRepoVerified, repoTrustKeyFn = savedKey, savedVerified, savedKeyFn
+		configRepoKey, configRepoInstance, configRepoVerified, repoTrustKeyFn = savedKey, savedInstance, savedVerified, savedKeyFn
 		worktreeHooks, hookSources = savedHooks, savedSources
 		declaredHooks = savedDeclared
 	})
@@ -128,7 +131,7 @@ func writeRepoConfig(t *testing.T, repoDir, body string) {
 		hookSources[event] = hookSourceRepoConfig
 	}
 	if id, err := repoTrustKeyFn(); err == nil {
-		configRepoKey, configRepoVerified = id.key, id.verified
+		configRepoKey, configRepoInstance, configRepoVerified = id.key, id.instance, id.verified
 	}
 }
 
@@ -267,6 +270,50 @@ func TestTrustDoesNotTransferBetweenRepos(t *testing.T) {
 	}
 	if other.trusted {
 		t.Fatal("approval leaked to a different repository with identical .wt.toml")
+	}
+}
+
+// TestTrustDoesNotSurviveRepositoryReplacement is the same-path counterpart:
+// an approval belongs to the repository incarnation that earned it, not to an
+// empty slot on disk. A plain `git clone` does not pass through wt's stale-record
+// cleanup, so the filesystem identity must make the replacement untrusted.
+func TestTrustDoesNotSurviveRepositoryReplacement(t *testing.T) {
+	withIsolatedTrustStore(t)
+	withPolicy(t, hookPolicyPromptUntrusted)
+
+	body := "[hooks]\npost_create = [\"make setup\"]\n"
+	repoDir, trustKey := repoWithHooks(t, body)
+	approved, err := hookSetTrust(hookSourceRepoConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := trustHookSet(approved); err != nil {
+		t.Fatal(err)
+	}
+
+	// Keep the original directory alive under another name so the filesystem
+	// cannot immediately reuse its identity for the replacement.
+	oldRepo := repoDir + "-old"
+	if err := os.Rename(repoDir, oldRepo); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(trustKey, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRepoConfig(t, repoDir, body)
+
+	replacement, err := hookSetTrust(hookSourceRepoConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.sha != approved.sha || replacement.scope != approved.scope {
+		t.Fatalf("test setup changed scope/hash: old=%+v new=%+v", approved, replacement)
+	}
+	if replacement.repositoryInstance == approved.repositoryInstance {
+		t.Fatal("replacement repository kept the original filesystem identity")
+	}
+	if replacement.trusted {
+		t.Fatal("approval survived replacement by a different repository at the same path")
 	}
 }
 
@@ -456,6 +503,9 @@ func TestTrustKeyIsSharedByWorktrees(t *testing.T) {
 	}
 	if linkedKey.key != mainKey.key {
 		t.Errorf("linked worktree key = %q, want the main checkout's %q", linkedKey.key, mainKey.key)
+	}
+	if linkedKey.instance == "" || linkedKey.instance != mainKey.instance {
+		t.Errorf("linked worktree instance = %q, want the main checkout's %q", linkedKey.instance, mainKey.instance)
 	}
 	if !linkedKey.verified || !mainKey.verified {
 		t.Error("a registered worktree's identity was not confirmed by git")
@@ -801,9 +851,9 @@ func TestTrustStoreRoundTrip(t *testing.T) {
 		t.Fatalf("fresh trust store has %d records, want 0", len(store.Trusted))
 	}
 
-	store.add(trustRecord{Scope: "/repo/.git", File: "/repo/.wt.toml", SHA256: "aaa", ApprovedAt: "now"})
-	store.add(trustRecord{Scope: "/repo/.git", File: "/repo/.wt.toml", SHA256: "bbb", ApprovedAt: "now"})
-	store.add(trustRecord{Scope: "/repo/.git", File: "/repo/.wt.toml", SHA256: "aaa", ApprovedAt: "later"})
+	store.add(trustRecord{Scope: "/repo/.git", RepositoryInstance: "repo-1", File: "/repo/.wt.toml", SHA256: "aaa", ApprovedAt: "now"})
+	store.add(trustRecord{Scope: "/repo/.git", RepositoryInstance: "repo-1", File: "/repo/.wt.toml", SHA256: "bbb", ApprovedAt: "now"})
+	store.add(trustRecord{Scope: "/repo/.git", RepositoryInstance: "repo-1", File: "/repo/.wt.toml", SHA256: "aaa", ApprovedAt: "later"})
 	if len(store.Trusted) != 2 {
 		t.Fatalf("add() kept %d records, want 2 (same scope+hash should replace)", len(store.Trusted))
 	}
@@ -829,18 +879,52 @@ func TestTrustStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reloaded.isTrusted("/repo/.git", "aaa") || !reloaded.isTrusted("/repo/.git", "bbb") {
+	if !reloaded.isTrusted("/repo/.git", "repo-1", "aaa") || !reloaded.isTrusted("/repo/.git", "repo-1", "bbb") {
 		t.Error("records did not survive a save/load round trip")
 	}
-	if reloaded.isTrusted("/elsewhere/.git", "aaa") {
+	if reloaded.isTrusted("/elsewhere/.git", "repo-1", "aaa") {
 		t.Error("isTrusted() matched on hash alone; scope must match too")
 	}
-	if reloaded.isTrusted("/repo/.git", "ccc") {
+	if reloaded.isTrusted("/repo/.git", "repo-1", "ccc") {
 		t.Error("isTrusted() matched on scope alone; hash must match too")
+	}
+	if reloaded.isTrusted("/repo/.git", "repo-2", "aaa") {
+		t.Error("isTrusted() matched an approval from a different repository incarnation")
+	}
+
+	reloaded.add(trustRecord{Scope: "/repo/.git", RepositoryInstance: "repo-2", File: "/repo/.wt.toml", SHA256: "aaa", ApprovedAt: "replacement"})
+	if len(reloaded.Trusted) != 2 {
+		t.Fatalf("approving a replacement kept a stale duplicate: %+v", reloaded.Trusted)
+	}
+	if reloaded.isTrusted("/repo/.git", "repo-1", "aaa") || !reloaded.isTrusted("/repo/.git", "repo-2", "aaa") {
+		t.Error("approving a replacement did not replace the old repository incarnation")
 	}
 
 	if removed := reloaded.remove("/repo/.git"); removed != 2 {
 		t.Errorf("remove() = %d, want 2", removed)
+	}
+}
+
+func TestTrustListShowsRepositoryInstance(t *testing.T) {
+	withIsolatedTrustStore(t)
+	if err := saveTrustStore(trustStore{Trusted: []trustRecord{{
+		Scope:              "/repo/.git",
+		RepositoryInstance: "unix:1:2",
+		Source:             hookSourceRepoConfig,
+		File:               "/repo/.wt.toml",
+		SHA256:             "aaa",
+		ApprovedAt:         "now",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := runTrustList(trustCmd); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(out, "repository instance: unix:1:2") {
+		t.Errorf("trust list hid the repository identity used for matching:\n%s", out)
 	}
 }
 
@@ -858,6 +942,34 @@ func TestMalformedTrustStoreIsAnError(t *testing.T) {
 
 	if _, err := loadTrustStore(); err == nil {
 		t.Fatal("loadTrustStore() accepted a malformed store")
+	}
+}
+
+func TestPathOnlyTrustStoreIsNotCarriedForward(t *testing.T) {
+	withIsolatedTrustStore(t)
+	path := trustFilePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `version = 2
+
+[[trusted]]
+scope = "/repo/.git"
+source = "repo config"
+file = "/repo/.wt.toml"
+sha256 = "aaa"
+approved_at = "now"
+`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := loadTrustStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Version != trustStoreVersion || len(store.Trusted) != 0 {
+		t.Fatalf("loadTrustStore() = %+v, want an empty version %d store", store, trustStoreVersion)
 	}
 }
 
@@ -1027,12 +1139,12 @@ func TestTrustSurvivesADeletedWorkingDirectory(t *testing.T) {
 	gitInit(t, repoDir)
 	t.Chdir(repoDir)
 
-	savedPath, savedFound, savedKey := configRepoPath, configRepoFound, configRepoKey
+	savedPath, savedFound, savedKey, savedInstance := configRepoPath, configRepoFound, configRepoKey, configRepoInstance
 	savedHooks, savedSources := worktreeHooks, hookSources
 	savedDeclared := declaredHooks
 	withoutTrustWhitelist(t)
 	t.Cleanup(func() {
-		configRepoPath, configRepoFound, configRepoKey = savedPath, savedFound, savedKey
+		configRepoPath, configRepoFound, configRepoKey, configRepoInstance = savedPath, savedFound, savedKey, savedInstance
 		worktreeHooks, hookSources = savedHooks, savedSources
 		declaredHooks = savedDeclared
 	})

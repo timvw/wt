@@ -84,7 +84,9 @@ func runClone(cmd *cobra.Command, args []string) error {
 	// Nothing is at target — which is what says any approval recorded for it was
 	// given to a repository that is no longer there. Discard those before a
 	// different repository moves in, or it inherits them: an approval is pinned
-	// to (scope, sha256 of the commands), so an attacker who takes over an
+	// to a repository scope, filesystem identity and command hash. Pruning the
+	// obsolete records still keeps the store tidy and avoids conservative
+	// migration checks treating them as waiting approvals, so an attacker who takes over an
 	// abandoned namespace, or a repo_pattern that renders onto a path an old
 	// checkout occupied, arrives pre-approved by declaring a command the user
 	// once approved there.

@@ -990,13 +990,21 @@ this checkout.
 
 ### What an approval covers
 
-An approval is pinned to **the commands, and to the source that supplied them**:
+An approval is pinned to **the commands, the source that supplied them, and the
+repository incarnation that was present when you approved it**:
 
 - Your config file's hooks are approved once and run in every repository. That is
   what a *user* config is for.
 - A repository's `.wt.toml` is approved for that repository only. An identical
   `.wt.toml` in a different repository is not covered: `make setup` is only as
   safe as the Makefile next to it.
+
+For a repository approval, `wt` records the filesystem identity of the common
+git directory: device and inode on Unix, volume serial and file index on
+Windows. Linked worktrees share that identity. Deleting a checkout and cloning
+another repository at the same path does not, so the replacement is asked
+again even when it declares the same command. Moving or restoring the git
+directory onto another filesystem also asks again.
 
 Changing a hook command invalidates the approval and `wt` asks again — including
 a `git pull` that adds a hook, or checking out a branch whose `.wt.toml` differs.
@@ -1005,6 +1013,8 @@ entry is not a change to what would execute, so it does not cost you a prompt.
 
 Approvals are stored in `~/.config/wt/trust.toml` (`$XDG_CONFIG_HOME/wt/` or
 `%APPDATA%\wt\` if set). Deleting that file revokes everything.
+Trust stores from versions before repository identity was recorded are reset
+with a warning; old path-only approvals cannot be translated safely.
 
 That location is always an absolute path. A non-absolute `$XDG_CONFIG_HOME` (or
 `%APPDATA%` on Windows) is invalid per the XDG Base Directory spec and is ignored
@@ -1099,13 +1109,13 @@ you wrote a rule for `github.com/acme`, and arrive already approved. That
 migration is skipped with a reason instead. Moving it there yourself still
 works, because then the path is your choice rather than the URL's.
 
-The same goes for an approval already waiting at that path. Records are pinned to
-`(scope, sha256 of the commands)` and nothing prunes one when a checkout is
-deleted, so `~/src/acme/tool` can still carry the approval you gave the
-`acme/tool` you used to have. A repository named to land there, shipping a
-command you were likely to have approved somewhere — `make setup` — would arrive
-pre-approved. `wt migrate` declines that move too, and says which path to run
-`wt untrust` in. Compared as command sets, not as "is anything approved here":
+The same conservative rule applies to an approval record still naming the
+destination. Repository approvals now include a filesystem identity, so a
+checkout replaced in place does not inherit one, even when plain git performed
+the clone. `wt migrate` nevertheless declines to move onto a path carrying an
+old record and says which path to run `wt untrust` in: before the move there is
+no destination filesystem identity to compare, and moving first in order to ask
+would be too late. Compared as command sets, not as "is anything approved here":
 a repository you approved once holds a record for the commands it had then, and
 asking only whether its current path has *an* approval would let that one wave
 through a move onto a different set waiting at the destination.
