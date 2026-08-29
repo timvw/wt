@@ -50,7 +50,7 @@ wt supports multiple strategies for organizing worktrees. Configure via `~/.conf
 | `sibling-repo` | `../<repo>-worktrees/<branch>` — worktrees next to repo |
 | `parent-branches` | `../<branch>` — branches as siblings of main checkout |
 
-The `pattern` setting controls the path template. Variables: `{.worktreeRoot}`, `{.repo.Name}`, `{.repo.Main}`, `{.repo.Owner}`, `{.repo.Host}`, `{.branch}`, `{.env.VARNAME}`.
+The `pattern` setting controls the path template. Variables: `{.worktreeRoot}`, `{.repo.Name}`, `{.repo.Main}`, `{.repo.Owner}`, `{.repo.Host}`, `{.branch}`, `{.env.VARNAME}`. A pattern committed in `.wt.toml` is confined to `root`, including when it renders as an absolute path. Set `wt.pattern` in local git config or `WORKTREE_PATTERN` for an intentional machine-local placement outside that tree.
 
 The dotted form is required: `wt` renders patterns with `missingkey=error`, so a bare `{root}` or `{repo}` is a hard failure rather than an empty segment. Run `wt info` to see the full variable list and the active pattern.
 

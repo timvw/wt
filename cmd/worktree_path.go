@@ -75,6 +75,17 @@ func renderWorktreePath(info repoInfo, branch string) (string, error) {
 	}
 
 	rendered = filepath.Clean(rendered)
+	// A pattern committed in .wt.toml is content the repository supplied. Keep
+	// it inside the root the user selected, even when it renders as an absolute
+	// path: otherwise cloning a repository also lets it choose any empty path on
+	// the machine for the next checkout. Machine-local layers remain free to
+	// place worktrees elsewhere; those are settings the user controls.
+	if configSources.Pattern == hookSourceRepoConfig && !isPathWithinRoot(rendered, worktreeRoot) {
+		return "", fmt.Errorf(
+			"repository pattern would place this worktree at %s, outside the configured worktree root %s.\n"+
+				"Patterns from .wt.toml are confined to that root; set wt.pattern in local git config or WORKTREE_PATTERN if you intend this placement",
+			rendered, worktreeRoot)
+	}
 	if owned := wtStateAtPath(rendered); owned != "" {
 		return "", fmt.Errorf(
 			"this worktree would be created at %s, which is %s.\n"+
