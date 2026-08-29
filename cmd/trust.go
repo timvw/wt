@@ -26,7 +26,8 @@ import (
 // flags an absence. direnv makes the same choice for the same reason, and will
 // not source even a .envrc you wrote yourself until you have said so once.
 //
-// A record is (scope, sha256) and BOTH must match before the commands run:
+// A repository record is (scope, filesystem identity, sha256), and all three
+// must match before the commands run:
 //
 //   - The hash covers the whole set of commands one source contributes, so any
 //     edit — a `git pull` that adds a post_create, a branch whose .wt.toml
@@ -37,6 +38,9 @@ import (
 //     is approved per repository, so an attacker cannot get a free pass by
 //     shipping a .wt.toml byte-identical to one you already approved
 //     elsewhere: `make setup` is only as safe as the Makefile next to it.
+//   - The filesystem identity says which incarnation of that repository the
+//     approval was given to. Deleting it and cloning something else at the same
+//     path does not inherit the old approval, even when the command is equal.
 //
 // The store lives in wt's own config directory, never in the repository and
 // never in .git/config: a repo handed to you as a directory rather than a clone
@@ -50,17 +54,18 @@ const trustScopeUser = "user config"
 // trustStoreVersion is the format of the records this build understands.
 //
 // Bumped to 2 when approvals moved from "this .wt.toml file's bytes" to "this
-// source's commands". The two are not comparable and are deliberately not
-// translated: see loadTrustStore.
-const trustStoreVersion = 2
+// source's commands", and to 3 when repository approvals gained a filesystem
+// identity. The formats are deliberately not translated: see loadTrustStore.
+const trustStoreVersion = 3
 
 // trustRecord is a single approved hook set.
 type trustRecord struct {
-	Scope      string `toml:"scope"`
-	Source     string `toml:"source"`
-	File       string `toml:"file"`
-	SHA256     string `toml:"sha256"`
-	ApprovedAt string `toml:"approved_at"`
+	Scope              string `toml:"scope"`
+	RepositoryInstance string `toml:"repository_instance,omitempty"`
+	Source             string `toml:"source"`
+	File               string `toml:"file"`
+	SHA256             string `toml:"sha256"`
+	ApprovedAt         string `toml:"approved_at"`
 }
 
 // trustStore is the on-disk set of approvals.
@@ -129,10 +134,11 @@ func loadTrustStore() (trustStore, error) {
 			path, store.Version, trustStoreVersion)
 	}
 	// Older records are dropped rather than interpreted. Version 1 pinned the
-	// sha256 of a .wt.toml's bytes; these pin the sha256 of a source's commands.
-	// Reading one as the other would compare unrelated hashes, so the only safe
-	// reading is "nothing here is approved" — said out loud, because re-approving
-	// with no explanation is the failure this file warns about below.
+	// sha256 of a .wt.toml's bytes; version 2 did not identify which repository
+	// incarnation occupied a path. Reading either as the current format would
+	// grant something the user did not approve, so the only safe reading is
+	// "nothing here is approved" — said out loud, because re-approving with no
+	// explanation is the failure this file warns about below.
 	if store.Version != trustStoreVersion {
 		warnStaleTrustStore(store.Version)
 		return trustStore{Version: trustStoreVersion}, nil
@@ -148,7 +154,7 @@ func warnStaleTrustStore(found int) {
 	staleTrustStoreWarning.Do(func() {
 		fmt.Fprintf(os.Stderr,
 			"⚠ %s is in an older format (%d, this wt reads %d).\n"+
-				"  Those approvals pinned files rather than commands and are not translated.\n"+
+				"  Those approvals do not carry this version's repository identity and are not translated.\n"+
 				"  wt will ask once more for each set of hooks you use.\n\n",
 			trustFilePath(), found, trustStoreVersion)
 	})
@@ -201,18 +207,22 @@ const trustStoreHeader = `# wt hook trust store — managed by 'wt trust' and 'w
 # Each entry records a set of hook commands you approved, pinned to the commands
 # themselves. Editing them invalidates the entry and wt will ask again. Entries
 # scoped to "user config" came from your own config file and apply everywhere;
-# the rest are pinned to one repository. Deleting this file revokes everything.
+# the rest are pinned to one repository path and filesystem identity. Replacing
+# that repository asks again. Deleting this file revokes everything.
 
 `
 
 // isTrusted reports whether this exact set of commands has been approved for
 // this exact scope.
-func (s trustStore) isTrusted(scope, sha string) bool {
+func (s trustStore) isTrusted(scope, repositoryInstance, sha string) bool {
 	if scope == "" || sha == "" {
 		return false
 	}
+	if scope != trustScopeUser && repositoryInstance == "" {
+		return false
+	}
 	for _, rec := range s.Trusted {
-		if rec.Scope == scope && rec.SHA256 == sha {
+		if rec.Scope == scope && rec.RepositoryInstance == repositoryInstance && rec.SHA256 == sha {
 			return true
 		}
 	}
@@ -220,10 +230,12 @@ func (s trustStore) isTrusted(scope, sha string) bool {
 }
 
 // add records an approval, replacing any previous entry with the same scope and
-// hash. Entries for the same scope with a *different* hash are kept: worktrees
-// of one repo can legitimately sit on branches whose .wt.toml differ, and
-// dropping them would make switching between two approved branches re-prompt
-// each time.
+// hash. The replacement deliberately ignores RepositoryInstance: once the user
+// approves a new repository incarnation at that path, the stale incarnation's
+// record has no reason to remain. Entries for the same scope with a *different*
+// hash are kept: worktrees of one repo can legitimately sit on branches whose
+// .wt.toml differ, and dropping them would make switching between two approved
+// branches re-prompt each time.
 func (s *trustStore) add(rec trustRecord) {
 	for i, existing := range s.Trusted {
 		if existing.Scope == rec.Scope && existing.SHA256 == rec.SHA256 {
@@ -308,18 +320,27 @@ func defaultRepoTrustKey() (repoIdentity, error) {
 
 	commonDir, err := gitCommonDir()
 	if err != nil || commonDir == "" {
-		return repoIdentity{key: top}, nil
+		return identifyRepository(top, false)
 	}
 	if !worktreeRegistered(commonDir, top) {
-		return repoIdentity{key: top}, nil
+		return identifyRepository(top, false)
 	}
-	return repoIdentity{key: commonDir, verified: true}, nil
+	return identifyRepository(commonDir, true)
+}
+
+func identifyRepository(key string, verified bool) (repoIdentity, error) {
+	instance, err := repositoryInstanceID(key)
+	if err != nil {
+		return repoIdentity{}, fmt.Errorf("cannot identify repository at %s: %w", key, err)
+	}
+	return repoIdentity{key: key, instance: instance, verified: verified}, nil
 }
 
 // repoIdentity is the repository an approval is pinned to, and whether git
 // confirmed which repository that is.
 type repoIdentity struct {
-	key string
+	key      string
+	instance string
 
 	// verified is true when git listed this working tree among the worktrees of
 	// the repository its .git names. False is not an error — the key is still
@@ -461,12 +482,13 @@ func canonicalPath(p string) string {
 
 // hookTrust describes the approval state of the hook set one source supplied.
 type hookTrust struct {
-	scope       string // trustScopeUser, or the repository identity
-	source      string // the hookSource* label the commands arrived under
-	file        string // the file that supplied them, for display
-	sha         string // sha256 of the command set
-	trusted     bool
-	whitelisted bool // approved by a [trust] rule rather than a stored record
+	scope              string // trustScopeUser, or the repository identity
+	repositoryInstance string // filesystem identity; empty for user config
+	source             string // the hookSource* label the commands arrived under
+	file               string // the file that supplied them, for display
+	sha                string // sha256 of the command set
+	trusted            bool
+	whitelisted        bool // approved by a [trust] rule rather than a stored record
 }
 
 // describeHookSource names a hook source for a message.
@@ -500,13 +522,13 @@ func hookSetTrust(source string) (hookTrust, error) {
 		// The identity resolved at config load. Falling back to resolving it now
 		// covers callers that set the path globals directly, but the cached value
 		// is the one to prefer: see configRepoKey.
-		t.scope, verified = configRepoKey, configRepoVerified
+		t.scope, t.repositoryInstance, verified = configRepoKey, configRepoInstance, configRepoVerified
 		if t.scope == "" {
 			id, err := repoTrustKeyFn()
 			if err != nil {
 				return hookTrust{}, err
 			}
-			t.scope, verified = id.key, id.verified
+			t.scope, t.repositoryInstance, verified = id.key, id.instance, id.verified
 		}
 	default:
 		// A source this switch has not been taught about gets no scope, so
@@ -537,7 +559,7 @@ func hookSetTrust(source string) (hookTrust, error) {
 		// — prompt-all — still name the file it is asking about.
 		return t, err
 	}
-	t.trusted = store.isTrusted(t.scope, t.sha)
+	t.trusted = store.isTrusted(t.scope, t.repositoryInstance, t.sha)
 	return t, nil
 }
 
@@ -554,16 +576,20 @@ func trustHookSet(t hookTrust) error {
 	if t.scope == "" || t.sha == "" {
 		return fmt.Errorf("hooks from %s cannot be remembered", describeHookSource(t.source))
 	}
+	if t.scope != trustScopeUser && t.repositoryInstance == "" {
+		return fmt.Errorf("hooks from %s cannot be remembered without a repository identity", describeHookSource(t.source))
+	}
 	store, err := loadTrustStore()
 	if err != nil {
 		return err
 	}
 	store.add(trustRecord{
-		Scope:      t.scope,
-		Source:     t.source,
-		File:       t.file,
-		SHA256:     t.sha,
-		ApprovedAt: time.Now().UTC().Format(time.RFC3339),
+		Scope:              t.scope,
+		RepositoryInstance: t.repositoryInstance,
+		Source:             t.source,
+		File:               t.file,
+		SHA256:             t.sha,
+		ApprovedAt:         time.Now().UTC().Format(time.RFC3339),
 	})
 	return saveTrustStore(store)
 }
@@ -835,14 +861,11 @@ func mayBeSamePath(a, b string) bool { return foldPath(a) == foldPath(b) }
 // reports how many went. For the moment wt is about to put a repository at a
 // path that has nothing at it.
 //
-// An approval is pinned to (scope, sha256 of the commands), and nothing prunes
-// one when a checkout is deleted — so a record outlives the repository it was
-// given to, and an empty path is exactly what says that repository is gone. A
-// different repository arriving there must not inherit it: someone who takes
-// over an abandoned namespace, or a repo_pattern that happens to render onto a
-// path a checkout used to occupy, need only declare a command the user is
-// likely to have approved there once ("make setup") to match a record nobody
-// wrote for them.
+// A repository approval also carries a filesystem identity, so a replacement
+// cannot inherit it. An empty path nevertheless says the repository named by
+// every record below it is gone; pruning those records keeps the store accurate
+// and prevents migrate's deliberately conservative stale-record check from
+// refusing a future placement there.
 func dropTrustRecordsAt(path string) (int, error) {
 	// The whole directory, not just its .git: everything at or under an empty
 	// path belongs to whatever used to be there, including the scopes of its
@@ -1098,11 +1121,12 @@ func runTrustList(cmd *cobra.Command) error {
 		records := make([]map[string]any, 0, len(store.Trusted))
 		for _, rec := range store.Trusted {
 			records = append(records, map[string]any{
-				"scope":       rec.Scope,
-				"source":      rec.Source,
-				"file":        rec.File,
-				"sha256":      rec.SHA256,
-				"approved_at": rec.ApprovedAt,
+				"scope":               rec.Scope,
+				"repository_instance": rec.RepositoryInstance,
+				"source":              rec.Source,
+				"file":                rec.File,
+				"sha256":              rec.SHA256,
+				"approved_at":         rec.ApprovedAt,
 			})
 		}
 		return emitJSONSuccess(cmd, map[string]any{
@@ -1121,10 +1145,13 @@ func runTrustList(cmd *cobra.Command) error {
 		fmt.Printf("Trust store: %s\n\n", trustFilePath())
 		for _, rec := range store.Trusted {
 			fmt.Printf("  %s\n", rec.File)
-			fmt.Printf("    scope:    %s\n", rec.Scope)
-			fmt.Printf("    source:   %s\n", rec.Source)
-			fmt.Printf("    sha256:   %s\n", rec.SHA256)
-			fmt.Printf("    approved: %s\n\n", rec.ApprovedAt)
+			fmt.Printf("    scope:               %s\n", rec.Scope)
+			if rec.RepositoryInstance != "" {
+				fmt.Printf("    repository instance: %s\n", rec.RepositoryInstance)
+			}
+			fmt.Printf("    source:              %s\n", rec.Source)
+			fmt.Printf("    sha256:              %s\n", rec.SHA256)
+			fmt.Printf("    approved:            %s\n\n", rec.ApprovedAt)
 		}
 	}
 

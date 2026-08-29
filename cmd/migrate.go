@@ -557,11 +557,11 @@ func resolvePrimaryCheckoutTarget(info repoInfo) string {
 //
 //   - a [trust] rule, written for the tree the user keeps their own repositories
 //     in; and
-//   - an approval left behind by a repository that used to sit there. Nothing
-//     prunes a record when a checkout is deleted, and a record is pinned to
-//     (scope, sha256 of the commands) — so an attacker who names their repository
-//     after one the user once had, and copies a command they are likely to have
-//     approved somewhere ("make setup"), arrives pre-approved.
+//   - an approval left behind by a repository that used to sit there. Current
+//     records also carry a filesystem identity, so a replacement would not
+//     inherit one; the destination does not exist yet, however, so migrate
+//     cannot compare that identity before deciding where to move. Conservatively
+//     decline instead of moving first and asking after the fact.
 //
 // Only a gain counts. A repository already sitting inside a whitelisted tree, or
 // already carrying an approval, loses nothing by being tidied within it.

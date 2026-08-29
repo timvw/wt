@@ -122,7 +122,7 @@ wt untrust           # revoke this repository's approval
 wt untrust --global  # revoke the config file's approval
 ```
 
-An approval is pinned to (scope, sha256 of that source's hook commands) — scope being the repository for a `.wt.toml`, `user config` for `config.toml`. Editing a hook command, or pulling a commit that adds one, asks again; editing anything else in the file does not. Approving `config.toml` once covers every repository; approving a `.wt.toml` covers that repository only. Non-interactive runs (scripts, CI, `--format json`) decline and warn on stderr, unless `WT_HOOKS_APPROVE_ALL=1` is set.
+An approval is pinned to the source and the sha256 of that source's hook commands. Repository approvals also carry the common git directory's filesystem identity, so replacing a checkout at the same path asks again; linked worktrees share one identity. Editing a hook command, or pulling a commit that adds one, also asks again; editing anything else in the file does not. Approving `config.toml` once covers every repository; approving a `.wt.toml` covers that repository incarnation only. Non-interactive runs (scripts, CI, `--format json`) decline and warn on stderr, unless `WT_HOOKS_APPROVE_ALL=1` is set.
 
 To skip the prompt for trees the user owns, whitelist paths in `config.toml` — hooks under them run unasked and unrecorded:
 
