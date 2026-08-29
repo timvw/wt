@@ -477,6 +477,13 @@ func TestMigrationUntrustCommandQuotesTheDestination(t *testing.T) {
 	if got, want := shellQuotePowerShell(windowsPath), `'C:\parent with spaces\repo''s "checkout"'`; got != want {
 		t.Errorf("shellQuotePowerShell(%q) = %q, want %q", windowsPath, got, want)
 	}
+	withNewline := "parent/repo\nnext"
+	if got, want := shellQuotePOSIX(withNewline), "'parent/repo\nnext'"; got != want {
+		t.Errorf("shellQuotePOSIX(%q) = %q, want %q", withNewline, got, want)
+	}
+	if got, want := shellQuotePowerShell(withNewline), "'parent/repo\nnext'"; got != want {
+		t.Errorf("shellQuotePowerShell(%q) = %q, want %q", withNewline, got, want)
+	}
 }
 
 // TestMigrateWillNotMoveARepositoryOntoAPathThatMayCarryAnApproval pins which

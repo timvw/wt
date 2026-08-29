@@ -622,13 +622,12 @@ func migrateTrustGain(from, to string) (string, error) {
 	return "", nil
 }
 
-// shellQuoteArgument renders one argument for the shell wt integrates with:
-// POSIX-style shells on Unix and Git Bash, PowerShell otherwise on Windows.
-// Printable paths are copyable verbatim. displayText keeps an untrusted
-// repository path from emitting terminal control sequences; a path containing
-// those exotic characters is deliberately shown safely rather than literally.
+// shellQuoteArgument renders the exact argument for the shell wt integrates
+// with: POSIX-style shells on Unix and Git Bash, PowerShell otherwise on
+// Windows. The explanatory copy of the path is passed through displayText by
+// the caller; this copy must retain every byte so the suggested command still
+// names paths containing whitespace, quotes, or newlines.
 func shellQuoteArgument(arg string) string {
-	arg = displayText(arg)
 	if runtime.GOOS == "windows" && os.Getenv("MSYSTEM") == "" && os.Getenv("SHELL") == "" {
 		return shellQuotePowerShell(arg)
 	}
