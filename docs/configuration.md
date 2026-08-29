@@ -79,12 +79,18 @@ Two differences from the global config file:
 - Hooks are merged **per hook**: a hook the repo config does not set keeps the
   value from the global config file.
 
-`pattern` **is** read from `.wt.toml`, and one that renders to an absolute path
-is not anchored in your `root` at all. That is deliberate — a project may have a
-layout in mind — but it means the repository chooses the directory
-`git worktree add` writes into. There are three it may not choose: `wt`
-refuses a pattern landing on its own config directory, on a directory that
-contains it, or on your config file — compared with symlinks resolved as far as
+`pattern` **is** read from `.wt.toml`, but a repository-supplied value is
+confined to your configured `root`. This also applies when the pattern renders
+an absolute path, and containment is checked after resolving symlinks through
+the part of the path that exists. A repository may choose the layout inside
+your worktree tree; it may not choose another empty directory elsewhere on the
+machine. Set `wt.pattern` in local git config or `WORKTREE_PATTERN` if you
+deliberately want a path outside `root` — those layers are machine-local and
+outrank `.wt.toml`.
+
+Regardless of which layer supplies a pattern, there are paths `wt` never writes
+onto. It refuses a pattern landing on its own config directory, on a directory
+that contains it, or on your config file — compared with symlinks resolved as far as
 each path exists, without regard to case, since `~/.config/WT` is that same
 directory on macOS and Windows, and by asking the filesystem which directory
 each path really is, since `/System/Volumes/Data/Users/you` is your home
@@ -179,8 +185,9 @@ because `core.hooksPath = ../shared-hooks` leaves the repository from there.
 That list is not a claim to be exhaustive about every git setting naming a
 program. Most name a binary you already have (`core.pager`, `gpg.program`)
 rather than a directory waiting to be created, and chasing them one key at a
-time has a floor — the bounded fix is anchoring a repository-supplied absolute
-pattern inside your own tree, which is [issue #154](https://github.com/timvw/wt/issues/154).
+time has a floor. Confining repository-supplied patterns to `root` is the
+bounded backstop; the individual checks remain defence in depth for every
+pattern source.
 
 One thing `wt` cannot guard: a **relative** `GIT_CONFIG_GLOBAL` or
 `XDG_CONFIG_HOME`. git resolves either against the working directory, so it names
@@ -212,17 +219,10 @@ guard. A `~/...` path in a `[trust]` rule is anchored the same way, since
 `--config` and `WT_CONFIG` name a file directly and so survive a home the config
 directory would have rejected.
 
-That is where the guard stops, and it stops on purpose: it covers `wt`'s
-configuration and the configuration of the program `wt` drives. An absolute
-pattern may still render anywhere else in your home directory, which is the
-price of `pattern` being a project's to set — `git worktree add` will not write
-into a directory that already has anything in it, so what it reaches are paths
-nothing has created yet. If that trade is not one you want, set the pattern
-somewhere a repository cannot outrank: `git config wt.pattern` in the
-repository's own `.git/config`, which is read after `.wt.toml` and is not a file
-a clone can ship, or `WORKTREE_PATTERN` in your environment, which is read after
-everything. The config file will not do it — `.wt.toml` overrides it, which is
-the point of `.wt.toml`.
+The config file alone cannot constrain a repository's pattern because
+`.wt.toml` outranks it. The `root` boundary is applied after all layers are
+resolved, so the repository cannot outrank that boundary. A local
+`git config wt.pattern` value or `WORKTREE_PATTERN` can intentionally cross it.
 
 ## Git config
 
@@ -1070,8 +1070,9 @@ to what it resolves to, or marks it ignored.
 Symlinks are followed, including the ones above a directory that is not there
 yet: you can write a rule for a tree you have not filled in. Both sides of every
 comparison are resolved the same way, because otherwise they would never meet —
-if `~/src` is a link to another volume, a rule for `~/src/mine` resolves through
-it, and `wt migrate`'s destination `~/src/mine/tool`, which nothing has created,
+if `repo_root` is a link to another volume, a rule for a directory below it
+resolves through the link, and `wt migrate`'s destination below that directory,
+which nothing has created,
 would not. That mismatch is not a rule quietly failing to apply; it is `migrate`
 deciding a path is *outside* your whitelisted tree and moving a repository into
 it. A rule `wt` cannot follow to an end names no directory in particular and is
@@ -1093,15 +1094,15 @@ not reach a rule.
 
 A rule covers a tree you fill yourself, so `wt migrate` will not move a
 repository into one it is not already in. The primary checkout's destination is
-`~/src/{owner}/{name}` read off the origin URL, and the host is not part of it —
-a clone of `https://evil.example/acme/pwn` would land in the same `~/src/acme`
-you wrote a rule for `github.com/acme`, and arrive already approved. That
-migration is skipped with a reason instead. Moving it there yourself still
-works, because then the path is your choice rather than the URL's.
+`repo_root/{owner}/{name}` read off the origin URL, and the host is not part of
+it — a clone of `https://evil.example/acme/pwn` would land in the same
+`repo_root/acme` you wrote a rule for `github.com/acme`, and arrive already
+approved. That migration is skipped with a reason instead. Moving it there
+yourself still works, because then the path is your choice rather than the URL's.
 
 The same goes for an approval already waiting at that path. Records are pinned to
 `(scope, sha256 of the commands)` and nothing prunes one when a checkout is
-deleted, so `~/src/acme/tool` can still carry the approval you gave the
+deleted, so `repo_root/acme/tool` can still carry the approval you gave the
 `acme/tool` you used to have. A repository named to land there, shipping a
 command you were likely to have approved somewhere — `make setup` — would arrive
 pre-approved. `wt migrate` declines that move too, and says which path to run
