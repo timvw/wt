@@ -198,6 +198,7 @@ file alike. It asks once, and remembers the answer until the commands change:
 wt trust                          # approve every hook that applies here
 wt trust --list                   # show every approval on this machine
 wt untrust                        # revoke this repository's approval
+wt untrust --path /removed/repo   # revoke stale approvals for a removed repository
 wt untrust --global               # revoke your config file's approval
 ```
 

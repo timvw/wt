@@ -978,6 +978,7 @@ Approve ahead of time, or review what is approved:
 wt trust             # approve everything that applies here
 wt trust --list      # every approval on this machine
 wt untrust           # revoke this repository's approval
+wt untrust --path P  # revoke stale approvals after a repository at P was removed
 wt untrust --global  # revoke your config file's approval
 ```
 
@@ -1114,9 +1115,11 @@ The same conservative rule applies to an approval record still naming the
 destination. Repository approvals now include a filesystem identity, so a
 checkout replaced in place does not inherit one, even when plain git performed
 the clone. `wt migrate` nevertheless declines to move onto a path carrying an
-old record and says which path to run `wt untrust` in: before the move there is
-no destination filesystem identity to compare, and moving first in order to ask
-would be too late. Compared as command sets, not as "is anything approved here":
+old record: before the move there is no destination filesystem identity to
+compare, and moving first in order to ask would be too late. Run the reported
+`wt untrust --path <destination>` command to remove those stale records, then
+retry the migration. Compared as command sets, not as "is anything approved
+here":
 a repository you approved once holds a record for the commands it had then, and
 asking only whether its current path has *an* approval would let that one wave
 through a move onto a different set waiting at the destination.
