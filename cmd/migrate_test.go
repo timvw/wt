@@ -76,7 +76,13 @@ func TestMigrateMovesPrimaryCheckoutOutOfWorktreeRoot(t *testing.T) {
 
 	applyCmd := exec.Command(wtBinary, "migrate")
 	applyCmd.Dir = primaryPath
-	applyCmd.Env = append(os.Environ(), "HOME="+homeDir, "WORKTREE_ROOT="+worktreeRoot)
+	applyCmd.Env = append(os.Environ(),
+		"HOME="+homeDir,
+		"USERPROFILE="+homeDir,
+		"XDG_CONFIG_HOME="+filepath.Join(homeDir, ".config"),
+		"WORKTREE_ROOT="+worktreeRoot,
+		"WT_REPO_ROOT="+filepath.Join(homeDir, "src"),
+	)
 	applyOutput, applyErr := applyCmd.CombinedOutput()
 	if applyErr != nil {
 		t.Fatalf("migrate failed: %v\nOutput: %s", applyErr, applyOutput)
@@ -299,26 +305,29 @@ func TestMigrateJSONOutput(t *testing.T) {
 	}
 }
 
-// TestMigrateRefusesAPrimaryTargetOutsideSrc pins shut the second door onto wt's
+// TestMigrateRefusesAPrimaryTargetOutsideRepoRoot pins shut the second door onto wt's
 // own state. The first is the worktree pattern (see
 // TestWorktreeIsNeverPlacedOnWtsOwnState); this one does not go through the
 // pattern at all.
 //
 // resolvePrimaryCheckoutTarget joins the owner and name parsed out of the origin
-// URL onto ~/src, and filepath.Join cleans as it joins. An origin of
+// URL onto repo_root, and filepath.Join cleans as it joins. An origin of
 // "https://host/x/../../.config/wt.git" therefore resolves to ~/.config/wt — so
 // `wt migrate` would move the repository's committed files on top of wt's config
 // file and approval store, which is what decides whether its hooks run.
-func TestMigrateRefusesAPrimaryTargetOutsideSrc(t *testing.T) {
-	home := t.TempDir()
+func TestMigrateRefusesAPrimaryTargetOutsideRepoRoot(t *testing.T) {
+	base := t.TempDir()
+	origRoot := reposRoot
+	reposRoot = filepath.Join(base, "repos")
+	t.Cleanup(func() { reposRoot = origRoot })
 
 	hostile := []struct {
 		name  string
 		owner string
 		repo  string
 	}{
-		{"owner climbs out of ~/src", "x/../../.config", "wt"},
-		{"name climbs out of ~/src", "acme", "../../.config/wt"},
+		{"owner climbs out of repo_root", "x/../../.config", "wt"},
+		{"name climbs out of repo_root", "acme", "../../.config/wt"},
 	}
 
 	for _, tt := range hostile {
@@ -327,13 +336,13 @@ func TestMigrateRefusesAPrimaryTargetOutsideSrc(t *testing.T) {
 
 			// Show the target really would land there without the guard, so
 			// this test fails loudly if the joining ever stops cleaning.
-			naive := filepath.Join(home, "src", filepath.FromSlash(tt.owner), tt.repo)
-			if want := filepath.Join(home, ".config", "wt"); naive != want {
+			naive := filepath.Join(reposRoot, filepath.FromSlash(tt.owner), tt.repo)
+			if want := filepath.Join(base, ".config", "wt"); naive != want {
 				t.Fatalf("fixture no longer reaches the config directory: %q, want %q", naive, want)
 			}
 
 			if got := resolvePrimaryCheckoutTarget(info); got != "" {
-				t.Errorf("resolvePrimaryCheckoutTarget() = %q, want \"\": that path is not under ~/src", got)
+				t.Errorf("resolvePrimaryCheckoutTarget() = %q, want \"\": that path is not under repo_root", got)
 			}
 		})
 	}
@@ -341,12 +350,8 @@ func TestMigrateRefusesAPrimaryTargetOutsideSrc(t *testing.T) {
 	t.Run("an ordinary origin still resolves", func(t *testing.T) {
 		// The guard is about ".." components, not about owners with slashes in
 		// them: a nested GitLab group is an ordinary owner and must keep working.
-		t.Setenv("HOME", home)
-		if runtime.GOOS == "windows" {
-			t.Setenv("USERPROFILE", home)
-		}
 		got := resolvePrimaryCheckoutTarget(repoInfo{Owner: "group/subgroup", Name: "repo"})
-		want := filepath.Join(home, "src", "group", "subgroup", "repo")
+		want := filepath.Join(reposRoot, "group", "subgroup", "repo")
 		if got != want {
 			t.Errorf("resolvePrimaryCheckoutTarget() = %q, want %q", got, want)
 		}
@@ -357,8 +362,8 @@ func TestMigrateRefusesAPrimaryTargetOutsideSrc(t *testing.T) {
 // changes whether a repository's hooks are asked about at all.
 //
 // A [trust] rule is the user saying "what I keep here is mine". The primary's
-// migrate target is ~/src/{owner}/{name} taken from the origin URL, and the host
-// is not in it — so a clone of evil.example/acme lands in the ~/src/acme a rule
+// migrate target is repo_root/{owner}/{name} taken from the origin URL, and the host
+// is not in it — so a clone of evil.example/acme lands in the repo_root/acme a rule
 // was written for github.com/acme, and the repository picks its own approval.
 func TestMigrateWillNotMoveARepositoryIntoAWhitelistedTree(t *testing.T) {
 	if testing.Short() {
@@ -685,9 +690,10 @@ func TestMigrateRechecksTheDestinationAtMoveTime(t *testing.T) {
 		t.Fatalf("Failed to create payload symlink: %v", err)
 	}
 	pattern := filepath.ToSlash(filepath.Join(futurePrimary, "link", "wt"))
-	if err := os.WriteFile(filepath.Join(primaryPath, ".wt.toml"), []byte(fmt.Sprintf("pattern = %q\n", pattern)), 0o644); err != nil {
-		t.Fatalf("Failed to write .wt.toml: %v", err)
-	}
+	// Machine-local patterns may intentionally leave root, so this narrower
+	// last-moment guard remains necessary even after repository patterns are
+	// confined. Use local git config to exercise that path.
+	runGitCommand(t, primaryPath, "config", "--local", "wt.pattern", pattern)
 	runGitCommand(t, primaryPath, "add", "-A")
 	runGitCommand(t, primaryPath, "commit", "-m", "payload")
 	runGitCommand(t, primaryPath, "branch", "feature")
@@ -729,6 +735,7 @@ func runWtIn(t *testing.T, tmpDir, dir, homeDir, worktreeRoot string, args ...st
 		"USERPROFILE="+homeDir,
 		"XDG_CONFIG_HOME="+filepath.Join(homeDir, ".config"),
 		"WORKTREE_ROOT="+worktreeRoot,
+		"WT_REPO_ROOT="+filepath.Join(homeDir, "src"),
 	)
 	out, err := cmd.CombinedOutput()
 	var exit *exec.ExitError
@@ -748,6 +755,7 @@ func runMigrate(t *testing.T, tmpDir, dir, homeDir, worktreeRoot string) string 
 		"USERPROFILE="+homeDir,
 		"XDG_CONFIG_HOME="+filepath.Join(homeDir, ".config"),
 		"WORKTREE_ROOT="+worktreeRoot,
+		"WT_REPO_ROOT="+filepath.Join(homeDir, "src"),
 	)
 	out, err := cmd.CombinedOutput()
 	var exit *exec.ExitError

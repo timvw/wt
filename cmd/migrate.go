@@ -157,7 +157,7 @@ func buildMigratePlan(entries []parsedWorktree, force bool) ([]migrateItem, erro
 					From:    from,
 					Primary: true,
 					Action:  migrateActionSkip,
-					Reason:  "origin URL does not resolve to a path under ~/src",
+					Reason:  "origin URL does not resolve to a path under repo_root",
 				})
 				continue
 			}
@@ -512,12 +512,12 @@ func movePrimaryCheckout(from, to string, force bool) error {
 }
 
 // resolvePrimaryCheckoutTarget returns where the primary checkout belongs, or ""
-// when the origin URL does not name a path that stays under ~/src.
+// when the origin URL does not name a path that stays under repo_root.
 //
 // Owner and Name are parsed out of the origin remote, which is a URL somebody
 // handed the user, and filepath.Join cleans as it joins: an owner of
 // "x/../../.config" with a name of "wt" resolves to ~/.config/wt rather than to
-// anything under ~/src. That is a directory whose contents decide whether this
+// anything under repo_root. That is a directory whose contents decide whether this
 // repository's hooks run, and the move puts the repository's committed files
 // there. wt clone refuses the same fields for the same reason — see
 // repoPlacementPath — and migrate reads them from a repository already on disk.
@@ -527,17 +527,22 @@ func resolvePrimaryCheckoutTarget(info repoInfo) string {
 		return ""
 	}
 
-	home, err := os.UserHomeDir()
+	repoRoot, err := filepath.Abs(reposRoot)
 	if err != nil {
-		return filepath.Join("src", info.Name)
+		return ""
 	}
+	repoRoot = filepath.Clean(repoRoot)
 
-	srcRoot := filepath.Join(home, "src")
+	var target string
 	if owner == "" {
-		return filepath.Join(srcRoot, info.Name)
+		target = filepath.Join(repoRoot, info.Name)
+	} else {
+		target = filepath.Join(repoRoot, filepath.FromSlash(owner), info.Name)
 	}
-
-	return filepath.Join(srcRoot, filepath.FromSlash(owner), info.Name)
+	if !isPathWithinRoot(target, repoRoot) {
+		return ""
+	}
+	return target
 }
 
 // migrateTrustGain reports why moving a primary checkout would hand it trust it
@@ -545,8 +550,8 @@ func resolvePrimaryCheckoutTarget(info repoInfo) string {
 //
 // Trust is pinned to where the primary sits: a [trust] rule matches its path,
 // and a stored approval is keyed on its .git. Neither is normally the
-// repository's to choose — except here. The destination is ~/src/{owner}/{name}
-// built from the origin URL with the host dropped, so a clone of
+// repository's to choose — except here. The destination is
+// repo_root/{owner}/{name} built from the origin URL with the host dropped, so a clone of
 // https://evil.example/acme/tool asks to be put exactly where github.com/acme/tool
 // would go. Two different things can be waiting at that path:
 //

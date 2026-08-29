@@ -11,6 +11,100 @@ import (
 	"testing"
 )
 
+// TestRepositoryPatternStaysInsideWorktreeRoot is the broad boundary behind
+// the narrower state-file guards below. A committed .wt.toml is allowed to
+// choose the layout inside the user's worktree tree, not an arbitrary empty
+// directory elsewhere on the machine. The same pattern remains available from
+// a machine-local layer, where it expresses the user's own choice.
+func TestRepositoryPatternStaysInsideWorktreeRoot(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "worktrees")
+	outside := filepath.Join(base, "elsewhere", "feature")
+
+	origPattern, origRoot, origSources := worktreePattern, worktreeRoot, configSources
+	t.Cleanup(func() {
+		worktreePattern, worktreeRoot, configSources = origPattern, origRoot, origSources
+	})
+	worktreeRoot = root
+	worktreePattern = filepath.ToSlash(outside)
+	configSources.Pattern = hookSourceRepoConfig
+	info := repoInfo{Main: filepath.Join(base, "repo"), Name: "repo"}
+
+	if path, err := renderWorktreePath(info, "feature"); err == nil {
+		t.Fatalf("renderWorktreePath() = %q, want an error for a repository pattern outside %s", path, root)
+	} else {
+		for _, want := range []string{".wt.toml", "worktree root", "wt.pattern", "WORKTREE_PATTERN"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error does not mention %q:\n%v", want, err)
+			}
+		}
+	}
+
+	t.Run("inside root", func(t *testing.T) {
+		worktreePattern = filepath.ToSlash(filepath.Join(root, "repo", "{.branch}"))
+		got, err := renderWorktreePath(info, "feature")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := filepath.Join(root, "repo", "feature"); got != want {
+			t.Errorf("renderWorktreePath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("relative pattern", func(t *testing.T) {
+		worktreePattern = "repo/{.branch}"
+		got, err := renderWorktreePath(info, "feature")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := filepath.Join(root, "repo", "feature"); got != want {
+			t.Errorf("renderWorktreePath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("machine-local pattern may leave root", func(t *testing.T) {
+		configSources.Pattern = "git config (local)"
+		worktreePattern = filepath.ToSlash(outside)
+		got, err := renderWorktreePath(info, "feature")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != outside {
+			t.Errorf("renderWorktreePath() = %q, want %q", got, outside)
+		}
+	})
+}
+
+func TestRepositoryPatternCannotEscapeRootThroughSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs a privilege we cannot assume on Windows")
+	}
+	base := t.TempDir()
+	root := filepath.Join(base, "worktrees")
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	origPattern, origRoot, origSources := worktreePattern, worktreeRoot, configSources
+	t.Cleanup(func() {
+		worktreePattern, worktreeRoot, configSources = origPattern, origRoot, origSources
+	})
+	worktreeRoot = root
+	worktreePattern = filepath.ToSlash(filepath.Join(root, "escape", "{.branch}"))
+	configSources.Pattern = hookSourceRepoConfig
+
+	if path, err := renderWorktreePath(repoInfo{Main: filepath.Join(base, "repo"), Name: "repo"}, "feature"); err == nil {
+		t.Fatalf("renderWorktreePath() = %q through a symlink outside the worktree root", path)
+	}
+}
+
 // TestWorktreeIsNeverPlacedOnWtsOwnState pins shut the one way a repository can
 // get commands to run without ever meeting the approval gate: not by slipping a
 // hook past it, but by supplying the gate's own files.
@@ -38,7 +132,10 @@ func TestWorktreeIsNeverPlacedOnWtsOwnState(t *testing.T) {
 	})
 	worktreeRoot = filepath.Join(home, "worktrees")
 	configFilePath = filepath.Join(cfgDir, "config.toml")
-	configSources.Pattern = "repo config"
+	// Exercise the state-file guard independently of the broader repository
+	// boundary above. A user-controlled pattern may leave root, but it still may
+	// not overwrite the configuration that decides what wt and git execute.
+	configSources.Pattern = "config file"
 
 	info := repoInfo{Main: filepath.Join(home, "src", "evil"), Name: "evil"}
 
@@ -82,9 +179,9 @@ func TestWorktreeIsNeverPlacedOnWtsOwnState(t *testing.T) {
 			if err == nil {
 				t.Fatalf("renderWorktreePath() = %q, want an error: a repository placed a worktree on wt's own state", path)
 			}
-			// The pattern is the thing to change, and a repo's .wt.toml is a
-			// surprising place to find it — so the refusal has to say both.
-			for _, want := range []string{"pattern", "repo config"} {
+			// The pattern is the thing to change, so the refusal names it and the
+			// machine-local layer it came from.
+			for _, want := range []string{"pattern", "config file"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("error does not mention %q, so it does not say what to change:\n%v", want, err)
 				}
