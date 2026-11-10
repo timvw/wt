@@ -9,7 +9,7 @@
 # phase — and fails if anything regresses. `path:` is used instead of a git ref
 # so it builds the working tree as-is (version falls back to "dev").
 # Pinned by digest for reproducibility (nixos/nix:latest as of this commit).
-FROM nixos/nix@sha256:9305de534abed691d0f569502a4962a3a072ea8e888502c453ecfe35ae182867
+FROM nixos/nix@sha256:b49cb33f3a7e5cf3933ad8774529de0e3807ec5cf54987aa7ccdfb49f2fc55ed
 
 RUN echo "experimental-features = nix-command flakes" >> /etc/nix/nix.conf
 
