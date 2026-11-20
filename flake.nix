@@ -24,7 +24,7 @@
 
             # To refresh after go.mod changes: set this to pkgs.lib.fakeHash, run
             # `nix build .#wt`, then copy the "got:" hash from the failure.
-            vendorHash = "sha256-N72ExJZQZriohGVHZakkmqUqADBwoysz1jpmCQcVPVo=";
+            vendorHash = "sha256-+fWbqXNRCaj1q0d2v9R8k9xU1M9NvWyDxqsG5pKBa7s=";
 
             # The repo has a second `package main` (./e2e), an internal test
             # orchestrator. Exclude it so only the `wt` binary is built/installed;
